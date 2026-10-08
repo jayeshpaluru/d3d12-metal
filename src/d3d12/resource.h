@@ -21,8 +21,6 @@ public:
     // A resource at `offset` of a heap; it may overlap other resources of the heap.
     static HRESULT create_placed(Device *device, Heap *heap, UINT64 offset, const D3D12_RESOURCE_DESC &desc,
                                  REFIID riid, void **out);
-    // Placed render targets and depth-stencils are cleared before first use (see Device::take_pending_init).
-    void clear_init_flag() { needs_init_ = false; }
 
     bool is_buffer() const { return desc_.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER; }
     mtlb_buffer buffer() const { return buffer_; }

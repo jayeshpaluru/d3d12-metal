@@ -420,11 +420,13 @@ std::vector<Resource *> Device::take_pending_init(std::vector<uint8_t> &stream)
     std::vector<Resource *> held;
     {
         std::lock_guard<std::mutex> lock(init_mutex_);
-        held.swap(pending_init_);
-        for (Resource *resource : held) {
-            resource->AddRef();  // keeps it alive until the submission is done
-            resource->clear_init_flag();
+        // A resource whose last reference went away is being destroyed (its destructor waits for this lock):
+        // nothing to initialise, and it must not be resurrected.
+        for (Resource *resource : pending_init_) {
+            if (resource->try_add_ref())  // keeps it alive until the submission is done
+                held.push_back(resource);
         }
+        pending_init_.clear();
     }
     if (held.empty())
         return held;

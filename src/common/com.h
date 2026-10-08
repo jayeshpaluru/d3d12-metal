@@ -16,6 +16,17 @@ class RefCounted : public I {
 public:
     ULONG STDMETHODCALLTYPE AddRef() override { return ++refs_; }
 
+    // Takes a reference unless the object is already being destroyed (a reference count that reached zero).
+    bool try_add_ref()
+    {
+        ULONG n = refs_.load();
+        while (n != 0) {
+            if (refs_.compare_exchange_weak(n, n + 1))
+                return true;
+        }
+        return false;
+    }
+
     ULONG STDMETHODCALLTYPE Release() override
     {
         ULONG n = --refs_;

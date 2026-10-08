@@ -3,6 +3,9 @@
 // are deliberately unsupported (reserved resources).
 #include "probe.h"
 
+#include <atomic>
+#include <thread>
+
 namespace {
 
 constexpr UINT64 kMiB = 1024 * 1024;
@@ -162,6 +165,44 @@ int main()
         float d;
         std::memcpy(&d, image.at(7, 7), 4);
         CHECK(d == 0.0f);
+    }
+
+    // ---- A rejected submission keeps the pending clears for the next one ------------------------------------------------
+    {
+        ComPtr<ID3D12Heap> scratch = create_heap(gpu, D3D12_HEAP_TYPE_DEFAULT, 2 * kMiB);
+        ComPtr<ID3D12Resource> garbage = place(gpu, scratch.Get(), 0, buffer_desc(kMiB));
+        std::vector<uint8_t> fill(kMiB, 0xA7);
+        ComPtr<ID3D12Resource> upload = gpu.upload_buffer(fill.data(), fill.size());
+        gpu.run([&](ID3D12GraphicsCommandList *list) { list->CopyBufferRegion(garbage.Get(), 0, upload.Get(), 0, kMiB); });
+        ComPtr<ID3D12Resource> target = place(gpu, scratch.Get(), 0,
+                                              tex2d_desc(DXGI_FORMAT_R8G8B8A8_UNORM, 64, 64, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET),
+                                              D3D12_RESOURCE_STATE_RENDER_TARGET);
+        ComPtr<ID3D12GraphicsCommandList> open = gpu.list();  // still recording: the submission is refused
+        gpu.execute(open.Get());
+        gpu.wait_idle();
+        const Image image = gpu.read_texture(target.Get(), 0, 4);
+        expect_pixel("clear survives a rejected submission", image.pixel(10, 10), {0, 0, 0, 0}, 0);
+    }
+
+    // ---- Placed targets created and released while another thread submits ------------------------------------------------
+    {
+        ComPtr<ID3D12Heap> scratch = create_heap(gpu, D3D12_HEAP_TYPE_DEFAULT, 2 * kMiB);
+        std::atomic<bool> stop{false};
+        std::thread submitter([&] {
+            while (!stop) {
+                ComPtr<ID3D12GraphicsCommandList> list = gpu.list();
+                list->Close();
+                gpu.execute(list.Get());
+            }
+        });
+        for (int i = 0; i < 300; ++i) {
+            ComPtr<ID3D12Resource> target = place(gpu, scratch.Get(), 0,
+                                                  tex2d_desc(DXGI_FORMAT_R8G8B8A8_UNORM, 32, 32, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET),
+                                                  D3D12_RESOURCE_STATE_RENDER_TARGET);
+        }
+        stop = true;
+        submitter.join();
+        gpu.wait_idle();
     }
 
     // ---- Allocation info ----------------------------------------------------------------------------------------------
