@@ -239,6 +239,18 @@ private:
     std::shared_mutex heaps_mutex_;
     std::map<uintptr_t, DescriptorHeap *> heaps_;
     std::atomic<uint64_t> heap_generation_{0};  // changes whenever a heap is registered or unregistered
+    // The heaps recent lookups found, read without locks or thread-local storage (the PE build's thread-local storage is
+    // emulated: a call per access). Each slot is guarded by a sequence number: odd while it is being written.
+    struct HeapSlot {
+        std::atomic<uint32_t> sequence{0};
+        std::atomic<uint64_t> generation{0};
+        std::atomic<uintptr_t> begin{0}, end{0};
+        std::atomic<DescriptorHeap *> heap{nullptr};
+    };
+    static constexpr unsigned kHeapSlots = 4;
+    HeapSlot heap_slots_[kHeapSlots];
+    std::atomic<unsigned> heap_slot_hint_{0}, heap_slot_next_{0};
+    std::mutex heap_slot_mutex_;  // writers of the slots
     std::shared_mutex attachments_mutex_;
     std::unordered_map<uint64_t, Resource *> attachments_;
     std::atomic<uint64_t> next_attachment_id_{1};

@@ -163,6 +163,15 @@ int main()
         gpu.device->CopyDescriptorsSimple(64, dst, src, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     }, 64);
 
+    // Calls games make in polling loops, hundreds of thousands per frame: plain memory reads.
+    b.measure("CopyDescriptorsSimple (x1)", [&](int i) {
+        D3D12_CPU_DESCRIPTOR_HANDLE src = b.staging->GetCPUDescriptorHandleForHeapStart();
+        gpu.device->CopyDescriptorsSimple(1, cpu(i), src, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    });
+    volatile UINT64 sink = 0;
+    b.measure("Fence::GetCompletedValue", [&](int) { sink = sink + gpu.fence->GetCompletedValue(); });
+    b.measure("Device::GetDeviceRemovedReason", [&](int) { sink = sink + UINT64(gpu.device->GetDeviceRemovedReason()); });
+
     std::printf("descbench: worst %.1f ns/descriptor\n", b.worst_ns);
     // A bridge crossing is about 350 ns under Wine and still well below this natively, so only
     // something much slower than a few memory writes and a lookup is a regression worth failing on.

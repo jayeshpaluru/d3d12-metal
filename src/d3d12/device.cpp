@@ -423,43 +423,59 @@ void Device::unregister_heap(DescriptorHeap *heap)
 DescriptorHeap *Device::validate_cpu_range(D3D12_CPU_DESCRIPTOR_HANDLE handle, UINT count, D3D12_DESCRIPTOR_HEAP_TYPE type,
                                            size_t *index)
 {
-    // Two entries: copies alternate between a destination and a source heap.
-    struct Entry {
-        const Device *device = nullptr;
-        uint64_t generation = 0;
-        uintptr_t begin = 0, end = 0;
-        DescriptorHeap *heap = nullptr;
-    };
-    thread_local Entry cache[2];
-    thread_local unsigned last_hit = 0;
     const uint64_t generation = heap_generation_.load(std::memory_order_acquire);
-    const Entry *entry = nullptr;
-    for (unsigned i = 0; i < 2; ++i) {
-        const Entry &e = cache[i];
-        if (e.device == this && e.generation == generation && handle.ptr >= e.begin && handle.ptr < e.end) {
-            entry = &e;
-            last_hit = i;
-            break;
+    DescriptorHeap *heap = nullptr;
+    uintptr_t begin = 0, end = 0;
+    // Copies alternate between a destination and a source heap, so a few slots are tried, the last hit first.
+    const unsigned hint = heap_slot_hint_.load(std::memory_order_relaxed);
+    for (unsigned n = 0; n < kHeapSlots && !heap; ++n) {
+        const unsigned i = (hint + n) % kHeapSlots;
+        HeapSlot &slot = heap_slots_[i];
+        const uint32_t before = slot.sequence.load(std::memory_order_acquire);
+        if (before & 1)
+            continue;
+        const uint64_t slot_generation = slot.generation.load(std::memory_order_relaxed);
+        const uintptr_t slot_begin = slot.begin.load(std::memory_order_relaxed), slot_end = slot.end.load(std::memory_order_relaxed);
+        DescriptorHeap *slot_heap = slot.heap.load(std::memory_order_relaxed);
+        std::atomic_thread_fence(std::memory_order_acquire);
+        if (slot.sequence.load(std::memory_order_relaxed) != before || slot_generation != generation || handle.ptr < slot_begin
+            || handle.ptr >= slot_end)
+            continue;
+        heap = slot_heap;
+        begin = slot_begin;
+        end = slot_end;
+        if (i != hint)
+            heap_slot_hint_.store(i, std::memory_order_relaxed);
+    }
+    if (!heap) {
+        {
+            std::shared_lock lock(heaps_mutex_);
+            auto it = heaps_.upper_bound(handle.ptr);
+            if (it == heaps_.begin())
+                return nullptr;
+            --it;
+            heap = it->second;
+            begin = it->first;
+            end = it->first + size_t(heap->count()) * kDescriptorSize;
+            if (handle.ptr >= end)
+                return nullptr;
         }
+        // Remember it, unless a heap changed meanwhile (the generation then no longer matches and the next query looks again).
+        std::lock_guard<std::mutex> writers(heap_slot_mutex_);
+        const unsigned i = heap_slot_next_.fetch_add(1, std::memory_order_relaxed) % kHeapSlots;
+        HeapSlot &slot = heap_slots_[i];
+        const uint32_t sequence = slot.sequence.load(std::memory_order_relaxed);
+        slot.sequence.store(sequence + 1, std::memory_order_release);
+        std::atomic_thread_fence(std::memory_order_release);
+        slot.generation.store(generation, std::memory_order_relaxed);
+        slot.begin.store(begin, std::memory_order_relaxed);
+        slot.end.store(end, std::memory_order_relaxed);
+        slot.heap.store(heap, std::memory_order_relaxed);
+        slot.sequence.store(sequence + 2, std::memory_order_release);
+        heap_slot_hint_.store(i, std::memory_order_relaxed);
     }
-    if (!entry) {
-        std::shared_lock lock(heaps_mutex_);
-        auto it = heaps_.upper_bound(handle.ptr);
-        if (it == heaps_.begin())
-            return nullptr;
-        --it;
-        DescriptorHeap *heap = it->second;
-        const uintptr_t end = it->first + size_t(heap->count()) * kDescriptorSize;
-        if (handle.ptr >= end)
-            return nullptr;
-        last_hit ^= 1;  // replace the entry that was not used last
-        cache[last_hit] = {this, generation, it->first, end, heap};
-        entry = &cache[last_hit];
-    }
-    DescriptorHeap *heap = entry->heap;
-    const size_t offset = handle.ptr - entry->begin;
-    if (heap->type() != type || offset % kDescriptorSize != 0
-        || size_t(count) * kDescriptorSize > entry->end - handle.ptr)
+    const size_t offset = handle.ptr - begin;
+    if (heap->type() != type || offset % kDescriptorSize != 0 || size_t(count) * kDescriptorSize > end - handle.ptr)
         return nullptr;
     if (index)
         *index = offset / kDescriptorSize;
