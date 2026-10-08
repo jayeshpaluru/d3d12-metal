@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstring>
 
+#include "d3d12/clear_value.h"
 #include "d3d12/command_allocator.h"
 #include "d3d12/device.h"
 #include "d3d12/formats.h"
@@ -407,6 +408,127 @@ void CommandList::DrawIndexedInstanced(UINT index_count, UINT instance_count, UI
     cmd->start_index = start_index;
     cmd->base_vertex = base_vertex;
     cmd->start_instance = start_instance;
+}
+
+// UAV clears. The descriptor only holds Metal object ids, so the view comes from the heap's shadow table.
+void CommandList::ClearUnorderedAccessViewUint(D3D12_GPU_DESCRIPTOR_HANDLE, D3D12_CPU_DESCRIPTOR_HANDLE cpu_handle,
+                                               ID3D12Resource *resource, const UINT values[4], UINT num_rects,
+                                               const D3D12_RECT *rects)
+{
+    clear_uav(cpu_handle, resource, values, false, num_rects, rects);
+}
+
+void CommandList::ClearUnorderedAccessViewFloat(D3D12_GPU_DESCRIPTOR_HANDLE, D3D12_CPU_DESCRIPTOR_HANDLE cpu_handle,
+                                                ID3D12Resource *resource, const FLOAT values[4], UINT num_rects,
+                                                const D3D12_RECT *rects)
+{
+    uint32_t bits[4];
+    std::memcpy(bits, values, sizeof(bits));
+    clear_uav(cpu_handle, resource, bits, true, num_rects, rects);
+}
+
+void CommandList::clear_uav(D3D12_CPU_DESCRIPTOR_HANDLE view_handle, ID3D12Resource *resource_ptr,
+                            const uint32_t values[4], bool from_float, UINT num_rects, const D3D12_RECT *rects)
+{
+    auto *resource = ours<Resource>(resource_ptr);
+    const ViewInfo *view = device()->view_info(view_handle);
+    if (closed_ || !resource || !view || view->kind == ViewInfo::None) {
+        D3D12M_LOG("ClearUnorderedAccessView: the view or the resource is not known to this layer");
+        return;
+    }
+    if (view->kind == ViewInfo::Buffer) {
+        if (!resource->is_buffer())
+            return;
+        // Structured and raw buffers are cleared with the first value in every dword; typed ones with an element.
+        uint8_t pattern[16];
+        uint32_t element_bytes = 4;
+        uint64_t bytes_per_element = view->stride ? view->stride : 4;
+        if (view->format != DXGI_FORMAT_UNKNOWN && !view->raw && !view->stride) {
+            element_bytes = pack_clear_element(view->format, values, from_float, pattern);
+            if (!element_bytes) {
+                D3D12M_LOG("ClearUnorderedAccessView: format %d cannot be cleared", static_cast<int>(view->format));
+                return;
+            }
+            bytes_per_element = element_bytes;
+        } else {
+            std::memset(pattern, 0, sizeof(pattern));
+            std::memcpy(pattern, values, 4);
+        }
+        if (num_rects)
+            D3D12M_LOG("ClearUnorderedAccessView: rectangles do not apply to buffers and are ignored");
+        auto *cmd = append<mtlb_cmd_clear_buffer>(MTLB_CMD_CLEAR_BUFFER);
+        cmd->buffer = resource->buffer();
+        cmd->offset = view->first_element * bytes_per_element;
+        cmd->size = view->num_elements * bytes_per_element;
+        cmd->pattern_size = element_bytes;
+        std::memcpy(cmd->pattern, pattern, sizeof(pattern));
+        // A structured view of more than 4 bytes per element: fill dword by dword over the same range.
+        if (view->stride && !view->raw) {
+            cmd->pattern_size = 4;
+            std::memset(cmd->pattern, 0, sizeof(cmd->pattern));
+            std::memcpy(cmd->pattern, values, 4);
+            cmd->size = (cmd->size / 4) * 4;
+        }
+        return;
+    }
+
+    if (resource->is_buffer())
+        return;
+    mtlb_format_info info;
+    const DXGI_FORMAT format = view->format == DXGI_FORMAT_UNKNOWN ? resource->desc().Format : view->format;
+    const bool known = get_format_info(format, &info);
+    (void)known;
+    // The value is written through a typed texture: float formats take floats, integer formats integers.
+    uint32_t kind = from_float ? MTLB_CLEAR_FLOAT : MTLB_CLEAR_UINT;
+    switch (format) {
+    case DXGI_FORMAT_R32G32B32A32_SINT: case DXGI_FORMAT_R32G32_SINT: case DXGI_FORMAT_R32_SINT:
+    case DXGI_FORMAT_R16G16B16A16_SINT: case DXGI_FORMAT_R16G16_SINT: case DXGI_FORMAT_R16_SINT:
+    case DXGI_FORMAT_R8G8B8A8_SINT: case DXGI_FORMAT_R8G8_SINT: case DXGI_FORMAT_R8_SINT:
+        kind = MTLB_CLEAR_SINT;
+        break;
+    case DXGI_FORMAT_R32G32B32A32_UINT: case DXGI_FORMAT_R32G32_UINT: case DXGI_FORMAT_R32_UINT:
+    case DXGI_FORMAT_R16G16B16A16_UINT: case DXGI_FORMAT_R16G16_UINT: case DXGI_FORMAT_R16_UINT:
+    case DXGI_FORMAT_R8G8B8A8_UINT: case DXGI_FORMAT_R8G8_UINT: case DXGI_FORMAT_R8_UINT:
+    case DXGI_FORMAT_R10G10B10A2_UINT:
+        kind = MTLB_CLEAR_UINT;
+        break;
+    default:
+        if (!from_float) {
+            // An integer clear of a normalized or float format: the bits go through the format's own conversion.
+            float converted[4];
+            for (int i = 0; i < 4; ++i)
+                converted[i] = static_cast<float>(values[i]);
+            D3D12M_LOG("ClearUnorderedAccessViewUint on a non-integer texture format converts the values to float");
+            std::memcpy(const_cast<uint32_t *>(values), converted, sizeof(converted));
+        }
+        kind = MTLB_CLEAR_FLOAT;
+    }
+    auto emit = [&](uint32_t x, uint32_t y, uint32_t width, uint32_t height) {
+        auto *cmd = append<mtlb_cmd_clear_texture_uav>(MTLB_CMD_CLEAR_TEXTURE_UAV);
+        cmd->texture = resource->texture();
+        cmd->view.type = view->type;
+        const mtlb_format view_format = to_mtlb_format(format);
+        cmd->view.format = view_format == to_mtlb_format(resource->desc().Format) ? 0 : view_format;
+        cmd->view.first_mip = view->first_mip;
+        cmd->view.mip_count = 1;
+        cmd->view.first_slice = view->first_slice;
+        cmd->view.slice_count = view->slice_count;
+        cmd->kind = kind;
+        std::memcpy(cmd->value, values, sizeof(cmd->value));
+        cmd->x = x;
+        cmd->y = y;
+        cmd->width = width;
+        cmd->height = height;
+    };
+    if (!num_rects || !rects) {
+        emit(0, 0, 0, 0);
+        return;
+    }
+    for (UINT i = 0; i < num_rects; ++i) {
+        const D3D12_RECT &r = rects[i];
+        if (r.right > r.left && r.bottom > r.top)
+            emit(r.left, r.top, r.right - r.left, r.bottom - r.top);
+    }
 }
 
 void CommandList::Dispatch(UINT x, UINT y, UINT z)

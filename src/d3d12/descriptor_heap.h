@@ -37,6 +37,19 @@ inline UINT descriptor_size(D3D12_DESCRIPTOR_HEAP_TYPE type)
     }
 }
 
+// What a UAV descriptor was created from. The descriptor itself holds only the Metal object ids the shader
+// converter reads, so operations that need the view (clearing it) look it up here, by the CPU
+// handle, in the shadow table of the heap the handle points into.
+struct ViewInfo {
+    enum Kind : uint8_t { None, Buffer, Texture } kind = None;
+    bool raw = false;
+    DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;  // of the view; unknown for raw and structured buffers
+    uint32_t stride = 0;                       // structured buffers
+    uint64_t first_element = 0, num_elements = 0;
+    mtlb_view_type type = MTLB_VIEW_2D;        // textures
+    uint32_t first_mip = 0, first_slice = 0, slice_count = 1;
+};
+
 class DescriptorHeap final : public ChildImpl<ID3D12DescriptorHeap> {
 public:
     static HRESULT create(Device *device, const D3D12_DESCRIPTOR_HEAP_DESC &desc, REFIID riid, void **out);
@@ -53,6 +66,10 @@ public:
     D3D12_DESCRIPTOR_HEAP_TYPE type() const { return desc_.Type; }
     // GPU address of the first descriptor; 0 for heaps that are not shader visible.
     uint64_t gpu_address() const { return gpu_address_; }
+    // The CPU memory of the descriptors, and the shadow info of descriptor `index` (CBV/SRV/UAV heaps only).
+    const uint8_t *storage() const { return storage_; }
+    uint32_t count() const { return desc_.NumDescriptors; }
+    ViewInfo *shadow(uint32_t index) { return index < shadow_.size() ? &shadow_[index] : nullptr; }
 
 private:
     D3D12_CPU_DESCRIPTOR_HANDLE cpu_start() const;
@@ -66,6 +83,7 @@ private:
     std::vector<uint8_t> host_storage_;    // backs storage_ unless the heap is shader visible
     mtlb_buffer buffer_ = 0;               // shader-visible heaps live in a bridge buffer
     uint64_t gpu_address_ = 0;
+    std::vector<ViewInfo> shadow_;
 };
 
 } // namespace d3d12m

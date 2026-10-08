@@ -134,6 +134,56 @@ id<MTLTexture> make_null_texture(Device *device, uint32_t kind)
 
 namespace mtlb {
 
+id<MTLTexture> texture_view_object(Texture *texture, const mtlb_texture_view_desc *desc)
+{
+    id<MTLTexture> base = texture->texture;
+
+    const MTLTextureType type = to_texture_type(desc->type);
+    const MTLPixelFormat pixel_format =
+        desc->format ? to_view_pixel_format(base.pixelFormat, desc->format) : base.pixelFormat;
+    if (pixel_format == MTLPixelFormatInvalid) {
+        fail(MTLB_ERROR_UNSUPPORTED, "unsupported view format " + std::to_string(desc->format));
+        return nil;
+    }
+
+    const uint32_t levels = static_cast<uint32_t>(base.mipmapLevelCount);
+    const uint32_t layers = static_cast<uint32_t>(std::max<NSUInteger>(base.arrayLength, 1));
+    if (desc->first_mip >= levels || desc->first_slice >= layers) {
+        fail(MTLB_ERROR_INVALID_ARGUMENT, "view range outside the texture");
+        return nil;
+    }
+    const uint32_t mip_count = std::min(desc->mip_count ? desc->mip_count : levels, levels - desc->first_mip);
+    const bool is_3d = type == MTLTextureType3D;
+    const uint32_t slice_count = is_3d ? 1 : std::min(desc->slice_count ? desc->slice_count : layers, layers - desc->first_slice);
+    const uint32_t mapping = desc->component_mapping & 0xfff;
+    const bool swizzled = desc->component_mapping != 0 && mapping != kIdentityMapping;
+
+    if (type == base.textureType && pixel_format == base.pixelFormat && desc->first_mip == 0 && mip_count == levels
+        && desc->first_slice == 0 && (is_3d || slice_count == layers) && !swizzled)
+        return base;
+
+    const ViewKey key{static_cast<uint32_t>(type), static_cast<uint32_t>(pixel_format), desc->first_mip, mip_count,
+                      desc->first_slice, slice_count, swizzled ? mapping : 0u};
+    std::lock_guard<std::mutex> lock(texture->views_mutex);
+    auto &view = texture->sampled_views[key];
+    if (!view) {
+        MTLTextureSwizzleChannels channels = MTLTextureSwizzleChannelsDefault;
+        if (swizzled)
+            channels = MTLTextureSwizzleChannelsMake(to_swizzle(mapping, 0), to_swizzle(mapping, 1), to_swizzle(mapping, 2),
+                                                     to_swizzle(mapping, 3));
+        view = [base newTextureViewWithPixelFormat:pixel_format textureType:type
+                                            levels:NSMakeRange(desc->first_mip, mip_count)
+                                            slices:NSMakeRange(desc->first_slice, slice_count)
+                                           swizzle:channels];
+        if (!view) {
+            texture->sampled_views.erase(key);
+            fail(MTLB_ERROR_UNSUPPORTED, "texture view creation failed");
+            return nil;
+        }
+    }
+    return view;
+}
+
 // A texture buffer view of `count` elements of `pixel_format` starting `offset` bytes into `buffer`
 // (already aligned to the format's linear texture alignment), cached on the buffer.
 static id<MTLTexture> texture_buffer_view(Buffer *buffer, uint64_t offset, MTLPixelFormat pixel_format,
@@ -174,48 +224,9 @@ mtlb_result mtlb_texture_view(mtlb_texture handle, const mtlb_texture_view_desc 
     Texture *texture = from_handle<Texture>(handle);
     if (!texture || !desc || !out)
         return MTLB_ERROR_INVALID_ARGUMENT;
-    id<MTLTexture> base = texture->texture;
-
-    const MTLTextureType type = to_texture_type(desc->type);
-    const MTLPixelFormat pixel_format =
-        desc->format ? to_view_pixel_format(base.pixelFormat, desc->format) : base.pixelFormat;
-    if (pixel_format == MTLPixelFormatInvalid)
-        return fail(MTLB_ERROR_UNSUPPORTED, "unsupported view format " + std::to_string(desc->format));
-
-    const uint32_t levels = static_cast<uint32_t>(base.mipmapLevelCount);
-    const uint32_t layers = static_cast<uint32_t>(std::max<NSUInteger>(base.arrayLength, 1));
-    if (desc->first_mip >= levels || desc->first_slice >= layers)
-        return fail(MTLB_ERROR_INVALID_ARGUMENT, "view range outside the texture");
-    const uint32_t mip_count = std::min(desc->mip_count ? desc->mip_count : levels, levels - desc->first_mip);
-    const bool is_3d = type == MTLTextureType3D;
-    const uint32_t slice_count = is_3d ? 1 : std::min(desc->slice_count ? desc->slice_count : layers, layers - desc->first_slice);
-    const uint32_t mapping = desc->component_mapping & 0xfff;
-    const bool swizzled = desc->component_mapping != 0 && mapping != kIdentityMapping;
-
-    if (type == base.textureType && pixel_format == base.pixelFormat && desc->first_mip == 0 && mip_count == levels
-        && desc->first_slice == 0 && (is_3d || slice_count == layers) && !swizzled) {
-        *out = base.gpuResourceID._impl;
-        return MTLB_OK;
-    }
-
-    const ViewKey key{static_cast<uint32_t>(type), static_cast<uint32_t>(pixel_format), desc->first_mip, mip_count,
-                      desc->first_slice, slice_count, swizzled ? mapping : 0u};
-    std::lock_guard<std::mutex> lock(texture->views_mutex);
-    auto &view = texture->sampled_views[key];
-    if (!view) {
-        MTLTextureSwizzleChannels channels = MTLTextureSwizzleChannelsDefault;
-        if (swizzled)
-            channels = MTLTextureSwizzleChannelsMake(to_swizzle(mapping, 0), to_swizzle(mapping, 1), to_swizzle(mapping, 2),
-                                                     to_swizzle(mapping, 3));
-        view = [base newTextureViewWithPixelFormat:pixel_format textureType:type
-                                            levels:NSMakeRange(desc->first_mip, mip_count)
-                                            slices:NSMakeRange(desc->first_slice, slice_count)
-                                           swizzle:channels];
-        if (!view) {
-            texture->sampled_views.erase(key);
-            return fail(MTLB_ERROR_UNSUPPORTED, "texture view creation failed");
-        }
-    }
+    id<MTLTexture> view = texture_view_object(texture, desc);
+    if (!view)
+        return MTLB_ERROR_UNSUPPORTED;
     *out = view.gpuResourceID._impl;
     return MTLB_OK;
 }

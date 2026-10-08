@@ -199,6 +199,59 @@ int main()
         }
     }
 
+    // ---- ClearUnorderedAccessViewUint / Float --------------------------------------------------------------------
+    {
+        // Clears take the view from a CPU descriptor (a heap that is not shader visible) and the GPU handle of
+        // the same view in the shader-visible heap.
+        ComPtr<ID3D12DescriptorHeap> cpu_heap = gpu.descriptor_heap(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 8, false);
+        gpu.device->CopyDescriptorsSimple(8, cpu_heap->GetCPUDescriptorHandleForHeapStart(),
+                                          f.heap->GetCPUDescriptorHandleForHeapStart(),
+                                          D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        ComPtr<ID3D12GraphicsCommandList> list = f.begin();
+        const UINT words[4] = {0xDEADBEEFu, 0, 0, 0};
+        list->ClearUnorderedAccessViewUint(gpu.gpu_handle(f.heap.Get(), 1), gpu.cpu_handle(cpu_heap.Get(), 1),
+                                           f.structured.Get(), words, 0, nullptr);
+        const UINT raw_words[4] = {0x01020304u, 0, 0, 0};
+        list->ClearUnorderedAccessViewUint(gpu.gpu_handle(f.heap.Get(), 2), gpu.cpu_handle(cpu_heap.Get(), 2),
+                                           f.raw.Get(), raw_words, 0, nullptr);
+        const UINT typed_words[4] = {77, 0, 0, 0};
+        list->ClearUnorderedAccessViewUint(gpu.gpu_handle(f.heap.Get(), 5), gpu.cpu_handle(cpu_heap.Get(), 5),
+                                           f.typed.Get(), typed_words, 0, nullptr);
+        const FLOAT colour[4] = {0.25f, 0.5f, 0.75f, 1.0f};
+        list->ClearUnorderedAccessViewFloat(gpu.gpu_handle(f.heap.Get(), 0), gpu.cpu_handle(cpu_heap.Get(), 0),
+                                            f.texture.Get(), colour, 0, nullptr);
+        const FLOAT value[4] = {3.5f, 0, 0, 0};
+        list->ClearUnorderedAccessViewFloat(gpu.gpu_handle(f.heap.Get(), 4), gpu.cpu_handle(cpu_heap.Get(), 4),
+                                            f.float_texture.Get(), value, 0, nullptr);
+        gpu.run(list.Get());
+        for (uint32_t v : f.words(f.structured.Get()))
+            CHECK_EQ(v, 0xDEADBEEFu);
+        for (uint32_t v : f.words(f.raw.Get()))
+            CHECK_EQ(v, 0x01020304u);
+        for (uint32_t v : f.words(f.typed.Get()))
+            CHECK_EQ(v, 77u);
+        Image image = gpu.read_texture(f.texture.Get(), 0, 4);
+        expect_pixel("float clear of a UNORM texture", image.pixel(3, 9), {64, 128, 191, 255}, 1);
+        image = gpu.read_texture(f.float_texture.Get(), 0, 4);
+        float v;
+        std::memcpy(&v, image.at(5, 5), 4);
+        CHECK(v == 3.5f);
+
+        // A rectangle: only that part of the texture changes.
+        list = f.begin();
+        const FLOAT green[4] = {0.0f, 1.0f, 0.0f, 1.0f};
+        const D3D12_RECT rect = {2, 3, 8, 11};
+        list->ClearUnorderedAccessViewFloat(gpu.gpu_handle(f.heap.Get(), 0), gpu.cpu_handle(cpu_heap.Get(), 0),
+                                            f.texture.Get(), green, 1, &rect);
+        gpu.run(list.Get());
+        image = gpu.read_texture(f.texture.Get(), 0, 4);
+        expect_pixel("inside the rectangle", image.pixel(2, 3), {0, 255, 0, 255}, 1);
+        expect_pixel("inside the rectangle, far corner", image.pixel(7, 10), {0, 255, 0, 255}, 1);
+        expect_pixel("outside the rectangle (right)", image.pixel(8, 5), {64, 128, 191, 255}, 1);
+        expect_pixel("outside the rectangle (below)", image.pixel(4, 11), {64, 128, 191, 255}, 1);
+        expect_pixel("outside the rectangle (left)", image.pixel(1, 5), {64, 128, 191, 255}, 1);
+    }
+
     // ---- A dispatch with a zero group count does nothing -------------------------------------------------------------
     {
         ComPtr<ID3D12GraphicsCommandList> list = f.begin();

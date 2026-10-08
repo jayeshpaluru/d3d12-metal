@@ -318,6 +318,46 @@ HRESULT Device::query_removed_extended_data(REFIID riid, void **out)
     return dred_data()->QueryInterface(riid, out);
 }
 
+void Device::register_heap(DescriptorHeap *heap)
+{
+    if (!heap->storage())
+        return;
+    std::unique_lock lock(heaps_mutex_);
+    heaps_[reinterpret_cast<uintptr_t>(heap->storage())] = heap;
+}
+
+void Device::unregister_heap(DescriptorHeap *heap)
+{
+    if (!heap->storage())
+        return;
+    std::unique_lock lock(heaps_mutex_);
+    heaps_.erase(reinterpret_cast<uintptr_t>(heap->storage()));
+}
+
+ViewInfo *Device::view_info(D3D12_CPU_DESCRIPTOR_HANDLE handle)
+{
+    std::shared_lock lock(heaps_mutex_);
+    auto it = heaps_.upper_bound(handle.ptr);
+    if (it == heaps_.begin())
+        return nullptr;
+    --it;
+    DescriptorHeap *heap = it->second;
+    if (heap->type() != D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV)
+        return nullptr;
+    const size_t index = (handle.ptr - it->first) / kDescriptorSize;
+    return heap->shadow(static_cast<uint32_t>(index));
+}
+
+void Device::copy_view_info(D3D12_CPU_DESCRIPTOR_HANDLE dest, D3D12_CPU_DESCRIPTOR_HANDLE src, UINT count)
+{
+    for (UINT i = 0; i < count; ++i) {
+        ViewInfo *to = view_info({dest.ptr + size_t(i) * kDescriptorSize});
+        ViewInfo *from = view_info({src.ptr + size_t(i) * kDescriptorSize});
+        if (to)
+            *to = from ? *from : ViewInfo{};
+    }
+}
+
 // ---- Descriptors -----------------------------------------------------------
 
 void Device::CreateConstantBufferView(const D3D12_CONSTANT_BUFFER_VIEW_DESC *desc, D3D12_CPU_DESCRIPTOR_HANDLE dest)
@@ -374,6 +414,8 @@ void Device::CopyDescriptors(UINT num_dest_ranges, const D3D12_CPU_DESCRIPTOR_HA
         const UINT n = std::min(dest_size - d_used, src_size - s_used);
         std::memcpy(reinterpret_cast<void *>(dest_starts[d].ptr + size_t(d_used) * size),
                     reinterpret_cast<const void *>(src_starts[s].ptr + size_t(s_used) * size), size_t(n) * size);
+        if (type == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV)
+            copy_view_info({dest_starts[d].ptr + size_t(d_used) * size}, {src_starts[s].ptr + size_t(s_used) * size}, n);
         d_used += n;
         s_used += n;
         if (d_used == dest_size) { ++d; d_used = 0; }
@@ -386,6 +428,8 @@ void Device::CopyDescriptorsSimple(UINT count, D3D12_CPU_DESCRIPTOR_HANDLE dest,
 {
     std::memcpy(reinterpret_cast<void *>(dest.ptr), reinterpret_cast<const void *>(src.ptr),
                 size_t(count) * descriptor_size(type));
+    if (type == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV)
+        copy_view_info(dest, src, count);
 }
 
 // ---- Resources -------------------------------------------------------------

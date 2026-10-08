@@ -36,11 +36,21 @@ HRESULT DescriptorHeap::create(Device *device, const D3D12_DESCRIPTOR_HEAP_DESC 
         }
         heap->storage_ = heap->host_storage_.data();
     }
+    if (desc.Type == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV) {
+        try {
+            heap->shadow_.resize(desc.NumDescriptors);
+        } catch (const std::bad_alloc &) {
+            heap->Release();
+            return E_OUTOFMEMORY;
+        }
+    }
+    device->register_heap(heap);
     return hand_out(heap, riid, out);
 }
 
 DescriptorHeap::~DescriptorHeap()
 {
+    device()->unregister_heap(this);
     if (buffer_)
         mtlb_buffer_destroy(buffer_);
 }

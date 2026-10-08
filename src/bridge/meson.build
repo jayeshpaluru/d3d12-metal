@@ -3,6 +3,7 @@ if host_system == 'darwin'
     'metal/descriptors.mm',
     'metal/device.mm',
     'metal/formats.mm',
+    'metal/kernels.mm',
     'metal/notify.mm',
     'metal/pipeline.mm',
     'metal/queue.mm',

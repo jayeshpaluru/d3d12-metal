@@ -147,6 +147,8 @@ private:
     mtlb_result set_compute_root_args(const mtlb_cmd_set_graphics_root_args &cmd);
     mtlb_result set_descriptor_heaps(const mtlb_cmd_set_descriptor_heaps &cmd);
     mtlb_result dispatch_compute(const mtlb_cmd_dispatch &cmd);
+    mtlb_result clear_buffer(const mtlb_cmd_clear_buffer &cmd);
+    mtlb_result clear_texture_uav(const mtlb_cmd_clear_texture_uav &cmd);
     mtlb_result copy_texture_texture(const mtlb_cmd_copy_texture_texture &cmd);
     void bind_heaps(uint32_t stage_mask);
     mtlb_result copy_buffer(const mtlb_cmd_copy_buffer &cmd);
@@ -729,6 +731,8 @@ mtlb_result Replay::dispatch_compute(const mtlb_cmd_dispatch &cmd)
     Pipeline *pipeline = state_.compute_pipeline;
     if (!pipeline)
         return fail(MTLB_ERROR_INVALID_ARGUMENT, "dispatch without a compute pipeline");
+    if (!cmd.x || !cmd.y || !cmd.z)
+        return MTLB_OK;  // an empty dispatch does nothing (Metal rejects it)
     id<MTLComputeCommandEncoder> enc = compute();
     if (!enc)
         return fail(MTLB_ERROR_DEVICE, "computeCommandEncoder failed");
@@ -740,6 +744,65 @@ mtlb_result Replay::dispatch_compute(const mtlb_cmd_dispatch &cmd)
         bind_heaps(1);
     dirty_compute_ = 0;
     [enc dispatchThreadgroups:MTLSizeMake(cmd.x, cmd.y, cmd.z) threadsPerThreadgroup:pipeline->threadgroup_size];
+    return MTLB_OK;
+}
+
+// Our own kernels share the compute encoder with the application's dispatches and rebind the same slots.
+mtlb_result Replay::clear_buffer(const mtlb_cmd_clear_buffer &cmd)
+{
+    Buffer *buffer = from_handle<Buffer>(cmd.buffer);
+    if (!buffer || cmd.pattern_size == 0 || cmd.pattern_size > 16 || cmd.offset > buffer->size
+        || cmd.size > buffer->size - cmd.offset)
+        return fail(MTLB_ERROR_INVALID_ARGUMENT, "invalid buffer clear");
+    const uint32_t elements = static_cast<uint32_t>(std::min<uint64_t>(cmd.size / cmd.pattern_size, UINT32_MAX));
+    if (!elements)
+        return MTLB_OK;
+    id<MTLComputePipelineState> kernel = internal_kernel(queue_->device, @"clear_buffer");
+    if (!kernel)
+        return MTLB_ERROR_COMPILE_FAILED;
+    id<MTLComputeCommandEncoder> enc = compute();
+    const uint32_t params[2] = {elements, cmd.pattern_size};
+    const uint64_t base = cmd.offset;
+    [enc setComputePipelineState:kernel];
+    [enc setBuffer:buffer->buffer offset:0 atIndex:0];
+    [enc setBytes:cmd.pattern length:sizeof(cmd.pattern) atIndex:1];
+    [enc setBytes:params length:sizeof(params) atIndex:2];
+    [enc setBytes:&base length:sizeof(base) atIndex:3];
+    [enc dispatchThreads:MTLSizeMake(elements, 1, 1) threadsPerThreadgroup:MTLSizeMake(std::min<NSUInteger>(elements, 256), 1, 1)];
+    dirty_compute_ = kAll;
+    return MTLB_OK;
+}
+
+mtlb_result Replay::clear_texture_uav(const mtlb_cmd_clear_texture_uav &cmd)
+{
+    Texture *texture = from_handle<Texture>(cmd.texture);
+    if (!texture)
+        return fail(MTLB_ERROR_INVALID_ARGUMENT, "invalid texture clear");
+    id<MTLTexture> view = texture_view_object(texture, &cmd.view);
+    if (!view)
+        return MTLB_ERROR_UNSUPPORTED;
+    const char *dimension = view.textureType == MTLTextureType3D ? "3d" : view.textureType == MTLTextureType2DArray ? "2da" : "2d";
+    if (view.textureType != MTLTextureType3D && view.textureType != MTLTextureType2DArray && view.textureType != MTLTextureType2D)
+        return fail(MTLB_ERROR_UNSUPPORTED, "cannot clear this kind of texture view");
+    const char *suffix = cmd.kind == MTLB_CLEAR_UINT ? "u" : cmd.kind == MTLB_CLEAR_SINT ? "i" : "f";
+    id<MTLComputePipelineState> kernel =
+        internal_kernel(queue_->device, [NSString stringWithFormat:@"clear%s_%s", dimension, suffix]);
+    if (!kernel)
+        return MTLB_ERROR_COMPILE_FAILED;
+    const uint32_t width = cmd.width ? cmd.width : static_cast<uint32_t>(view.width) - std::min<uint32_t>(cmd.x, static_cast<uint32_t>(view.width));
+    const uint32_t height = cmd.width ? cmd.height : static_cast<uint32_t>(view.height) - std::min<uint32_t>(cmd.y, static_cast<uint32_t>(view.height));
+    const uint32_t region[4] = {cmd.x, cmd.y, width, height};
+    const NSUInteger depth = view.textureType == MTLTextureType3D ? view.depth
+                             : view.textureType == MTLTextureType2DArray ? view.arrayLength : 1;
+    if (!width || !height)
+        return MTLB_OK;
+    id<MTLComputeCommandEncoder> enc = compute();
+    [enc setComputePipelineState:kernel];
+    [enc setTexture:view atIndex:0];
+    [enc setBytes:cmd.value length:sizeof(cmd.value) atIndex:0];
+    [enc setBytes:region length:sizeof(region) atIndex:1];
+    [enc dispatchThreads:MTLSizeMake(width, height, depth) threadsPerThreadgroup:MTLSizeMake(8, 8, 1)];
+    dirty_compute_ = kAll;
     return MTLB_OK;
 }
 
@@ -817,6 +880,8 @@ mtlb_result Replay::execute(const mtlb_cmd_header *header)
     case MTLB_CMD_SET_COMPUTE_ROOT_ARGS: return dispatch(header, &Replay::set_compute_root_args);
     case MTLB_CMD_SET_DESCRIPTOR_HEAPS: return dispatch(header, &Replay::set_descriptor_heaps);
     case MTLB_CMD_DISPATCH: return dispatch(header, &Replay::dispatch_compute);
+    case MTLB_CMD_CLEAR_BUFFER: return dispatch(header, &Replay::clear_buffer);
+    case MTLB_CMD_CLEAR_TEXTURE_UAV: return dispatch(header, &Replay::clear_texture_uav);
     case MTLB_CMD_COPY_TEXTURE_TEXTURE: return dispatch(header, &Replay::copy_texture_texture);
     case MTLB_CMD_DRAW: return dispatch(header, &Replay::draw);
     case MTLB_CMD_DRAW_INDEXED: return dispatch(header, &Replay::draw_indexed);

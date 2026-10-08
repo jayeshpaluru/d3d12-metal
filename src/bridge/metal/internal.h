@@ -62,6 +62,11 @@ struct Device {
     std::mutex depth_stencil_mutex;
     std::map<DepthStencilKey, id<MTLDepthStencilState>> depth_stencil_states;
 
+    // The backend's own compute kernels (kernels.mm).
+    std::mutex kernels_mutex;
+    id<MTLLibrary> kernel_library = nil;
+    std::map<std::string, id<MTLComputePipelineState>> kernels;
+
     // Samplers shared by equal descriptions.
     std::mutex sampler_mutex;
     std::map<SamplerKey, id<MTLSamplerState>> samplers;
@@ -221,6 +226,13 @@ Drawable acquire_drawable(Swapchain *swapchain, uint32_t sync_interval);
 // Encodes drawing `texture` onto the drawable and presenting it into `command_buffer`.
 void encode_present(Queue *queue, id<MTLCommandBuffer> command_buffer, Swapchain *swapchain, Texture *texture,
                     const Drawable &drawable);
+
+// The backend's own compute kernel `name` (kernels.mm); nil with fail() set when it cannot be built.
+id<MTLComputePipelineState> internal_kernel(Device *device, NSString *name);
+
+// The Metal texture a shader-visible view of `texture` described by `desc` refers to (the texture itself when
+// the view changes nothing); nil with fail() set on error. Cached on the texture.
+id<MTLTexture> texture_view_object(Texture *texture, const mtlb_texture_view_desc *desc);
 
 // Format mapping (formats.mm). Return MTLPixelFormatInvalid / MTLVertexFormatInvalid
 // for formats with no equivalent.

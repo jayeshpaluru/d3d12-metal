@@ -53,6 +53,8 @@ typedef enum mtlb_cmd_type {
     MTLB_CMD_COPY_TEXTURE_TEXTURE,
     MTLB_CMD_SET_COMPUTE_ROOT_ARGS,
     MTLB_CMD_DISPATCH,
+    MTLB_CMD_CLEAR_BUFFER,
+    MTLB_CMD_CLEAR_TEXTURE_UAV,
 } mtlb_cmd_type;
 
 typedef struct mtlb_cmd_header {
@@ -267,7 +269,33 @@ typedef struct mtlb_cmd_dispatch {
     uint32_t reserved;
 } mtlb_cmd_dispatch;
 
+/* UAV clears. A buffer range is filled with the repeated bytes of one element; a texture view (a
+ * mip level, a range of slices) is cleared to the value, written as float, uint or int per `kind`. */
+typedef struct mtlb_cmd_clear_buffer {
+    mtlb_cmd_header header;
+    mtlb_buffer buffer;
+    uint64_t offset;           /* bytes */
+    uint64_t size;             /* bytes, a multiple of pattern_size */
+    uint32_t pattern_size;     /* 1..16 */
+    uint32_t reserved;
+    uint8_t pattern[16];
+} mtlb_cmd_clear_buffer;
+
+enum { MTLB_CLEAR_FLOAT = 0, MTLB_CLEAR_UINT = 1, MTLB_CLEAR_SINT = 2 };
+
+typedef struct mtlb_cmd_clear_texture_uav {
+    mtlb_cmd_header header;
+    mtlb_texture texture;
+    mtlb_texture_view_desc view;
+    uint32_t kind;             /* MTLB_CLEAR_* */
+    uint32_t reserved;
+    uint32_t value[4];         /* the bits of 4 floats, uints or ints */
+    uint32_t x, y, width, height;  /* region of the level; width 0 = all of it */
+} mtlb_cmd_clear_texture_uav;
+
 MTLB_ASSERT_SIZE(mtlb_cmd_header, 8);
+MTLB_ASSERT_SIZE(mtlb_cmd_clear_buffer, 56);
+MTLB_ASSERT_SIZE(mtlb_cmd_clear_texture_uav, 88);
 MTLB_ASSERT_SIZE(mtlb_cmd_dispatch, 24);
 MTLB_ASSERT_SIZE(mtlb_cmd_set_descriptor_heaps, 24);
 MTLB_ASSERT_SIZE(mtlb_cmd_copy_texture_texture, 80);

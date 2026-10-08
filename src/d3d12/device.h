@@ -2,9 +2,12 @@
 #pragma once
 
 #include <array>
+#include <map>
 #include <mutex>
+#include <shared_mutex>
 
 #include "bridge/mtlb.h"
+#include "d3d12/descriptor_heap.h"
 #include "d3d12/fence.h"
 #include "d3d12/object.h"
 
@@ -20,6 +23,13 @@ public:
     const mtlb_device_caps &caps() const { return caps_; }
     // The descriptor a null view of mtlb_null_kind `kind` gets (cached after the first request).
     mtlb_descriptor null_descriptor(uint32_t kind);
+
+    // Descriptor heaps by CPU memory, to find the heap behind a CPU descriptor handle.
+    void register_heap(DescriptorHeap *heap);
+    void unregister_heap(DescriptorHeap *heap);
+    // The shadow view info (see ViewInfo) of the CBV/SRV/UAV descriptor at `handle`, or null.
+    ViewInfo *view_info(D3D12_CPU_DESCRIPTOR_HANDLE handle);
+    void copy_view_info(D3D12_CPU_DESCRIPTOR_HANDLE dest, D3D12_CPU_DESCRIPTOR_HANDLE src, UINT count);
     FenceWaiter &fence_waiter() { return fence_waiter_; }
 
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **out) override
@@ -165,6 +175,8 @@ private:
     ~Device() override;
 
     mtlb_device device_ = 0;
+    std::shared_mutex heaps_mutex_;
+    std::map<uintptr_t, DescriptorHeap *> heaps_;
     std::mutex null_mutex_;
     std::array<mtlb_descriptor, 16> null_descriptors_{};
     std::array<bool, 16> null_ready_{};

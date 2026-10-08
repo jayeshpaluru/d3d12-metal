@@ -311,6 +311,18 @@ void Device::CreateUnorderedAccessView(ID3D12Resource *resource_ptr, ID3D12Resou
                                        const D3D12_UNORDERED_ACCESS_VIEW_DESC *desc, D3D12_CPU_DESCRIPTOR_HANDLE dest)
 {
     mtlb_descriptor *slot = slot_of(dest);
+    // The shadow view info is stored on every way out (a failed or null view leaves "none").
+    ViewInfo info;
+    struct Store {
+        Device *device;
+        D3D12_CPU_DESCRIPTOR_HANDLE handle;
+        ViewInfo &info;
+        ~Store()
+        {
+            if (ViewInfo *shadow = device->view_info(handle))
+                *shadow = info;
+        }
+    } store{this, dest, info};
     auto *resource = ours<Resource>(resource_ptr);
     if (!resource || !desc) {
         const bool typed = desc && desc->Format != DXGI_FORMAT_UNKNOWN && !(desc->Buffer.Flags & D3D12_BUFFER_UAV_FLAG_RAW);
@@ -335,8 +347,16 @@ void Device::CreateUnorderedAccessView(ID3D12Resource *resource_ptr, ID3D12Resou
         b.format = b.stride ? DXGI_FORMAT_UNKNOWN : desc->Format;
         b.counter = ours<Resource>(counter_ptr);
         b.counter_offset = desc->Buffer.CounterOffsetInBytes;
-        if (FAILED(make_buffer_descriptor(*resource, b, slot)))
+        if (FAILED(make_buffer_descriptor(*resource, b, slot))) {
             *slot = null_descriptor(MTLB_NULL_BUFFER);
+            return;
+        }
+        info.kind = ViewInfo::Buffer;
+        info.raw = b.raw;
+        info.format = b.format;
+        info.stride = b.stride;
+        info.first_element = b.first_element;
+        info.num_elements = b.num_elements;
         return;
     }
     case D3D12_UAV_DIMENSION_TEXTURE1D:
@@ -374,8 +394,16 @@ void Device::CreateUnorderedAccessView(ID3D12Resource *resource_ptr, ID3D12Resou
         *slot = null_descriptor(null_uav_kind(desc->ViewDimension, false));
         return;
     }
-    if (FAILED(make_texture_descriptor(*resource, p, slot)))
+    if (FAILED(make_texture_descriptor(*resource, p, slot))) {
         *slot = null_descriptor(null_uav_kind(desc->ViewDimension, false));
+        return;
+    }
+    info.kind = ViewInfo::Texture;
+    info.format = p.format;
+    info.type = p.type;
+    info.first_mip = p.range.first_mip;
+    info.first_slice = p.range.first_slice;
+    info.slice_count = p.type == MTLB_VIEW_3D ? mip_extent(rd.DepthOrArraySize, p.range.first_mip) : p.range.slice_count;
 }
 
 void Device::CreateSampler(const D3D12_SAMPLER_DESC *desc, D3D12_CPU_DESCRIPTOR_HANDLE dest)
