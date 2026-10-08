@@ -230,3 +230,12 @@ Wine notes:
 - **Copies between a block-compressed texture and one with a texel per block** (a compressor's R32G32B32A32_UINT output copied into BC6H) go
   through a buffer: Metal refuses a BC view of such a texture, and the failed assertion killed the game on entering the open world.
 - Statistics (`D3D12METAL_STATS=1`) now print the frame rate and the GPU time per frame (sum of the command buffers' GPU intervals, and their union).
+- **Open world.** Profile 2 loads into the open world (rooftop, museum interior) and renders correctly through the in-game menus; the graphics settings
+  menu works (FSR 3.1.4 and XeSS offered, DLSS and frame generation unavailable; applying changes works). Profiling (menu, 120 fps cap, ~6 ms GPU) and gameplay
+  (55-60 fps, 12-20 ms of GPU time of which ~8 ms busy, game CPU ~300%) tools: `D3D12METAL_STATS=1`, `D3D12METAL_PASS_PROFILE=1` (GPU time per kind of
+  encoder), `D3D12METAL_PROFILE=1` (CPU time per API method, sampled), `D3D12METAL_NO_PASS_MERGE=1`.
+- **Pipelines without a root signature** use the one embedded in the shader (XeSS creates its compute pipelines that way).
+- **Render passes continue across barriers** that name nothing they render to (`perf` commit); the stats print how many passes only continue the previous one.
+- Known open: a `mtlb_queue_signal` access violation once seen right after switching to XeSS in the open world (not reproduced);
+  gameplay speed varies with the display state (the stats' GPU time can jump to 160 ms per frame when the display sleeps or another GPU client runs);
+  stream output; typed buffer views above 2^28 texels are still clamped.
