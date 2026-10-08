@@ -208,5 +208,26 @@ int main()
         check_pixel("indexed", read_pixel(readback.Get(), row_pitch, 48, 32), {0, 255, 0, 255});
         check_pixel("not drawn", read_pixel(readback.Get(), row_pitch, 16, 32), {0, 0, 255, 255});
     }
+
+    {
+        // A draw that reads past the index buffer view is skipped.
+        Scene scene;
+        const uint32_t indices[] = {3, 4, 5};
+        ComPtr<ID3D12Resource> index_buffer = scene.ctx.create_upload_buffer(indices, sizeof(indices));
+        const D3D12_INDEX_BUFFER_VIEW ibv = {index_buffer->GetGPUVirtualAddress(), sizeof(indices), DXGI_FORMAT_R32_UINT};
+        D3D12_CPU_DESCRIPTOR_HANDLE rtv = scene.ctx.rtv();
+        scene.list->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
+        scene.list->ClearRenderTargetView(rtv, blue, 0, nullptr);
+        scene.list->IASetIndexBuffer(&ibv);
+        scene.list->SetGraphicsRoot32BitConstants(0, 4, green, 0);
+        scene.list->DrawIndexedInstanced(3, 1, 0, 0, 0);
+        scene.list->SetGraphicsRoot32BitConstants(0, 4, red, 0);
+        scene.list->DrawIndexedInstanced(3, 1, 1, 0, 0);  // indices 1..3: one past the end
+
+        ComPtr<ID3D12Resource> readback;
+        UINT row_pitch = 0;
+        scene.run(&readback, &row_pitch);
+        check_pixel("valid draw stays", read_pixel(readback.Get(), row_pitch, 48, 32), {0, 255, 0, 255});
+    }
     return 0;
 }

@@ -60,10 +60,17 @@ HRESULT FenceWaiter::add(Fence *fence, UINT64 value, HANDLE event)
             return to_hresult(result);
         thread_ = std::thread([this] { run(); });
     }
-    waits_[fence].emplace(value, event);
+    auto &pending = waits_[fence];
+    const auto wait = pending.emplace(value, event);
     // Registered under the lock so the entry exists before the notification can
     // arrive; the bridge fires at once if the value was reached meanwhile.
-    return to_hresult(mtlb_event_notify(fence->event(), value, queue_, reinterpret_cast<uint64_t>(fence)));
+    const mtlb_result result = mtlb_event_notify(fence->event(), value, queue_, reinterpret_cast<uint64_t>(fence));
+    if (result != MTLB_OK) {
+        pending.erase(wait);  // nothing will ever signal it
+        if (pending.empty())
+            waits_.erase(fence);
+    }
+    return to_hresult(result);
 }
 
 void FenceWaiter::forget(Fence *fence)

@@ -75,7 +75,8 @@ struct DrawState {
     IRRuntimeVertexBuffers vertex_buffers = {};  // read by the stage-in function
     id<MTLBuffer> index_buffer = nil;            // nil: unbound or not a known address
     uint64_t index_offset = 0;
-    uint32_t index_size = 0;
+    uint32_t index_size = 0;       // bytes per index
+    uint64_t index_view_size = 0;  // bytes the index buffer view covers
     // Points into the submitted stream, which outlives the replay.
     const uint8_t *root_args = nullptr;
     uint32_t root_args_size = 0;
@@ -470,6 +471,12 @@ mtlb_result Replay::draw_indexed(const mtlb_cmd_draw_indexed &cmd)
         return result;
     if (!state_.index_buffer || (state_.index_size != 2 && state_.index_size != 4))
         return fail(MTLB_ERROR_INVALID_ARGUMENT, "indexed draw without a valid index buffer");
+    if ((uint64_t(cmd.start_index) + cmd.index_count) * state_.index_size > state_.index_view_size) {
+        static std::atomic<bool> logged{false};
+        if (!logged.exchange(true))
+            std::fprintf(stderr, "d3d12-metal: indexed draw skipped, it reads past the index buffer view\n");
+        return MTLB_OK;
+    }
     IRRuntimeDrawIndexedPrimitives(render_, to_primitive_type(state_.topology), cmd.index_count,
                                    state_.index_size == 2 ? MTLIndexTypeUInt16 : MTLIndexTypeUInt32, state_.index_buffer,
                                    state_.index_offset + uint64_t(cmd.start_index) * state_.index_size, cmd.instance_count,
@@ -575,6 +582,7 @@ mtlb_result Replay::set_index_buffer(const mtlb_cmd_set_index_buffer &cmd)
     Buffer *buffer = cmd.gpu_address ? find_buffer(queue_->device, cmd.gpu_address, &state_.index_offset) : nullptr;
     state_.index_buffer = buffer ? buffer->buffer : nil;
     state_.index_size = cmd.index_size;
+    state_.index_view_size = cmd.size;
     return MTLB_OK;
 }
 
