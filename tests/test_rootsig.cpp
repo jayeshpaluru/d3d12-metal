@@ -323,7 +323,7 @@ void test_roundtrip_11()
                                                   reinterpret_cast<void **>(plain.put())));
     check_desc10_eq(*plain->GetRootSignatureDesc(), sig.desc10);
 
-    // The 1.0 serializer entry point converts a 1.1-targeted request down too.
+    // A 1.0 blob is smaller than the 1.1 one (no flag fields).
     Com<ID3DBlob> blob10;
     CHECK_HR(D3D12SerializeRootSignature(&sig.desc10, D3D_ROOT_SIGNATURE_VERSION_1_0, blob10.put(), nullptr));
     CHECK(blob10->GetBufferSize() < blob->GetBufferSize());
@@ -451,8 +451,9 @@ void test_malformed()
     std::memcpy(&bad_payload[24 + 8], &far, 4);
     CHECK(FAILED(parses(bad_payload)));
 
+    void *unused = nullptr;
     CHECK(FAILED(D3D12CreateRootSignatureDeserializer(nullptr, 0, __uuidof(ID3D12RootSignatureDeserializer),
-                                                      reinterpret_cast<void **>(&bad_payload))));
+                                                      &unused)));
 }
 
 void test_serialize_errors()
