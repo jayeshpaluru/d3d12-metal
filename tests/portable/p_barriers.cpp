@@ -219,6 +219,61 @@ void compute_then_graphics(Gpu &gpu)
     }
 }
 
+// ---- compute -> graphics inside one pass (the barrier arrives after the pass began, without waiting for the dispatch) -----
+
+void compute_then_graphics_in_pass(Gpu &gpu)
+{
+    FillFixture f(gpu);
+    const D3D12_ROOT_PARAMETER1 constants = root_constants(0, 4);
+    ComPtr<ID3D12RootSignature> graphics_signature = gpu.root_signature(&constants, 1);
+    const D3D12_INPUT_ELEMENT_DESC layout[] = {
+        {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0}};
+    ComPtr<ID3D12PipelineState> pso =
+        gpu.graphics_pso(graphics_pso_desc(graphics_signature.Get(), T12_SHADER(g_color_vs), T12_SHADER(g_color_ps), layout, 1));
+    ComPtr<ID3D12Resource> target = gpu.texture(tex2d_desc(DXGI_FORMAT_R8G8B8A8_UNORM, 32, 32, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET),
+                                                D3D12_RESOURCE_STATE_RENDER_TARGET);
+    ComPtr<ID3D12DescriptorHeap> rtv_heap = gpu.descriptor_heap(D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 1);
+    gpu.device->CreateRenderTargetView(target.Get(), nullptr, rtv_heap->GetCPUDescriptorHandleForHeapStart());
+    const float corner[] = {-1, -1, 0, -0.9f, -1, 0, -1, -0.9f, 0};  // a speck, so that the pass has a draw before the barrier
+    ComPtr<ID3D12Resource> speck = gpu.upload_buffer(corner, sizeof(corner));
+
+    for (int round = 0; round < kRounds; ++round) {
+        ComPtr<ID3D12GraphicsCommandList> list = gpu.list();
+        f.begin(list.Get());
+        f.dispatch(list.Get(), 6, 100);  // vertex data into the buffer; nothing orders the pass below after it yet
+        list->SetGraphicsRootSignature(graphics_signature.Get());
+        list->SetPipelineState(pso.Get());
+        const D3D12_VIEWPORT viewport = {0, 0, 32, 32, 0, 1};
+        const D3D12_RECT scissor = {0, 0, 32, 32};
+        list->RSSetViewports(1, &viewport);
+        list->RSSetScissorRects(1, &scissor);
+        D3D12_CPU_DESCRIPTOR_HANDLE rtv = rtv_heap->GetCPUDescriptorHandleForHeapStart();
+        list->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
+        const float clear[4] = {0, 0, 1, 1};
+        list->ClearRenderTargetView(rtv, clear, 0, nullptr);
+        const float colour[4] = {1, 0, 0, 1};
+        list->SetGraphicsRoot32BitConstants(0, 4, colour, 0);
+        list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        D3D12_VERTEX_BUFFER_VIEW vbv = {speck->GetGPUVirtualAddress(), sizeof(corner), 12};
+        list->IASetVertexBuffers(0, 1, &vbv);
+        list->DrawInstanced(3, 1, 0, 0);
+        const D3D12_RESOURCE_BARRIER barriers[2] = {
+            uav_barrier(f.buffer.Get()),
+            transition(f.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER)};
+        list->ResourceBarrier(2, barriers);
+        vbv = {f.buffer->GetGPUVirtualAddress(), 36, 12};
+        list->IASetVertexBuffers(0, 1, &vbv);
+        list->DrawInstanced(3, 1, 0, 0);
+        const D3D12_RESOURCE_BARRIER back = transition(f.buffer.Get(), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER,
+                                                       D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        list->ResourceBarrier(1, &back);
+        gpu.run(list.Get());
+        const Image image = gpu.read_texture(target.Get(), 0, 4);
+        expect_pixel("compute then graphics in a pass, triangle", image.pixel(16, 24), {255, 0, 0, 255});
+        expect_pixel("compute then graphics in a pass, background", image.pixel(2, 30), {0, 0, 255, 255});
+    }
+}
+
 // ---- render -> sample, in a different encoder type ------------------------------------------------------------------------
 
 void render_then_sample(Gpu &gpu)
@@ -334,6 +389,7 @@ int main()
     copy_then_sample(gpu);
     uav_then_srv(gpu);
     compute_then_graphics(gpu);
+    compute_then_graphics_in_pass(gpu);
     render_then_sample(gpu);
     independent_dispatches(gpu);
     aliasing(gpu);

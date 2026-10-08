@@ -708,6 +708,25 @@ private:
         }
         return false;
     }
+    // True when the open render pass renders to (any view of) the texture of `target`.
+    bool touches_open_pass(const Target &target) const { return is_attachment(target.texture); }
+    // True when a barrier hands a texture with a pending clear to its readers (or may hand any).
+    bool barrier_names_pending_clear(const mtlb_cmd_barrier &cmd) const
+    {
+        if (clears_.empty())
+            return false;
+        for (uint32_t i = 0; i < cmd.count; ++i) {
+            const mtlb_barrier &b = cmd.barriers[i];
+            if (b.type == MTLB_BARRIER_ALIASING || (!b.texture && !b.buffer))
+                return true;
+            if (!b.texture)
+                continue;
+            const Texture *texture = from_handle<Texture>(b.texture);
+            if (!texture || std::any_of(clears_.begin(), clears_.end(), [&](const PendingClear &c) { return c.target.texture == texture; }))
+                return true;
+        }
+        return false;
+    }
     // D3D12METAL_NO_PASS_MERGE=1 turns the continuation of render passes across barriers off (to compare, or to bisect).
     static bool getenv_no_pass_merge()
     {
@@ -974,14 +993,16 @@ mtlb_result Replay::clear_dsv(const mtlb_cmd_clear_dsv &cmd)
 mtlb_result Replay::add_clear(const PendingClear &clear)
 {
     if (render_) {
-        // Draws may already have landed in the open pass. A clear of one of its
-        // targets must come after them; a clear of any other view must not stay
-        // pending while later draws in this list might read it. Either way the
-        // pass ends, and a view outside it is cleared at once.
+        // Draws may already have landed in the open pass. A clear of one of its targets must come after them, so the
+        // pass ends. A clear of a view of another texture leaves the pass alone and waits for a pass that binds the view
+        // (it becomes the load action), or for the barrier that hands the texture to its readers, or for the next copy,
+        // dispatch or end of the list. With the barriers turned off nothing says when readers come: it runs at once.
         const bool bound = is_bound(clear);
-        end_render("add_clear");
-        if (!bound)
-            return clear_only_pass(clear);
+        if (bound || sync_disabled_ || touches_open_pass(clear.target)) {
+            end_render("add_clear");
+            if (!bound)
+                return clear_only_pass(clear);
+        }
     }
     auto same_view = [&](const PendingClear &c) { return c.target == clear.target && c.depth_stencil == clear.depth_stencil; };
     PendingClear merged = clear;
@@ -2054,27 +2075,51 @@ mtlb_result Replay::barrier(const mtlb_cmd_barrier &cmd)
     if (sync_disabled_)
         return MTLB_OK;
     sync_needed_ = true;
-    if (render_ && render_synced_ && !pass_writes_uav_ && !getenv_no_pass_merge()) {
-        // The open pass continues across the barrier when nothing in it can have written what the barrier orders: the
-        // pass began after everything before it completed, none of its draws binds a UAV in any stage (a memory
-        // barrier inside a pass is not reliable between fragment and vertex work), and the barrier names nothing it
-        // renders to.
-        bool keep = true;
-        for (uint32_t i = 0; i < cmd.count && keep; ++i) {
-            const mtlb_barrier &b = cmd.barriers[i];
-            if (b.type == MTLB_BARRIER_ALIASING || (!b.texture && !b.buffer)) {
-                keep = false;
-            } else if (b.texture) {
-                Texture *texture = from_handle<Texture>(b.texture);
-                keep = texture && !is_attachment(texture);
+    // Clears that wait for a pass run before the barrier lets readers at their texture.
+    if (barrier_names_pending_clear(cmd)) {
+        mtlb_result result = flush_clears(false);
+        if (result != MTLB_OK)
+            return result;
+    }
+    // The open pass continues across the barrier when nothing in it can have written what the barrier orders: the pass
+    // began after everything before it completed, none of its draws binds a UAV in any stage (a memory barrier inside a
+    // pass is not reliable between fragment and vertex work), and the barrier names nothing it renders to.
+    const char *reason = "barrier";
+    if (render_) {
+        if (getenv_no_pass_merge())
+            reason = "barrier (merging off)";
+        else if (pass_writes_uav_)
+            reason = "barrier (UAV draws in pass)";
+        else {
+            reason = nullptr;
+            for (uint32_t i = 0; i < cmd.count && !reason; ++i) {
+                const mtlb_barrier &b = cmd.barriers[i];
+                if (b.type == MTLB_BARRIER_ALIASING || (!b.texture && !b.buffer)) {
+                    reason = "barrier (all resources or aliasing)";
+                } else if (b.texture) {
+                    Texture *texture = from_handle<Texture>(b.texture);
+                    if (!texture || is_attachment(texture))
+                        reason = "barrier (names an attachment)";
+                }
+            }
+            if (!reason) {
+                // A pass that began without waiting for the encoder before it waits now: the barrier asks for exactly that,
+                // and what the pass has drawn so far reaches only its own attachments.
+                if (!render_synced_) {
+                    if (queue_->fence_pending) {
+                        stat_add(kStatSyncs);
+                        [render_ waitForFence:queue_->fence beforeStages:MTLRenderStageVertex];
+                        queue_->fence_pending = false;
+                    }
+                    render_synced_ = true;
+                }
+                return MTLB_OK;
             }
         }
-        if (keep)
-            return MTLB_OK;
     }
     end_blit();
     ending_for_barrier_ = true;
-    end_render("barrier");
+    end_render(reason);
     ending_for_barrier_ = false;
     if (compute_)
         [compute_ memoryBarrierWithScope:MTLBarrierScopeBuffers | MTLBarrierScopeTextures];

@@ -197,6 +197,62 @@ int main()
         std::memcpy(&id, id_image.at(kSize / 2, kSize / 2), 4);
         CHECK_EQ(id, 1);
     }
+
+    // A clear of a render target the open pass does not render to leaves the pass alone. It waits for a pass that binds the
+    // target (becoming its load action) or for the barrier that hands the target to a reader.
+    {
+        ComPtr<ID3D12Resource> other = scene.gpu.texture(tex2d_desc(DXGI_FORMAT_R8G8B8A8_UNORM, kSize, kSize, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET),
+                                                         D3D12_RESOURCE_STATE_RENDER_TARGET);
+        ComPtr<ID3D12DescriptorHeap> heap = scene.gpu.descriptor_heap(D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 2);
+        scene.gpu.device->CreateRenderTargetView(scene.target.Get(), nullptr, scene.gpu.cpu_handle(heap.Get(), 0));
+        scene.gpu.device->CreateRenderTargetView(other.Get(), nullptr, scene.gpu.cpu_handle(heap.Get(), 1));
+        D3D12_CPU_DESCRIPTOR_HANDLE first = scene.gpu.cpu_handle(heap.Get(), 0), second = scene.gpu.cpu_handle(heap.Get(), 1);
+        const float green[4] = {0, 1, 0, 1}, clear[4] = {0, 0, 0, 1};
+        auto begin = [&](D3D12_CPU_DESCRIPTOR_HANDLE target) {
+            ComPtr<ID3D12GraphicsCommandList> list = scene.begin();
+            list->OMSetRenderTargets(1, &target, FALSE, nullptr);
+            return list;
+        };
+
+        // (a) clear `other` while the pass on `target` is open, draw on `target` again, then render to `other`: the clear is
+        // the load action of the second pass; two passes in all, and the draw on `other` lands on the cleared colour.
+        ComPtr<ID3D12GraphicsCommandList> list = begin(first);
+        scene.draw(list.Get(), scene.color.Get(), red);
+        list->ClearRenderTargetView(second, green, 0, nullptr);
+        scene.draw(list.Get(), scene.color.Get(), blue);
+        list->OMSetRenderTargets(1, &second, FALSE, nullptr);
+        const D3D12_RECT half = {0, 0, LONG(kSize), LONG(kSize / 2)};
+        list->RSSetScissorRects(1, &half);
+        scene.draw(list.Get(), scene.color.Get(), red);
+        CHECK_EQ(scene.run(list.Get()), 2);
+        Image image = scene.gpu.read_texture(scene.target.Get(), 0, 4);
+        expect_pixel("target after a clear of another target", image.pixel(kSize / 2, kSize / 2), {0, 0, 255, 255});
+        image = scene.gpu.read_texture(other.Get(), 0, 4);
+        expect_pixel("cleared target, drawn on", image.pixel(kSize / 2, 2), {255, 0, 0, 255});
+        expect_pixel("cleared target, not drawn on", image.pixel(kSize / 2, kSize - 3), {0, 255, 0, 255});
+
+        // (b) clear `other` while the pass is open and read it at once: the barrier that hands it to the copy runs the
+        // clear first.
+        list = begin(first);
+        scene.draw(list.Get(), scene.color.Get(), red);
+        list->ClearRenderTargetView(second, clear, 0, nullptr);
+        ComPtr<ID3D12Resource> readback = scene.gpu.buffer(D3D12_HEAP_TYPE_READBACK, 4096);
+        D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint = {};
+        UINT64 total = 0;
+        const D3D12_RESOURCE_DESC desc = other->GetDesc();
+        scene.gpu.device->GetCopyableFootprints(&desc, 0, 1, 0, &footprint, nullptr, nullptr, &total);
+        readback = scene.gpu.buffer(D3D12_HEAP_TYPE_READBACK, total);
+        const D3D12_RESOURCE_BARRIER to_copy = transition(other.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        list->ResourceBarrier(1, &to_copy);
+        const D3D12_TEXTURE_COPY_LOCATION dst = footprint_location(readback.Get(), footprint), src = subresource_location(other.Get(), 0);
+        list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+        scene.run(list.Get());
+        uint8_t *mapped = nullptr;
+        CHECK_HR(readback->Map(0, nullptr, reinterpret_cast<void **>(&mapped)));
+        const uint8_t *texel = mapped + footprint.Footprint.RowPitch * (kSize / 2) + 4 * (kSize / 2);
+        CHECK(texel[0] == 0 && texel[1] == 0 && texel[2] == 0 && texel[3] == 255);  // the clear colour, not what `other` held before
+        readback->Unmap(0, nullptr);
+    }
     std::printf("test_pass_merge: PASS\n");
     return 0;
 }

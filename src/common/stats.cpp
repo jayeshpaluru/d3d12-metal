@@ -59,6 +59,8 @@ void stats_frame()
         front[i] = g_stat_values[i].load();
     mtlb_stats back;
     mtlb_stats_get(&back);
+    mtlb_cache_stats cache;
+    mtlb_cache_get_stats(&cache);
     const uint64_t calls = mtlb_client_call_count();
     auto per_frame = [](uint64_t now, uint64_t before) { return double(now - before) / kFramesPerReport; };
     auto f = [&](Stat s) { return per_frame(front[static_cast<unsigned>(s)], last_front[static_cast<unsigned>(s)]); };
@@ -71,7 +73,7 @@ void stats_frame()
                  "compute encoders %.1f, blit encoders %.1f, barriers %.1f, fence syncs %.1f, descriptor writes %.0f, "
                  "PSO creations %.2f, stream KB %.1f, unix calls %.1f; PSO creation total %llu in %.1f ms; "
                  "ms per frame in submit %.2f, present %.2f, signal %.2f; passes continuing the previous one's targets %.1f (%.1f after a barrier); "
-                 "worst frame %.1f ms, %u frames over %.0f ms",
+                 "worst frame %.1f ms, %u frames over %.0f ms; shader cache %llu hits, %llu misses, %llu written",
                  kFramesPerReport, seconds > 0 ? kFramesPerReport / seconds : 0.0,
                  per_frame(back.gpu_nanos, last_back.gpu_nanos) / 1e6,
                  per_frame(back.gpu_busy_nanos, last_back.gpu_busy_nanos) / 1e6, f(Stat::Submits), f(Stat::CommandLists), per_frame(back.command_buffers, last_back.command_buffers),
@@ -83,7 +85,9 @@ void stats_frame()
                  front[static_cast<unsigned>(Stat::PsoNanos)] / 1e6, f(Stat::SubmitNanos) / 1e6, f(Stat::PresentNanos) / 1e6,
                  f(Stat::SignalNanos) / 1e6,
                  per_frame(back.pass_resumes, last_back.pass_resumes),
-                 per_frame(back.pass_resumes_after_barrier, last_back.pass_resumes_after_barrier), worst_frame_ms, hitches, kHitchMs);
+                 per_frame(back.pass_resumes_after_barrier, last_back.pass_resumes_after_barrier), worst_frame_ms, hitches, kHitchMs,
+                 static_cast<unsigned long long>(cache.hits), static_cast<unsigned long long>(cache.misses),
+                 static_cast<unsigned long long>(cache.writes));
     worst_frame_ms = 0;
     hitches = 0;
     for (unsigned i = 0; i < static_cast<unsigned>(Stat::Count); ++i)

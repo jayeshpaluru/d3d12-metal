@@ -126,8 +126,9 @@ int main()
     }
 
     {
-        // Clearing a view that is not bound ends the open pass and runs at once:
-        // draw, clear the other texture, draw again takes three passes.
+        // Clearing a view that is not bound leaves the open pass alone and waits for a pass that binds the view or for a
+        // reader: draw, clear the other texture, draw again are one pass, and the clear runs as a pass of its own when the
+        // copy at the end needs the list's work done (two passes in all).
         Scene scene;
         const CD3DX12_HEAP_PROPERTIES heap(D3D12_HEAP_TYPE_DEFAULT);
         const CD3DX12_RESOURCE_DESC desc = CD3DX12_RESOURCE_DESC::Tex2D(
@@ -153,7 +154,7 @@ int main()
 
         ComPtr<ID3D12Resource> readback;
         UINT row_pitch = 0;
-        CHECK(scene.run(&readback, &row_pitch) == 3);
+        CHECK(scene.run(&readback, &row_pitch) == 2);
         check_pixel("before the clear", read_pixel(readback.Get(), row_pitch, 16, 32), {255, 0, 0, 255});
         check_pixel("after the clear", read_pixel(readback.Get(), row_pitch, 48, 32), {0, 255, 0, 255});
     }
