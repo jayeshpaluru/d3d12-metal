@@ -8,7 +8,7 @@
    │  object create/destroy + one submit per ExecuteCommandLists (one span per list)
    ▼
  mtlb bridge C API (src/bridge/mtlb.h)  ── POD structs + opaque handles only
-   │  native build: direct call    │  Wine build: __wine_unix_call thunk
+   │  native build: direct call    │  Wine build: unix call (generated from mtlb.h)
    ▼                               ▼
  Metal backend (src/bridge/metal/*.mm) ── Objective-C++, Metal, QuartzCore,
                                           libmetalirconverter
@@ -69,14 +69,99 @@
 - **Residency:** every allocation is added to a per-device `MTLResidencySet`
   attached to the queue, so no per-draw `useResource` calls.
 
+## Wine build
+
+Under Wine the layer is two halves in one process (one address space):
+
+```
+ game.exe ── d3d12.dll / dxgi.dll   x86-64 PE, MinGW: front-end + mtlb client
+                │  __wine_unix_call_dispatcher(handle, index, params)
+                ▼
+            d3d12metal.so           x86-64 macOS (Rosetta): __wine_unix_call_funcs[]
+                                    + the Metal backend
+```
+
+- **Transport.** `tools/gen_mtlb_wine.py` reads the `MTLB_EXPORT` prototypes of
+  `mtlb.h` and generates, at build time, the function indices, one parameter
+  struct per function (arguments, then the result), the PE definitions of every
+  `mtlb_*` function (pack, dispatch, unpack) and the unix call table. There is
+  no hand-written thunk list: a function added to `mtlb.h` crosses the boundary
+  on the next build. Pointers (mapped buffer memory, command stream spans, DXIL
+  blobs) pass unchanged, handles are plain 64-bit values, and a `const char *`
+  result (`mtlb_last_error`) is copied into the parameter struct. Every unix
+  entry runs in an `@autoreleasepool`. Blocking calls (notification wait, CPU
+  fence wait) block inside the unix call; the waiter thread is an ordinary
+  Windows thread.
+- **Loading.** On the first `mtlb_*` call (not in `DllMain`) the PE client loads
+  `d3d12metal.so` with `NtQueryVirtualMemory(MemoryWineLoadUnixLibByName = 1002)`:
+  first `x86_64-unix/d3d12metal.so` next to `d3d12.dll` (explicit path), then the
+  name `d3d12metal` searched along `WINEDLLPATH`. The result's second word is the
+  table handle passed to `__wine_unix_call_dispatcher` (an exported data pointer
+  of ntdll). Not running under Wine, or no `.so`, is reported once on stderr and
+  the calls fail with `MTLB_ERROR_DEVICE`.
+- **PE DLLs.** Everything is in `d3d12.dll` (the swap chain needs the D3D12
+  classes); `dxgi.dll` has no code, its `CreateDXGIFactory*` exports forward to
+  `d3d12.dll`. Both link libstdc++, libgcc and winpthread statically (the .def
+  files in `src/pe/` list the exports). Wine's own `d3d12.dll`/`dxgi.dll` are
+  replaced by native overrides (`WINEDLLOVERRIDES="d3d12,d3d12core,dxgi=n"`)
+  with our DLLs next to the program or in `system32`.
+- **Headers.** The PE build uses MinGW's `d3d12.h` and `dxgi1_6.h`: they declare
+  the aggregate-returning methods (`GetDesc`, `GetCPUDescriptorHandleForHeapStart`,
+  `GetResourceAllocationInfo`, `GetAdapterLuid`, ...) in the explicit form
+  `T *Name(T *ret, ...)`, the convention Windows callers (and vkd3d) use, which
+  GCC does not produce for a by-value return. `D3D12M_AGGREGATE_RETURN`
+  (`d3d12/object.h`) picks the form per build. The native build keeps
+  DirectX-Headers and the hand-written `dxgi_interfaces.h`.
+- **Windows.** Wine's macOS driver keeps a `WineWindow` per top-level window;
+  its content view creates a `WineMetalView` backed by a `CAMetalLayer`
+  (`-newMetalViewWithDevice:`). This build of `winemac.so` exports no `macdrv_*`
+  functions, so `wine_window.mm` finds the window through the Objective-C runtime
+  (`NSApp.windows`, `-hwnd`) on the main thread. The PE side passes
+  `GetAncestor(hwnd, GA_ROOT)`; the layer provider is installed by a constructor
+  of the unix module (`src/bridge/metal/layer_provider.h`). The native build has
+  no provider (tests install one returning a detached layer).
+- **Threads.** Metal calls back on its own threads, which have no Windows
+  thread state: listener blocks only touch the bridge's notification queue.
+- **Tracing.** `D3D12METAL_LOG=1` prints every call with its arguments and result
+  on both sides (`[pe]`, `[unix]`).
+
+## Swap chains
+
+`IDXGISwapChain4` (`src/dxgi/swapchain.cpp`) owns ordinary D3D12 textures as back
+buffers (render-target usage, also readable as a texture) and, through the
+bridge, a `CAMetalLayer` configured for the window (`mtlb_swapchain_create`).
+`Present` calls `mtlb_queue_present`: after the queue's earlier work the backend
+encodes a fullscreen-triangle pass that samples the back buffer into the layer's
+next drawable, then `presentDrawable` and commit, in the queue's command buffer.
+One pass covers every format difference (RGBA/BGRA order, sRGB encoding) and
+scaling; layer formats are BGRA8, BGRA8 sRGB, RGB10A2 and RGBA16F, chosen from the
+back buffer format. `SyncInterval` 0 turns `displaySyncEnabled` off; any other
+value presents on the next vsync (`nextDrawable` blocks when all drawables are in
+flight, which paces the application). Flip models cycle the back buffer index at
+each present; blit models stay on buffer 0. The frame latency waitable object is
+a real event, signalled by the device's fence waiter when a presented frame has
+finished (it starts signalled). `ResizeBuffers` recreates the back buffers and
+changes the layer's drawable size and format. Windowed mode only:
+`SetFullscreenState` is accepted and ignored. Outputs: one `IDXGIOutput6`, its
+display modes from `EnumDisplaySettings` under Wine.
+
+`D3D12METAL_DUMP_PRESENT=<file.png>` (with `D3D12METAL_DUMP_PRESENT_FRAME=N`,
+default 30) renders the Nth present a second time into a readable texture and
+writes it as a PNG: the verification path where no screenshot can be taken.
+
 ## Layout
 
 | Path | Contents |
 |---|---|
 | `src/bridge/mtlb.h` | Bridge C API, handles, POD descriptors |
 | `src/bridge/mtlb_cmd.h` | Command stream encoding |
-| `src/bridge/metal/` | Metal backend (Objective-C++) |
+| `src/bridge/metal/` | Metal backend (Objective-C++), including swap chains |
+| `src/bridge/wine/` | Wine transport: PE client, unix table (generated from `mtlb.h`), window lookup |
+| `src/pe/` | `d3d12.dll` / `dxgi.dll` build (module definitions, forwarder) |
+| `cross/` | Meson cross files: MinGW (PE) and x86-64 macOS (unix module) |
+| `tools/` | `build-wine.sh`, `run-wine-tests.sh`, the transport generator, PNG and window helpers |
 | `src/d3d12/` | `ID3D12*` COM implementations |
 | `src/dxgi/` | `IDXGI*` COM implementations |
 | `tests/` | Native headless tests (render offscreen, read back, compare) |
+| `tests/wine/` | Win32 test programs run under Wine (MinGW): `wine_basic`, `swapchain_test`, `hello_triangle` |
 | `tests/shaders/` | HLSL, compiled to DXIL with DXC at build time |
