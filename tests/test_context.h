@@ -3,6 +3,7 @@
 #pragma once
 
 #include <cstdint>
+#include <vector>
 
 #include "dxgi/dxgi_interfaces.h"
 #include "test_util.h"
@@ -12,6 +13,7 @@ struct TestContext {
     Com<ID3D12CommandQueue> queue;
     Com<ID3D12Fence> fence;
     UINT64 fence_value = 0;
+    std::vector<Com<ID3D12CommandAllocator>> allocators;  // one per list made by create_list
 
     TestContext()
     {
@@ -51,6 +53,18 @@ struct TestContext {
         CHECK_HR(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_COMMON,
                                                  nullptr, IID_PPV_ARGS(buffer.put())));
         return buffer;
+    }
+
+    // A direct command list in the recording state, with an allocator of its own
+    // (the last of `allocators`).
+    Com<ID3D12GraphicsCommandList> create_list(ID3D12PipelineState *initial_state = nullptr)
+    {
+        allocators.emplace_back();
+        CHECK_HR(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(allocators.back().put())));
+        Com<ID3D12GraphicsCommandList> list;
+        CHECK_HR(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocators.back().get(), initial_state,
+                                           IID_PPV_ARGS(list.put())));
+        return list;
     }
 
     // Executes one closed command list and waits for it.

@@ -22,11 +22,7 @@ int main()
     Com<ID3D12Resource> vertex_buffer = ctx.create_upload_buffer(vertices, sizeof(vertices));
     D3D12_VERTEX_BUFFER_VIEW vbv = {vertex_buffer->GetGPUVirtualAddress(), sizeof(vertices), 3 * sizeof(float)};
 
-    Com<ID3D12CommandAllocator> allocator;
-    CHECK_HR(ctx.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(allocator.put())));
-    Com<ID3D12GraphicsCommandList> list;
-    CHECK_HR(ctx.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator.get(), pso.get(),
-                                           IID_PPV_ARGS(list.put())));
+    Com<ID3D12GraphicsCommandList> list = ctx.create_list(pso.get());
 
     const float clear_color[4] = {0.0f, 0.0f, 1.0f, 1.0f};
     const float triangle_color[4] = {1.0f, 0.0f, 0.0f, 1.0f};

@@ -12,7 +12,6 @@ struct Scene {
     Com<ID3D12PipelineState> pso;
     Com<ID3D12Resource> vertex_buffer;
     D3D12_VERTEX_BUFFER_VIEW vbv{};
-    Com<ID3D12CommandAllocator> allocator;
     Com<ID3D12GraphicsCommandList> list;
 
     Scene()
@@ -36,9 +35,7 @@ struct Scene {
         vertex_buffer = ctx.create_upload_buffer(vertices, sizeof(vertices));
         vbv = {vertex_buffer->GetGPUVirtualAddress(), sizeof(vertices), 3 * sizeof(float)};
 
-        CHECK_HR(ctx.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(allocator.put())));
-        CHECK_HR(ctx.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator.get(), pso.get(),
-                                               IID_PPV_ARGS(list.put())));
+        list = ctx.create_list(pso.get());
         list->SetGraphicsRootSignature(signature.get());
         ctx.set_viewport_and_scissor(list.get());
         list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);

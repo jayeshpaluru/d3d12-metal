@@ -1,122 +1,209 @@
-// mtlb_format (DXGI_FORMAT numbering) to Metal pixel and vertex formats.
+// The format table: for each mtlb_format (DXGI_FORMAT numbering) its block
+// geometry, capability flags and Metal pixel and vertex formats. Everything
+// else (mtlb_format_get_info, to_pixel_format, to_vertex_format) reads this one
+// table, so the vertex capability flag cannot disagree with the vertex mapping.
 #include "internal.h"
+
+#include <iterator>
+
+namespace {
+
+constexpr uint32_t C = MTLB_FORMAT_FLAG_COLOR;
+constexpr uint32_t T = MTLB_FORMAT_FLAG_TEXTURE;
+constexpr uint32_t R = MTLB_FORMAT_FLAG_RENDER_TARGET;
+constexpr uint32_t B = MTLB_FORMAT_FLAG_BLENDABLE;
+constexpr uint32_t S = MTLB_FORMAT_FLAG_SRGB;
+constexpr uint32_t W = MTLB_FORMAT_FLAG_SHADER_WRITE;
+constexpr uint32_t BC = MTLB_FORMAT_FLAG_COMPRESSED | MTLB_FORMAT_FLAG_COLOR | MTLB_FORMAT_FLAG_TEXTURE;
+constexpr uint32_t Y = MTLB_FORMAT_FLAG_TYPELESS;
+constexpr uint32_t D = MTLB_FORMAT_FLAG_DEPTH;
+constexpr uint32_t DS = MTLB_FORMAT_FLAG_DEPTH | MTLB_FORMAT_FLAG_STENCIL;
+
+struct Entry {
+    mtlb_format format;
+    uint32_t block_width, block_height, bytes_per_block;
+    uint32_t flags;  // MTLB_FORMAT_FLAG_*, except VERTEX, which follows from `vertex`
+    MTLPixelFormat pixel;
+    MTLVertexFormat vertex;
+};
+
+constexpr Entry kFormats[] = {
+    {MTLB_FORMAT_R32G32B32A32_FLOAT, 1, 1, 16, C | T | R | W,
+     MTLPixelFormatRGBA32Float, MTLVertexFormatFloat4},
+    {MTLB_FORMAT_R32G32B32A32_UINT, 1, 1, 16, C | T | R | W,
+     MTLPixelFormatRGBA32Uint, MTLVertexFormatUInt4},
+    {MTLB_FORMAT_R32G32B32A32_SINT, 1, 1, 16, C | T | R | W,
+     MTLPixelFormatRGBA32Sint, MTLVertexFormatInt4},
+    {MTLB_FORMAT_R32G32B32_FLOAT, 1, 1, 12, C,
+     MTLPixelFormatInvalid, MTLVertexFormatFloat3},
+    {MTLB_FORMAT_R32G32B32_UINT, 1, 1, 12, C,
+     MTLPixelFormatInvalid, MTLVertexFormatUInt3},
+    {MTLB_FORMAT_R32G32B32_SINT, 1, 1, 12, C,
+     MTLPixelFormatInvalid, MTLVertexFormatInt3},
+    {MTLB_FORMAT_R16G16B16A16_FLOAT, 1, 1, 8, C | T | R | B | W,
+     MTLPixelFormatRGBA16Float, MTLVertexFormatHalf4},
+    {MTLB_FORMAT_R16G16B16A16_UNORM, 1, 1, 8, C | T | R | B | W,
+     MTLPixelFormatRGBA16Unorm, MTLVertexFormatUShort4Normalized},
+    {MTLB_FORMAT_R16G16B16A16_UINT, 1, 1, 8, C | T | R | W,
+     MTLPixelFormatRGBA16Uint, MTLVertexFormatUShort4},
+    {MTLB_FORMAT_R16G16B16A16_SNORM, 1, 1, 8, C | T | R | B | W,
+     MTLPixelFormatRGBA16Snorm, MTLVertexFormatShort4Normalized},
+    {MTLB_FORMAT_R16G16B16A16_SINT, 1, 1, 8, C | T | R | W,
+     MTLPixelFormatRGBA16Sint, MTLVertexFormatShort4},
+    {MTLB_FORMAT_R32G32_FLOAT, 1, 1, 8, C | T | R | W,
+     MTLPixelFormatRG32Float, MTLVertexFormatFloat2},
+    {MTLB_FORMAT_R32G32_UINT, 1, 1, 8, C | T | R | W,
+     MTLPixelFormatRG32Uint, MTLVertexFormatUInt2},
+    {MTLB_FORMAT_R32G32_SINT, 1, 1, 8, C | T | R | W,
+     MTLPixelFormatRG32Sint, MTLVertexFormatInt2},
+    {MTLB_FORMAT_R10G10B10A2_UNORM, 1, 1, 4, C | T | R | B | W,
+     MTLPixelFormatRGB10A2Unorm, MTLVertexFormatUInt1010102Normalized},
+    {MTLB_FORMAT_R10G10B10A2_UINT, 1, 1, 4, C | T | R | W,
+     MTLPixelFormatRGB10A2Uint, MTLVertexFormatInvalid},
+    {MTLB_FORMAT_R11G11B10_FLOAT, 1, 1, 4, C | T | R | B | W,
+     MTLPixelFormatRG11B10Float, MTLVertexFormatInvalid},
+    {MTLB_FORMAT_R8G8B8A8_TYPELESS, 1, 1, 4, C | T | R | B | W | Y,
+     MTLPixelFormatRGBA8Unorm, MTLVertexFormatInvalid},
+    {MTLB_FORMAT_R8G8B8A8_UNORM, 1, 1, 4, C | T | R | B | W,
+     MTLPixelFormatRGBA8Unorm, MTLVertexFormatUChar4Normalized},
+    {MTLB_FORMAT_R8G8B8A8_UNORM_SRGB, 1, 1, 4, C | T | R | B | S,
+     MTLPixelFormatRGBA8Unorm_sRGB, MTLVertexFormatInvalid},
+    {MTLB_FORMAT_R8G8B8A8_UINT, 1, 1, 4, C | T | R | W,
+     MTLPixelFormatRGBA8Uint, MTLVertexFormatUChar4},
+    {MTLB_FORMAT_R8G8B8A8_SNORM, 1, 1, 4, C | T | R | B | W,
+     MTLPixelFormatRGBA8Snorm, MTLVertexFormatChar4Normalized},
+    {MTLB_FORMAT_R8G8B8A8_SINT, 1, 1, 4, C | T | R | W,
+     MTLPixelFormatRGBA8Sint, MTLVertexFormatChar4},
+    {MTLB_FORMAT_R16G16_FLOAT, 1, 1, 4, C | T | R | B | W,
+     MTLPixelFormatRG16Float, MTLVertexFormatHalf2},
+    {MTLB_FORMAT_R16G16_UNORM, 1, 1, 4, C | T | R | B | W,
+     MTLPixelFormatRG16Unorm, MTLVertexFormatUShort2Normalized},
+    {MTLB_FORMAT_R16G16_UINT, 1, 1, 4, C | T | R | W,
+     MTLPixelFormatRG16Uint, MTLVertexFormatUShort2},
+    {MTLB_FORMAT_R16G16_SNORM, 1, 1, 4, C | T | R | B | W,
+     MTLPixelFormatRG16Snorm, MTLVertexFormatShort2Normalized},
+    {MTLB_FORMAT_R16G16_SINT, 1, 1, 4, C | T | R | W,
+     MTLPixelFormatRG16Sint, MTLVertexFormatShort2},
+    {MTLB_FORMAT_D32_FLOAT, 1, 1, 4, D | T | R,
+     MTLPixelFormatDepth32Float, MTLVertexFormatInvalid},
+    {MTLB_FORMAT_R32_FLOAT, 1, 1, 4, C | T | R | W,
+     MTLPixelFormatR32Float, MTLVertexFormatFloat},
+    {MTLB_FORMAT_R32_UINT, 1, 1, 4, C | T | R | W,
+     MTLPixelFormatR32Uint, MTLVertexFormatUInt},
+    {MTLB_FORMAT_R32_SINT, 1, 1, 4, C | T | R | W,
+     MTLPixelFormatR32Sint, MTLVertexFormatInt},
+    {MTLB_FORMAT_D24_UNORM_S8_UINT, 1, 1, 4, DS | T | R,
+     MTLPixelFormatDepth32Float_Stencil8, MTLVertexFormatInvalid},
+    {MTLB_FORMAT_R8G8_UNORM, 1, 1, 2, C | T | R | B | W,
+     MTLPixelFormatRG8Unorm, MTLVertexFormatUChar2Normalized},
+    {MTLB_FORMAT_R8G8_UINT, 1, 1, 2, C | T | R | W,
+     MTLPixelFormatRG8Uint, MTLVertexFormatUChar2},
+    {MTLB_FORMAT_R8G8_SNORM, 1, 1, 2, C | T | R | B | W,
+     MTLPixelFormatRG8Snorm, MTLVertexFormatChar2Normalized},
+    {MTLB_FORMAT_R8G8_SINT, 1, 1, 2, C | T | R | W,
+     MTLPixelFormatRG8Sint, MTLVertexFormatChar2},
+    {MTLB_FORMAT_R16_FLOAT, 1, 1, 2, C | T | R | B | W,
+     MTLPixelFormatR16Float, MTLVertexFormatHalf},
+    {MTLB_FORMAT_D16_UNORM, 1, 1, 2, D | T | R,
+     MTLPixelFormatDepth16Unorm, MTLVertexFormatInvalid},
+    {MTLB_FORMAT_R16_UNORM, 1, 1, 2, C | T | R | B | W,
+     MTLPixelFormatR16Unorm, MTLVertexFormatUShortNormalized},
+    {MTLB_FORMAT_R16_UINT, 1, 1, 2, C | T | R | W,
+     MTLPixelFormatR16Uint, MTLVertexFormatUShort},
+    {MTLB_FORMAT_R16_SNORM, 1, 1, 2, C | T | R | B | W,
+     MTLPixelFormatR16Snorm, MTLVertexFormatShortNormalized},
+    {MTLB_FORMAT_R16_SINT, 1, 1, 2, C | T | R | W,
+     MTLPixelFormatR16Sint, MTLVertexFormatShort},
+    {MTLB_FORMAT_R8_UNORM, 1, 1, 1, C | T | R | B | W,
+     MTLPixelFormatR8Unorm, MTLVertexFormatUCharNormalized},
+    {MTLB_FORMAT_R8_UINT, 1, 1, 1, C | T | R | W,
+     MTLPixelFormatR8Uint, MTLVertexFormatUChar},
+    {MTLB_FORMAT_R8_SNORM, 1, 1, 1, C | T | R | B | W,
+     MTLPixelFormatR8Snorm, MTLVertexFormatCharNormalized},
+    {MTLB_FORMAT_R8_SINT, 1, 1, 1, C | T | R | W,
+     MTLPixelFormatR8Sint, MTLVertexFormatChar},
+    {MTLB_FORMAT_BC1_UNORM, 4, 4, 8, BC,
+     MTLPixelFormatBC1_RGBA, MTLVertexFormatInvalid},
+    {MTLB_FORMAT_BC1_UNORM_SRGB, 4, 4, 8, BC | S,
+     MTLPixelFormatBC1_RGBA_sRGB, MTLVertexFormatInvalid},
+    {MTLB_FORMAT_BC2_UNORM, 4, 4, 16, BC,
+     MTLPixelFormatBC2_RGBA, MTLVertexFormatInvalid},
+    {MTLB_FORMAT_BC2_UNORM_SRGB, 4, 4, 16, BC | S,
+     MTLPixelFormatBC2_RGBA_sRGB, MTLVertexFormatInvalid},
+    {MTLB_FORMAT_BC3_UNORM, 4, 4, 16, BC,
+     MTLPixelFormatBC3_RGBA, MTLVertexFormatInvalid},
+    {MTLB_FORMAT_BC3_UNORM_SRGB, 4, 4, 16, BC | S,
+     MTLPixelFormatBC3_RGBA_sRGB, MTLVertexFormatInvalid},
+    {MTLB_FORMAT_BC4_UNORM, 4, 4, 8, BC,
+     MTLPixelFormatBC4_RUnorm, MTLVertexFormatInvalid},
+    {MTLB_FORMAT_BC4_SNORM, 4, 4, 8, BC,
+     MTLPixelFormatBC4_RSnorm, MTLVertexFormatInvalid},
+    {MTLB_FORMAT_BC5_UNORM, 4, 4, 16, BC,
+     MTLPixelFormatBC5_RGUnorm, MTLVertexFormatInvalid},
+    {MTLB_FORMAT_BC5_SNORM, 4, 4, 16, BC,
+     MTLPixelFormatBC5_RGSnorm, MTLVertexFormatInvalid},
+    {MTLB_FORMAT_B8G8R8A8_UNORM, 1, 1, 4, C | T | R | B | W,
+     MTLPixelFormatBGRA8Unorm, MTLVertexFormatUChar4Normalized_BGRA},
+    {MTLB_FORMAT_B8G8R8A8_TYPELESS, 1, 1, 4, C | T | R | B | W | Y,
+     MTLPixelFormatBGRA8Unorm, MTLVertexFormatInvalid},
+    {MTLB_FORMAT_B8G8R8A8_UNORM_SRGB, 1, 1, 4, C | T | R | B | S,
+     MTLPixelFormatBGRA8Unorm_sRGB, MTLVertexFormatInvalid},
+    {MTLB_FORMAT_BC6H_UF16, 4, 4, 16, BC,
+     MTLPixelFormatBC6H_RGBUfloat, MTLVertexFormatInvalid},
+    {MTLB_FORMAT_BC6H_SF16, 4, 4, 16, BC,
+     MTLPixelFormatBC6H_RGBFloat, MTLVertexFormatInvalid},
+    {MTLB_FORMAT_BC7_UNORM, 4, 4, 16, BC,
+     MTLPixelFormatBC7_RGBAUnorm, MTLVertexFormatInvalid},
+    {MTLB_FORMAT_BC7_UNORM_SRGB, 4, 4, 16, BC | S,
+     MTLPixelFormatBC7_RGBAUnorm_sRGB, MTLVertexFormatInvalid},
+};
+
+constexpr size_t kMaxFormat = 128;
+
+// DXGI value -> index into kFormats, or -1.
+constexpr std::array<int8_t, kMaxFormat> make_index()
+{
+    std::array<int8_t, kMaxFormat> index{};
+    for (auto &i : index)
+        i = -1;
+    for (size_t i = 0; i < std::size(kFormats); ++i)
+        index[kFormats[i].format] = static_cast<int8_t>(i);
+    return index;
+}
+
+constexpr std::array<int8_t, kMaxFormat> kIndex = make_index();
+
+const Entry *find_format(uint32_t format)
+{
+    return format < kMaxFormat && kIndex[format] >= 0 ? &kFormats[kIndex[format]] : nullptr;
+}
+
+} // namespace
 
 namespace mtlb {
 
 MTLPixelFormat to_pixel_format(uint32_t format)
 {
-    switch (static_cast<mtlb_format>(format)) {
-    case MTLB_FORMAT_R32G32B32A32_FLOAT: return MTLPixelFormatRGBA32Float;
-    case MTLB_FORMAT_R32G32B32A32_UINT: return MTLPixelFormatRGBA32Uint;
-    case MTLB_FORMAT_R32G32B32A32_SINT: return MTLPixelFormatRGBA32Sint;
-    case MTLB_FORMAT_R16G16B16A16_FLOAT: return MTLPixelFormatRGBA16Float;
-    case MTLB_FORMAT_R16G16B16A16_UNORM: return MTLPixelFormatRGBA16Unorm;
-    case MTLB_FORMAT_R16G16B16A16_UINT: return MTLPixelFormatRGBA16Uint;
-    case MTLB_FORMAT_R16G16B16A16_SNORM: return MTLPixelFormatRGBA16Snorm;
-    case MTLB_FORMAT_R16G16B16A16_SINT: return MTLPixelFormatRGBA16Sint;
-    case MTLB_FORMAT_R32G32_FLOAT: return MTLPixelFormatRG32Float;
-    case MTLB_FORMAT_R32G32_UINT: return MTLPixelFormatRG32Uint;
-    case MTLB_FORMAT_R32G32_SINT: return MTLPixelFormatRG32Sint;
-    case MTLB_FORMAT_R10G10B10A2_UNORM: return MTLPixelFormatRGB10A2Unorm;
-    case MTLB_FORMAT_R10G10B10A2_UINT: return MTLPixelFormatRGB10A2Uint;
-    case MTLB_FORMAT_R11G11B10_FLOAT: return MTLPixelFormatRG11B10Float;
-    case MTLB_FORMAT_R8G8B8A8_TYPELESS:
-    case MTLB_FORMAT_R8G8B8A8_UNORM: return MTLPixelFormatRGBA8Unorm;
-    case MTLB_FORMAT_R8G8B8A8_UNORM_SRGB: return MTLPixelFormatRGBA8Unorm_sRGB;
-    case MTLB_FORMAT_R8G8B8A8_UINT: return MTLPixelFormatRGBA8Uint;
-    case MTLB_FORMAT_R8G8B8A8_SNORM: return MTLPixelFormatRGBA8Snorm;
-    case MTLB_FORMAT_R8G8B8A8_SINT: return MTLPixelFormatRGBA8Sint;
-    case MTLB_FORMAT_R16G16_FLOAT: return MTLPixelFormatRG16Float;
-    case MTLB_FORMAT_R16G16_UNORM: return MTLPixelFormatRG16Unorm;
-    case MTLB_FORMAT_R16G16_UINT: return MTLPixelFormatRG16Uint;
-    case MTLB_FORMAT_R16G16_SNORM: return MTLPixelFormatRG16Snorm;
-    case MTLB_FORMAT_R16G16_SINT: return MTLPixelFormatRG16Sint;
-    case MTLB_FORMAT_D32_FLOAT: return MTLPixelFormatDepth32Float;
-    case MTLB_FORMAT_R32_FLOAT: return MTLPixelFormatR32Float;
-    case MTLB_FORMAT_R32_UINT: return MTLPixelFormatR32Uint;
-    case MTLB_FORMAT_R32_SINT: return MTLPixelFormatR32Sint;
-    case MTLB_FORMAT_D24_UNORM_S8_UINT: return MTLPixelFormatDepth32Float_Stencil8;
-    case MTLB_FORMAT_R8G8_UNORM: return MTLPixelFormatRG8Unorm;
-    case MTLB_FORMAT_R8G8_UINT: return MTLPixelFormatRG8Uint;
-    case MTLB_FORMAT_R8G8_SNORM: return MTLPixelFormatRG8Snorm;
-    case MTLB_FORMAT_R8G8_SINT: return MTLPixelFormatRG8Sint;
-    case MTLB_FORMAT_R16_FLOAT: return MTLPixelFormatR16Float;
-    case MTLB_FORMAT_D16_UNORM: return MTLPixelFormatDepth16Unorm;
-    case MTLB_FORMAT_R16_UNORM: return MTLPixelFormatR16Unorm;
-    case MTLB_FORMAT_R16_UINT: return MTLPixelFormatR16Uint;
-    case MTLB_FORMAT_R16_SNORM: return MTLPixelFormatR16Snorm;
-    case MTLB_FORMAT_R16_SINT: return MTLPixelFormatR16Sint;
-    case MTLB_FORMAT_R8_UNORM: return MTLPixelFormatR8Unorm;
-    case MTLB_FORMAT_R8_UINT: return MTLPixelFormatR8Uint;
-    case MTLB_FORMAT_R8_SNORM: return MTLPixelFormatR8Snorm;
-    case MTLB_FORMAT_R8_SINT: return MTLPixelFormatR8Sint;
-    case MTLB_FORMAT_BC1_UNORM: return MTLPixelFormatBC1_RGBA;
-    case MTLB_FORMAT_BC1_UNORM_SRGB: return MTLPixelFormatBC1_RGBA_sRGB;
-    case MTLB_FORMAT_BC2_UNORM: return MTLPixelFormatBC2_RGBA;
-    case MTLB_FORMAT_BC2_UNORM_SRGB: return MTLPixelFormatBC2_RGBA_sRGB;
-    case MTLB_FORMAT_BC3_UNORM: return MTLPixelFormatBC3_RGBA;
-    case MTLB_FORMAT_BC3_UNORM_SRGB: return MTLPixelFormatBC3_RGBA_sRGB;
-    case MTLB_FORMAT_BC4_UNORM: return MTLPixelFormatBC4_RUnorm;
-    case MTLB_FORMAT_BC4_SNORM: return MTLPixelFormatBC4_RSnorm;
-    case MTLB_FORMAT_BC5_UNORM: return MTLPixelFormatBC5_RGUnorm;
-    case MTLB_FORMAT_BC5_SNORM: return MTLPixelFormatBC5_RGSnorm;
-    case MTLB_FORMAT_B8G8R8A8_TYPELESS:
-    case MTLB_FORMAT_B8G8R8A8_UNORM: return MTLPixelFormatBGRA8Unorm;
-    case MTLB_FORMAT_B8G8R8A8_UNORM_SRGB: return MTLPixelFormatBGRA8Unorm_sRGB;
-    case MTLB_FORMAT_BC6H_UF16: return MTLPixelFormatBC6H_RGBUfloat;
-    case MTLB_FORMAT_BC6H_SF16: return MTLPixelFormatBC6H_RGBFloat;
-    case MTLB_FORMAT_BC7_UNORM: return MTLPixelFormatBC7_RGBAUnorm;
-    case MTLB_FORMAT_BC7_UNORM_SRGB: return MTLPixelFormatBC7_RGBAUnorm_sRGB;
-    default: return MTLPixelFormatInvalid;
-    }
+    const Entry *e = find_format(format);
+    return e ? e->pixel : MTLPixelFormatInvalid;
 }
 
 MTLVertexFormat to_vertex_format(uint32_t format)
 {
-    switch (static_cast<mtlb_format>(format)) {
-    case MTLB_FORMAT_R32G32B32A32_FLOAT: return MTLVertexFormatFloat4;
-    case MTLB_FORMAT_R32G32B32A32_UINT: return MTLVertexFormatUInt4;
-    case MTLB_FORMAT_R32G32B32A32_SINT: return MTLVertexFormatInt4;
-    case MTLB_FORMAT_R32G32B32_FLOAT: return MTLVertexFormatFloat3;
-    case MTLB_FORMAT_R32G32B32_UINT: return MTLVertexFormatUInt3;
-    case MTLB_FORMAT_R32G32B32_SINT: return MTLVertexFormatInt3;
-    case MTLB_FORMAT_R32G32_FLOAT: return MTLVertexFormatFloat2;
-    case MTLB_FORMAT_R32G32_UINT: return MTLVertexFormatUInt2;
-    case MTLB_FORMAT_R32G32_SINT: return MTLVertexFormatInt2;
-    case MTLB_FORMAT_R32_FLOAT: return MTLVertexFormatFloat;
-    case MTLB_FORMAT_R32_UINT: return MTLVertexFormatUInt;
-    case MTLB_FORMAT_R32_SINT: return MTLVertexFormatInt;
-    case MTLB_FORMAT_R16G16B16A16_FLOAT: return MTLVertexFormatHalf4;
-    case MTLB_FORMAT_R16G16B16A16_UNORM: return MTLVertexFormatUShort4Normalized;
-    case MTLB_FORMAT_R16G16B16A16_UINT: return MTLVertexFormatUShort4;
-    case MTLB_FORMAT_R16G16B16A16_SNORM: return MTLVertexFormatShort4Normalized;
-    case MTLB_FORMAT_R16G16B16A16_SINT: return MTLVertexFormatShort4;
-    case MTLB_FORMAT_R16G16_FLOAT: return MTLVertexFormatHalf2;
-    case MTLB_FORMAT_R16G16_UNORM: return MTLVertexFormatUShort2Normalized;
-    case MTLB_FORMAT_R16G16_UINT: return MTLVertexFormatUShort2;
-    case MTLB_FORMAT_R16G16_SNORM: return MTLVertexFormatShort2Normalized;
-    case MTLB_FORMAT_R16G16_SINT: return MTLVertexFormatShort2;
-    case MTLB_FORMAT_R16_FLOAT: return MTLVertexFormatHalf;
-    case MTLB_FORMAT_R16_UNORM: return MTLVertexFormatUShortNormalized;
-    case MTLB_FORMAT_R16_UINT: return MTLVertexFormatUShort;
-    case MTLB_FORMAT_R16_SNORM: return MTLVertexFormatShortNormalized;
-    case MTLB_FORMAT_R16_SINT: return MTLVertexFormatShort;
-    case MTLB_FORMAT_R10G10B10A2_UNORM: return MTLVertexFormatUInt1010102Normalized;
-    case MTLB_FORMAT_R8G8B8A8_UNORM: return MTLVertexFormatUChar4Normalized;
-    case MTLB_FORMAT_R8G8B8A8_UINT: return MTLVertexFormatUChar4;
-    case MTLB_FORMAT_R8G8B8A8_SNORM: return MTLVertexFormatChar4Normalized;
-    case MTLB_FORMAT_R8G8B8A8_SINT: return MTLVertexFormatChar4;
-    case MTLB_FORMAT_B8G8R8A8_UNORM: return MTLVertexFormatUChar4Normalized_BGRA;
-    case MTLB_FORMAT_R8G8_UNORM: return MTLVertexFormatUChar2Normalized;
-    case MTLB_FORMAT_R8G8_UINT: return MTLVertexFormatUChar2;
-    case MTLB_FORMAT_R8G8_SNORM: return MTLVertexFormatChar2Normalized;
-    case MTLB_FORMAT_R8G8_SINT: return MTLVertexFormatChar2;
-    case MTLB_FORMAT_R8_UNORM: return MTLVertexFormatUCharNormalized;
-    case MTLB_FORMAT_R8_UINT: return MTLVertexFormatUChar;
-    case MTLB_FORMAT_R8_SNORM: return MTLVertexFormatCharNormalized;
-    case MTLB_FORMAT_R8_SINT: return MTLVertexFormatChar;
-    default: return MTLVertexFormatInvalid;
-    }
+    const Entry *e = find_format(format);
+    return e ? e->vertex : MTLVertexFormatInvalid;
 }
 
 } // namespace mtlb
+
+extern "C" mtlb_result mtlb_format_get_info(mtlb_format format, mtlb_format_info *out)
+{
+    if (!out)
+        return MTLB_ERROR_INVALID_ARGUMENT;
+    const Entry *e = find_format(format);
+    if (!e)
+        return MTLB_ERROR_UNSUPPORTED;
+    *out = {e->block_width, e->block_height, e->bytes_per_block,
+            e->flags | (e->vertex != MTLVertexFormatInvalid ? MTLB_FORMAT_FLAG_VERTEX : 0u)};
+    return MTLB_OK;
+}

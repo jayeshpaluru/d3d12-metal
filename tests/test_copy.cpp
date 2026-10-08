@@ -23,11 +23,7 @@ int main()
     std::memcpy(mapped, pattern.data(), kSize);
     upload->Unmap(0, nullptr);
 
-    Com<ID3D12CommandAllocator> allocator;
-    CHECK_HR(ctx.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(allocator.put())));
-    Com<ID3D12GraphicsCommandList> list;
-    CHECK_HR(ctx.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator.get(), nullptr,
-                                           IID_PPV_ARGS(list.put())));
+    Com<ID3D12GraphicsCommandList> list = ctx.create_list();
     list->CopyBufferRegion(gpu.get(), 0, upload.get(), 0, kSize);
     list->CopyResource(readback.get(), gpu.get());
     CHECK_HR(list->Close());
@@ -38,8 +34,8 @@ int main()
     readback->Unmap(0, nullptr);
 
     // The list can be recorded again after Reset.
-    CHECK_HR(allocator->Reset());
-    CHECK_HR(list->Reset(allocator.get(), nullptr));
+    CHECK_HR(ctx.allocators.back()->Reset());
+    CHECK_HR(list->Reset(ctx.allocators.back().get(), nullptr));
     list->CopyBufferRegion(readback.get(), 16, upload.get(), 0, 64);
     CHECK_HR(list->Close());
     ctx.execute_and_wait(list.get());

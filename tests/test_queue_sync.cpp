@@ -22,11 +22,7 @@ int main()
     std::memset(mapped, 0x5a, 256);
     upload->Unmap(0, nullptr);
 
-    Com<ID3D12CommandAllocator> allocator;
-    CHECK_HR(ctx.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(allocator.put())));
-    Com<ID3D12GraphicsCommandList> list;
-    CHECK_HR(ctx.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator.get(), nullptr,
-                                           IID_PPV_ARGS(list.put())));
+    Com<ID3D12GraphicsCommandList> list = ctx.create_list();
     list->CopyBufferRegion(readback.get(), 0, upload.get(), 0, 256);
     CHECK_HR(list->Close());
     ID3D12CommandList *lists[] = {list.get()};

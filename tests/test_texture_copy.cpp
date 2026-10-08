@@ -117,11 +117,7 @@ int main()
     texture_location.pResource = texture.get();
     texture_location.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
 
-    Com<ID3D12CommandAllocator> allocator;
-    CHECK_HR(ctx.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(allocator.put())));
-    Com<ID3D12GraphicsCommandList> list;
-    CHECK_HR(ctx.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator.get(), nullptr,
-                                           IID_PPV_ARGS(list.put())));
+    Com<ID3D12GraphicsCommandList> list = ctx.create_list();
 
     // Whole gradient first, then the 4x4 block (2..6, 2..6) of the solid image
     // lands at texture (8, 8).

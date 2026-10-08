@@ -65,11 +65,7 @@ int main()
     D3D12_CONSTANT_BUFFER_VIEW_DESC cbv = {constant_buffer->GetGPUVirtualAddress(), 256};
     ctx.device->CreateConstantBufferView(&cbv, cpu);
 
-    Com<ID3D12CommandAllocator> allocator;
-    CHECK_HR(ctx.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(allocator.put())));
-    Com<ID3D12GraphicsCommandList> list;
-    CHECK_HR(ctx.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator.get(), nullptr,
-                                           IID_PPV_ARGS(list.put())));
+    Com<ID3D12GraphicsCommandList> list = ctx.create_list();
 
     const float clear_color[4] = {0.0f, 0.0f, 1.0f, 1.0f};
     D3D12_CPU_DESCRIPTOR_HANDLE rtv = ctx.rtv();
