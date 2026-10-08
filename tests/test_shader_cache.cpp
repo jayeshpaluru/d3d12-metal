@@ -4,6 +4,7 @@
 //   test_shader_cache            cold run, warm run, corruption
 //   test_shader_cache disabled   run with D3D12METAL_CACHE=0: nothing is written
 //   test_shader_cache evict      run with D3D12METAL_CACHE_MAX_MB=1: the directory stays near the limit
+//   test_shader_cache large      30000 files left by earlier runs: the first store does not wait for the directory listing
 //
 // The first two take the cache directory from D3D12METAL_CACHE_DIR; the test makes a fresh one itself when
 // the variable is not set.
