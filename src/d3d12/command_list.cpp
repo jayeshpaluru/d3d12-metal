@@ -141,7 +141,7 @@ void CommandList::IASetPrimitiveTopology(D3D12_PRIMITIVE_TOPOLOGY topology)
 
 void CommandList::RSSetViewports(UINT count, const D3D12_VIEWPORT *viewports)
 {
-    if (!viewports)
+    if (!viewports || count > MTLB_MAX_VIEWPORTS)
         return;
     auto *cmd = append<mtlb_cmd_set_viewports>(MTLB_CMD_SET_VIEWPORTS, count * sizeof(mtlb_viewport));
     cmd->count = count;
@@ -153,7 +153,7 @@ void CommandList::RSSetViewports(UINT count, const D3D12_VIEWPORT *viewports)
 
 void CommandList::RSSetScissorRects(UINT count, const D3D12_RECT *rects)
 {
-    if (!rects)
+    if (!rects || count > MTLB_MAX_VIEWPORTS)
         return;
     auto *cmd = append<mtlb_cmd_set_scissors>(MTLB_CMD_SET_SCISSORS, count * sizeof(mtlb_rect));
     cmd->count = count;

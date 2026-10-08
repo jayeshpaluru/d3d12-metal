@@ -1,6 +1,7 @@
 // Device, buffer, descriptor heap, texture and event objects.
 #include "internal.h"
 
+#include <algorithm>
 #include <cstring>
 
 #include <metal_irconverter_runtime/metal_irconverter_runtime.h>
@@ -22,8 +23,9 @@ mtlb_result fail(mtlb_result code, const std::string &message)
 
 Buffer *find_buffer(Device *device, uint64_t address, uint64_t *offset)
 {
-    std::lock_guard<std::mutex> lock(device->buffers_mutex);
-    auto it = device->buffers.upper_bound(address);
+    std::shared_lock<std::shared_mutex> lock(device->buffers_mutex);
+    auto it = std::upper_bound(device->buffers.begin(), device->buffers.end(), address,
+                               [](uint64_t a, const std::pair<uint64_t, Buffer *> &b) { return a < b.first; });
     if (it == device->buffers.begin())
         return nullptr;
     --it;
@@ -121,8 +123,10 @@ mtlb_result mtlb_buffer_create(mtlb_device handle, uint64_t size, mtlb_storage s
 
     auto *buffer = new Buffer{device, mtl_buffer, mtl_buffer.gpuAddress, size};
     {
-        std::lock_guard<std::mutex> lock(device->buffers_mutex);
-        device->buffers.emplace(buffer->gpu_address, buffer);
+        std::lock_guard<std::shared_mutex> lock(device->buffers_mutex);
+        auto at = std::lower_bound(device->buffers.begin(), device->buffers.end(), buffer->gpu_address,
+                                   [](const std::pair<uint64_t, Buffer *> &b, uint64_t a) { return b.first < a; });
+        device->buffers.insert(at, {buffer->gpu_address, buffer});
     }
     add_resident(device, mtl_buffer);
 
@@ -141,8 +145,12 @@ void mtlb_buffer_destroy(mtlb_buffer handle)
     if (!buffer)
         return;
     {
-        std::lock_guard<std::mutex> lock(buffer->device->buffers_mutex);
-        buffer->device->buffers.erase(buffer->gpu_address);
+        std::lock_guard<std::shared_mutex> lock(buffer->device->buffers_mutex);
+        auto &buffers = buffer->device->buffers;
+        auto at = std::lower_bound(buffers.begin(), buffers.end(), buffer->gpu_address,
+                                   [](const std::pair<uint64_t, Buffer *> &b, uint64_t a) { return b.first < a; });
+        if (at != buffers.end() && at->first == buffer->gpu_address)
+            buffers.erase(at);
     }
     remove_resident(buffer->device, buffer->buffer);
     delete buffer;

@@ -128,13 +128,18 @@ private:
 
     // Persistent draw state.
     Pipeline *pipeline_ = nullptr;
-    std::vector<MTLViewport> viewports_;
-    std::vector<mtlb_rect> scissors_;
+    MTLViewport viewports_[MTLB_MAX_VIEWPORTS];
+    uint32_t num_viewports_ = 0;
+    mtlb_rect scissors_[MTLB_MAX_VIEWPORTS];
+    uint32_t num_scissors_ = 0;
     uint32_t topology_ = MTLB_TOPOLOGY_TRIANGLE_LIST;
     IRRuntimeVertexBuffers vertex_buffers_ = {};  // read by the stage-in function
-    uint64_t index_address_ = 0;
+    id<MTLBuffer> index_buffer_ = nil;  // nil: unbound or not a known address
+    uint64_t index_offset_ = 0;
     uint32_t index_size_ = 0;
-    std::vector<uint8_t> root_args_;
+    // Points into the submitted stream, which outlives the replay.
+    const uint8_t *root_args_ = nullptr;
+    uint32_t root_args_size_ = 0;
     float blend_factor_[4] = {1, 1, 1, 1};
     uint32_t stencil_ref_ = 0;
     uint32_t dirty_ = kAll;
@@ -331,23 +336,24 @@ mtlb_result Replay::apply_state()
         [render_ setDepthClipMode:pipeline_->depth_clip];
         [render_ setDepthBias:pipeline_->depth_bias slopeScale:pipeline_->slope_scaled_depth_bias clamp:pipeline_->depth_bias_clamp];
     }
-    if ((dirty_ & kViewports) && !viewports_.empty())
-        [render_ setViewports:viewports_.data() count:viewports_.size()];
-    if ((dirty_ & kScissors) && !scissors_.empty()) {
+    if ((dirty_ & kViewports) && num_viewports_)
+        [render_ setViewports:viewports_ count:num_viewports_];
+    if ((dirty_ & kScissors) && num_scissors_) {
         // Metal requires scissors inside the render target; D3D12 does not.
-        std::vector<MTLScissorRect> rects;
-        for (const mtlb_rect &r : scissors_) {
+        MTLScissorRect rects[MTLB_MAX_VIEWPORTS];
+        for (uint32_t i = 0; i < num_scissors_; ++i) {
+            const mtlb_rect &r = scissors_[i];
             NSUInteger left = std::clamp<int32_t>(r.left, 0, static_cast<int32_t>(target_width_));
             NSUInteger top = std::clamp<int32_t>(r.top, 0, static_cast<int32_t>(target_height_));
             NSUInteger right = std::clamp<int32_t>(r.right, static_cast<int32_t>(left), static_cast<int32_t>(target_width_));
             NSUInteger bottom = std::clamp<int32_t>(r.bottom, static_cast<int32_t>(top), static_cast<int32_t>(target_height_));
-            rects.push_back({left, top, right - left, bottom - top});
+            rects[i] = {left, top, right - left, bottom - top};
         }
-        [render_ setScissorRects:rects.data() count:rects.size()];
+        [render_ setScissorRects:rects count:num_scissors_];
     }
-    if ((dirty_ & kRootArgs) && !root_args_.empty()) {
-        [render_ setVertexBytes:root_args_.data() length:root_args_.size() atIndex:kIRArgumentBufferBindPoint];
-        [render_ setFragmentBytes:root_args_.data() length:root_args_.size() atIndex:kIRArgumentBufferBindPoint];
+    if ((dirty_ & kRootArgs) && root_args_size_) {
+        [render_ setVertexBytes:root_args_ length:root_args_size_ atIndex:kIRArgumentBufferBindPoint];
+        [render_ setFragmentBytes:root_args_ length:root_args_size_ atIndex:kIRArgumentBufferBindPoint];
     }
     if (dirty_ & kBlendFactor)
         [render_ setBlendColorRed:blend_factor_[0] green:blend_factor_[1] blue:blend_factor_[2] alpha:blend_factor_[3]];
@@ -394,13 +400,11 @@ mtlb_result Replay::draw_indexed(const mtlb_cmd_draw_indexed *cmd)
     mtlb_result result = begin_draw(&ready);
     if (result != MTLB_OK || !ready)
         return result;
-    uint64_t offset = 0;
-    Buffer *buffer = index_address_ ? find_buffer(queue_->device, index_address_, &offset) : nullptr;
-    if (!buffer || (index_size_ != 2 && index_size_ != 4))
+    if (!index_buffer_ || (index_size_ != 2 && index_size_ != 4))
         return fail(MTLB_ERROR_INVALID_ARGUMENT, "indexed draw without a valid index buffer");
     IRRuntimeDrawIndexedPrimitives(render_, to_primitive_type(topology_), cmd->index_count,
-                                   index_size_ == 2 ? MTLIndexTypeUInt16 : MTLIndexTypeUInt32, buffer->buffer,
-                                   offset + uint64_t(cmd->start_index) * index_size_, cmd->instance_count,
+                                   index_size_ == 2 ? MTLIndexTypeUInt16 : MTLIndexTypeUInt32, index_buffer_,
+                                   index_offset_ + uint64_t(cmd->start_index) * index_size_, cmd->instance_count,
                                    cmd->base_vertex, cmd->start_instance);
     return MTLB_OK;
 }
@@ -467,13 +471,15 @@ mtlb_result Replay::reset_state()
     num_targets_ = 0;
     std::fill(targets_, targets_ + MTLB_MAX_RENDER_TARGETS, Target{});
     pipeline_ = nullptr;
-    viewports_.clear();
-    scissors_.clear();
+    num_viewports_ = 0;
+    num_scissors_ = 0;
     topology_ = MTLB_TOPOLOGY_TRIANGLE_LIST;
     std::fill(std::begin(vertex_buffers_), std::end(vertex_buffers_), IRRuntimeVertexBuffer{});
-    index_address_ = 0;
+    index_buffer_ = nil;
+    index_offset_ = 0;
     index_size_ = 0;
-    root_args_.clear();
+    root_args_ = nullptr;
+    root_args_size_ = 0;
     std::fill_n(blend_factor_, 4, 1.0f);
     stencil_ref_ = 0;
     dirty_ = kAll;
@@ -500,27 +506,32 @@ mtlb_result Replay::execute(const mtlb_cmd_header *header)
     case MTLB_CMD_CLEAR_RTV:
         return clear_rtv(reinterpret_cast<const mtlb_cmd_clear_rtv *>(header));
     case MTLB_CMD_SET_PIPELINE: {
-        pipeline_ = from_handle<Pipeline>(reinterpret_cast<const mtlb_cmd_set_pipeline *>(header)->pipeline);
-        dirty_ |= kPipeline;
-        return pipeline_ ? MTLB_OK : fail(MTLB_ERROR_INVALID_ARGUMENT, "invalid pipeline handle");
+        auto *pipeline = from_handle<Pipeline>(reinterpret_cast<const mtlb_cmd_set_pipeline *>(header)->pipeline);
+        if (!pipeline)
+            return fail(MTLB_ERROR_INVALID_ARGUMENT, "invalid pipeline handle");
+        if (pipeline != pipeline_)
+            dirty_ |= kPipeline;
+        pipeline_ = pipeline;
+        return MTLB_OK;
     }
     case MTLB_CMD_SET_VIEWPORTS: {
         auto *cmd = reinterpret_cast<const mtlb_cmd_set_viewports *>(header);
-        if (!array_fits(header->size, fixed, cmd->count, sizeof(mtlb_viewport)))
-            return fail(MTLB_ERROR_INVALID_ARGUMENT, "viewport count exceeds the record");
-        viewports_.clear();
+        if (cmd->count > MTLB_MAX_VIEWPORTS || !array_fits(header->size, fixed, cmd->count, sizeof(mtlb_viewport)))
+            return fail(MTLB_ERROR_INVALID_ARGUMENT, "viewport count out of range");
+        num_viewports_ = cmd->count;
         for (uint32_t i = 0; i < cmd->count; ++i) {
             const mtlb_viewport &v = cmd->viewports[i];
-            viewports_.push_back({v.x, v.y, v.width, v.height, v.min_depth, v.max_depth});
+            viewports_[i] = {v.x, v.y, v.width, v.height, v.min_depth, v.max_depth};
         }
         dirty_ |= kViewports;
         return MTLB_OK;
     }
     case MTLB_CMD_SET_SCISSORS: {
         auto *cmd = reinterpret_cast<const mtlb_cmd_set_scissors *>(header);
-        if (!array_fits(header->size, fixed, cmd->count, sizeof(mtlb_rect)))
-            return fail(MTLB_ERROR_INVALID_ARGUMENT, "scissor count exceeds the record");
-        scissors_.assign(cmd->rects, cmd->rects + cmd->count);
+        if (cmd->count > MTLB_MAX_VIEWPORTS || !array_fits(header->size, fixed, cmd->count, sizeof(mtlb_rect)))
+            return fail(MTLB_ERROR_INVALID_ARGUMENT, "scissor count out of range");
+        num_scissors_ = cmd->count;
+        std::copy_n(cmd->rects, cmd->count, scissors_);
         dirty_ |= kScissors;
         return MTLB_OK;
     }
@@ -541,7 +552,9 @@ mtlb_result Replay::execute(const mtlb_cmd_header *header)
     }
     case MTLB_CMD_SET_INDEX_BUFFER: {
         auto *cmd = reinterpret_cast<const mtlb_cmd_set_index_buffer *>(header);
-        index_address_ = cmd->gpu_address;
+        // Resolve the address once here rather than on every indexed draw.
+        Buffer *buffer = cmd->gpu_address ? find_buffer(queue_->device, cmd->gpu_address, &index_offset_) : nullptr;
+        index_buffer_ = buffer ? buffer->buffer : nil;
         index_size_ = cmd->index_size;
         return MTLB_OK;
     }
@@ -549,7 +562,8 @@ mtlb_result Replay::execute(const mtlb_cmd_header *header)
         auto *cmd = reinterpret_cast<const mtlb_cmd_set_graphics_root_args *>(header);
         if (!array_fits(header->size, fixed, cmd->data_size, 1))
             return fail(MTLB_ERROR_INVALID_ARGUMENT, "root argument size exceeds the record");
-        root_args_.assign(cmd->data, cmd->data + cmd->data_size);
+        root_args_ = cmd->data;
+        root_args_size_ = cmd->data_size;
         dirty_ |= kRootArgs;
         return MTLB_OK;
     }

@@ -298,6 +298,7 @@ typedef enum mtlb_input_class { MTLB_INPUT_PER_VERTEX = 0, MTLB_INPUT_PER_INSTAN
 #define MTLB_MAX_RENDER_TARGETS 8
 #define MTLB_MAX_INPUT_ELEMENTS 31
 #define MTLB_MAX_VERTEX_BUFFERS 31
+#define MTLB_MAX_VIEWPORTS 16     /* also the number of scissor rectangles */
 
 typedef struct mtlb_input_element {
     char semantic_name[32];

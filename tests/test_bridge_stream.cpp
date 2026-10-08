@@ -81,6 +81,11 @@ int main()
     Stream scissors;
     scissors.add(MTLB_CMD_SET_SCISSORS, sizeof(mtlb_cmd_set_scissors), big_count, sizeof(big_count));
     CHECK(submit(scissors) != MTLB_OK);
+    Stream too_many_viewports;
+    const uint32_t seventeen[2] = {MTLB_MAX_VIEWPORTS + 1, 0};
+    too_many_viewports.add(MTLB_CMD_SET_VIEWPORTS, sizeof(mtlb_cmd_set_viewports) + 17 * sizeof(mtlb_viewport),
+                           seventeen, sizeof(seventeen));
+    CHECK(submit(too_many_viewports) != MTLB_OK);
     Stream vertex_buffers;
     const uint32_t slots[2] = {0, 4};
     vertex_buffers.add(MTLB_CMD_SET_VERTEX_BUFFERS, sizeof(mtlb_cmd_set_vertex_buffers), slots, sizeof(slots));

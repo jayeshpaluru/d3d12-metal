@@ -9,8 +9,10 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <shared_mutex>
 #include <string>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 #include <metal_irconverter/metal_irconverter.h>
@@ -53,9 +55,10 @@ struct Device {
     std::mutex depth_stencil_mutex;
     std::map<DepthStencilKey, id<MTLDepthStencilState>> depth_stencil_states;
 
-    // GPU address -> buffer, for resolving D3D12-style virtual addresses.
-    std::mutex buffers_mutex;
-    std::map<uint64_t, Buffer *> buffers;
+    // Buffers sorted by GPU address, for resolving D3D12-style virtual
+    // addresses. Lookups far outnumber creations.
+    std::shared_mutex buffers_mutex;
+    std::vector<std::pair<uint64_t, Buffer *>> buffers;
 };
 
 struct Buffer {

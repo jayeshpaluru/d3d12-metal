@@ -117,5 +117,26 @@ int main()
         CHECK(scene.run(&readback, &row_pitch) == 1);
         check_pixel("cleared", read_pixel(readback.get(), row_pitch, 10, 10), {0, 0, 255, 255});
     }
+
+    {
+        // Indexed draw through an index buffer view that starts inside its buffer.
+        Scene scene;
+        const uint32_t indices[] = {0, 0, 0, 3, 4, 5};
+        Com<ID3D12Resource> index_buffer = scene.ctx.create_upload_buffer(indices, sizeof(indices));
+        const D3D12_INDEX_BUFFER_VIEW ibv = {index_buffer->GetGPUVirtualAddress() + 3 * sizeof(uint32_t),
+                                             3 * sizeof(uint32_t), DXGI_FORMAT_R32_UINT};
+        D3D12_CPU_DESCRIPTOR_HANDLE rtv = scene.ctx.rtv();
+        scene.list->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
+        scene.list->ClearRenderTargetView(rtv, blue, 0, nullptr);
+        scene.list->IASetIndexBuffer(&ibv);
+        scene.list->SetGraphicsRoot32BitConstants(0, 4, green, 0);
+        scene.list->DrawIndexedInstanced(3, 1, 0, 0, 0);
+
+        Com<ID3D12Resource> readback;
+        UINT row_pitch = 0;
+        CHECK(scene.run(&readback, &row_pitch) == 1);
+        check_pixel("indexed", read_pixel(readback.get(), row_pitch, 48, 32), {0, 255, 0, 255});
+        check_pixel("not drawn", read_pixel(readback.get(), row_pitch, 16, 32), {0, 0, 255, 255});
+    }
     return 0;
 }
