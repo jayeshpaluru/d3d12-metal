@@ -444,6 +444,7 @@ extern "C" mtlb_result mtlb_pipeline_create(mtlb_device handle, const mtlb_pipel
         || desc->num_render_targets > MTLB_MAX_RENDER_TARGETS
         || desc->num_input_elements > MTLB_MAX_INPUT_ELEMENTS)
         return MTLB_ERROR_INVALID_ARGUMENT;
+    stat_add(kStatPipelineAttempts);
 
     RootSignature *root_signature = from_handle<RootSignature>(desc->root_signature);
     if (!root_signature)
@@ -569,6 +570,7 @@ extern "C" mtlb_result mtlb_compute_pipeline_create(mtlb_device handle, const mt
     Device *device = from_handle<Device>(handle);
     if (!device || !desc || !out || !desc->cs_dxil || !desc->cs_size || !desc->root_signature)
         return MTLB_ERROR_INVALID_ARGUMENT;
+    stat_add(kStatPipelineAttempts);
     RootSignature *root_signature = from_handle<RootSignature>(desc->root_signature);
     if (!root_signature)
         return MTLB_ERROR_INVALID_ARGUMENT;

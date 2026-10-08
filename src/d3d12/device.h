@@ -65,6 +65,12 @@ public:
     void copy_view_info(DescriptorHeap *to_heap, size_t to_index, DescriptorHeap *from_heap, size_t from_index, UINT count);
     FenceWaiter &fence_waiter() { return fence_waiter_; }
 
+    // Pipelines whose creation failed, by PipelineState::key: the application is not asked again to wait for the
+    // same failure (games retry every frame). failed_pipeline returns false for an unknown key; note_failed_pipeline
+    // returns true the first time a key is recorded (the caller logs only then).
+    bool failed_pipeline(uint64_t key, HRESULT *hr);
+    bool note_failed_pipeline(uint64_t key, HRESULT hr);
+
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **out) override
     {
         if (riid == __uuidof(ID3D12DeviceRemovedExtendedData) || riid == __uuidof(ID3D12DeviceRemovedExtendedData1)
@@ -238,6 +244,8 @@ private:
     std::array<bool, 16> null_ready_{};
     mtlb_device_caps caps_{};
     FenceWaiter fence_waiter_;
+    std::mutex failed_pipelines_mutex_;
+    std::unordered_map<uint64_t, HRESULT> failed_pipelines_;
 };
 
 } // namespace d3d12m

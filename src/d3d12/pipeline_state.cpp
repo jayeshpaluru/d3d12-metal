@@ -28,6 +28,33 @@ static_assert(int(MTLB_TOPOLOGY_TYPE_POINT) == int(D3D12_PRIMITIVE_TOPOLOGY_TYPE
                   && int(MTLB_TOPOLOGY_TYPE_TRIANGLE) == int(D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE),
               "mtlb topology types mirror the D3D12 enum");
 
+// FNV-1a over a byte range, continuing from `hash`.
+uint64_t hash_bytes(const void *data, size_t size, uint64_t hash = 14695981039346656037ull)
+{
+    for (size_t i = 0; i < size; ++i)
+        hash = (hash ^ static_cast<const uint8_t *>(data)[i]) * 1099511628211ull;
+    return hash;
+}
+
+// Identifies a pipeline description for the failure cache: the state, the root signature and the shader contents
+// (not their addresses).
+uint64_t pipeline_key(mtlb_pipeline_desc pd)
+{
+    const uint64_t vs = hash_bytes(pd.vs_dxil, pd.vs_size);
+    const uint64_t ps = pd.ps_dxil ? hash_bytes(pd.ps_dxil, pd.ps_size) : 0;
+    pd.vs_dxil = pd.ps_dxil = nullptr;
+    pd.vs_entry = pd.ps_entry = nullptr;
+    return hash_bytes(&pd, sizeof(pd), hash_bytes(&ps, sizeof(ps), hash_bytes(&vs, sizeof(vs))));
+}
+
+uint64_t pipeline_key(mtlb_compute_pipeline_desc pd)
+{
+    const uint64_t cs = hash_bytes(pd.cs_dxil, pd.cs_size);
+    pd.cs_dxil = nullptr;
+    pd.cs_entry = nullptr;
+    return hash_bytes(&pd, sizeof(pd), cs) ^ 0x9e3779b97f4a7c15ull;
+}
+
 } // namespace
 
 HRESULT PipelineState::create_graphics(Device *device, const D3D12_GRAPHICS_PIPELINE_STATE_DESC &desc,
@@ -111,12 +138,17 @@ HRESULT PipelineState::create_graphics(Device *device, const D3D12_GRAPHICS_PIPE
         m.step_rate = e.InstanceDataStepRate;
     }
 
+    const uint64_t key = pipeline_key(pd);
+    HRESULT known_failure;
+    if (device->failed_pipeline(key, &known_failure))
+        return known_failure;
     stat_add(Stat::PsoCreations);
     PsoTimer timer;
     auto *pso = new PipelineState(device);
     mtlb_result result = mtlb_pipeline_create(device->handle(), &pd, &pso->pipeline_);
     if (result != MTLB_OK) {
-        D3D12M_LOG("pipeline creation failed: %s", mtlb_last_error());
+        if (device->note_failed_pipeline(key, to_hresult(result)))
+            D3D12M_LOG("pipeline creation failed (not retried): %s", mtlb_last_error());
         pso->Release();
         return to_hresult(result);
     }
@@ -143,12 +175,17 @@ HRESULT PipelineState::create_compute(Device *device, const D3D12_COMPUTE_PIPELI
     pd.cs_size = desc.CS.BytecodeLength;
     pd.root_signature = root_signature->handle();
 
+    const uint64_t key = pipeline_key(pd);
+    HRESULT known_failure;
+    if (device->failed_pipeline(key, &known_failure))
+        return known_failure;
     stat_add(Stat::PsoCreations);
     PsoTimer timer;
     auto *pso = new PipelineState(device);
     mtlb_result result = mtlb_compute_pipeline_create(device->handle(), &pd, &pso->pipeline_);
     if (result != MTLB_OK) {
-        D3D12M_LOG("compute pipeline creation failed: %s", mtlb_last_error());
+        if (device->note_failed_pipeline(key, to_hresult(result)))
+            D3D12M_LOG("compute pipeline creation failed (not retried): %s", mtlb_last_error());
         pso->Release();
         return to_hresult(result);
     }

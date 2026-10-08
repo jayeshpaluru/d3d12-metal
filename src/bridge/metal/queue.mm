@@ -1724,7 +1724,7 @@ void mtlb_stats_get(mtlb_stats *out)
         return;
     const auto &s = mtlb::g_stats;
     *out = {s[mtlb::kStatSubmits], s[mtlb::kStatCommandBuffers], s[mtlb::kStatRenderEncoders], s[mtlb::kStatComputeEncoders],
-            s[mtlb::kStatBlitEncoders], s[mtlb::kStatBarriers], s[mtlb::kStatSyncs], s[mtlb::kStatEventQueries]};
+            s[mtlb::kStatBlitEncoders], s[mtlb::kStatBarriers], s[mtlb::kStatSyncs], s[mtlb::kStatEventQueries], s[mtlb::kStatPipelineAttempts]};
 }
 
 mtlb_result mtlb_queue_create(mtlb_device handle, mtlb_queue *out)

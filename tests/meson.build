@@ -48,6 +48,7 @@ tests = [
   ['test_rootsig', []],
   ['test_descriptors', []],
   ['test_hardening', []],
+  ['test_pipeline_failure', []],
   ['test_backend_ranges', []],
   ['test_shader_cache', ['instanced'], ['fill']],
   ['test_triangle', ['color']],

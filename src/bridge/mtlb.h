@@ -241,6 +241,7 @@ typedef struct mtlb_stats {
     uint64_t barriers;         /* barrier records that ended encoders / ordered work */
     uint64_t syncs;            /* encoders that waited on the queue fence */
     uint64_t event_queries;    /* mtlb_event_completed_value calls (fence reads that went to Metal) */
+    uint64_t pipeline_attempts; /* mtlb_pipeline_create and mtlb_compute_pipeline_create calls */
 } mtlb_stats;
 MTLB_EXPORT void mtlb_stats_get(mtlb_stats *out);
 
@@ -715,7 +716,7 @@ MTLB_ASSERT_OFFSET(mtlb_span, size, 8);
 MTLB_ASSERT_SIZE(mtlb_format_info, 16);
 MTLB_ASSERT_SIZE(mtlb_device_caps, 304);
 MTLB_ASSERT_SIZE(mtlb_cache_stats, 48);
-MTLB_ASSERT_SIZE(mtlb_stats, 64);
+MTLB_ASSERT_SIZE(mtlb_stats, 72);
 MTLB_ASSERT_SIZE(mtlb_buffer_info, 24);
 MTLB_ASSERT_OFFSET(mtlb_buffer_info, gpu_address, 8);
 MTLB_ASSERT_SIZE(mtlb_descriptor, 24);
