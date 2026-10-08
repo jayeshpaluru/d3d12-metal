@@ -57,6 +57,7 @@ typedef uint64_t mtlb_queue;
 typedef uint64_t mtlb_event;
 typedef uint64_t mtlb_notify;
 typedef uint64_t mtlb_swapchain;
+typedef uint64_t mtlb_heap;
 
 /* ------------------------------------------------------------------------ */
 /* Formats                                                                  */
@@ -294,6 +295,32 @@ typedef struct mtlb_texture_info {
 MTLB_EXPORT mtlb_result mtlb_texture_create(mtlb_device device, const mtlb_texture_desc *desc,
                                             mtlb_texture *out, mtlb_texture_info *info);
 MTLB_EXPORT void mtlb_texture_destroy(mtlb_texture texture);
+
+/* ------------------------------------------------------------------------ */
+/* Placement heaps                                                          */
+/* ------------------------------------------------------------------------ */
+
+typedef struct mtlb_size_align {
+    uint64_t size;
+    uint64_t align;
+} mtlb_size_align;
+
+/* What a buffer or texture takes in a heap (the descriptor must be the one it will be created with). */
+MTLB_EXPORT mtlb_result mtlb_buffer_size_align(mtlb_device device, uint64_t size, mtlb_storage storage,
+                                               mtlb_size_align *out);
+MTLB_EXPORT mtlb_result mtlb_texture_size_align(mtlb_device device, const mtlb_texture_desc *desc,
+                                                mtlb_size_align *out);
+
+/* A placement heap: resources are created at offsets of it and may overlap (alias). Its memory is
+ * resident for the device's queues for as long as it exists. */
+MTLB_EXPORT mtlb_result mtlb_heap_create(mtlb_device device, uint64_t size, mtlb_storage storage, mtlb_heap *out);
+MTLB_EXPORT void mtlb_heap_destroy(mtlb_heap heap);
+
+/* Resources placed in a heap; the heap must outlive them. Their contents are whatever the memory held. */
+MTLB_EXPORT mtlb_result mtlb_buffer_create_in_heap(mtlb_heap heap, uint64_t offset, uint64_t size, mtlb_buffer *out,
+                                                   mtlb_buffer_info *info);
+MTLB_EXPORT mtlb_result mtlb_texture_create_in_heap(mtlb_heap heap, uint64_t offset, const mtlb_texture_desc *desc,
+                                                    mtlb_texture *out, mtlb_texture_info *info);
 
 /* ------------------------------------------------------------------------ */
 /* Descriptor contents                                                      */
@@ -632,6 +659,7 @@ MTLB_ASSERT_SIZE(mtlb_root_signature_layout, 520);
 MTLB_ASSERT_SIZE(mtlb_pipeline_desc, 2192);
 MTLB_ASSERT_SIZE(mtlb_compute_pipeline_desc, 32);
 MTLB_ASSERT_SIZE(mtlb_swapchain_desc, 24);
+MTLB_ASSERT_SIZE(mtlb_size_align, 16);
 MTLB_ASSERT_SIZE(mtlb_texture_view_desc, 32);
 MTLB_ASSERT_SIZE(mtlb_buffer_view_desc, 48);
 MTLB_ASSERT_SIZE(mtlb_sampler_desc, 64);

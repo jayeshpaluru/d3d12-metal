@@ -36,9 +36,47 @@ UINT array_size(const D3D12_RESOURCE_DESC &desc)
     return desc.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE3D ? 1 : desc.DepthOrArraySize;
 }
 
+UINT plane_count(DXGI_FORMAT format)
+{
+    switch (format) {
+    case DXGI_FORMAT_R24G8_TYPELESS:
+    case DXGI_FORMAT_D24_UNORM_S8_UINT:
+    case DXGI_FORMAT_R32G8X24_TYPELESS:
+    case DXGI_FORMAT_D32_FLOAT_S8X24_UINT:
+        return 2;
+    default:
+        return 1;
+    }
+}
+
+DXGI_FORMAT plane_format(DXGI_FORMAT format, UINT plane)
+{
+    switch (format) {
+    case DXGI_FORMAT_R24G8_TYPELESS:
+    case DXGI_FORMAT_D24_UNORM_S8_UINT:
+        return plane == 0 ? DXGI_FORMAT_R24_UNORM_X8_TYPELESS : DXGI_FORMAT_X24_TYPELESS_G8_UINT;
+    case DXGI_FORMAT_R32G8X24_TYPELESS:
+    case DXGI_FORMAT_D32_FLOAT_S8X24_UINT:
+        return plane == 0 ? DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS : DXGI_FORMAT_X32_TYPELESS_G8X24_UINT;
+    default:
+        return format;
+    }
+}
+
+UINT plane_bytes_per_texel(DXGI_FORMAT format, UINT plane)
+{
+    if (plane_count(format) == 1) {
+        mtlb_format_info info;
+        return get_format_info(format, &info) ? info.bytes_per_block : 0;
+    }
+    return plane == 0 ? 4 : 1;
+}
+
 UINT subresource_count(const D3D12_RESOURCE_DESC &desc)
 {
-    return desc.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER ? 1 : resolve_mip_levels(desc) * array_size(desc);
+    return desc.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER
+               ? 1
+               : resolve_mip_levels(desc) * array_size(desc) * plane_count(desc.Format);
 }
 
 Extent subresource_extent(const D3D12_RESOURCE_DESC &desc, UINT mip)
@@ -49,12 +87,15 @@ Extent subresource_extent(const D3D12_RESOURCE_DESC &desc, UINT mip)
             desc.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE3D ? mip_extent(desc.DepthOrArraySize, mip) : 1};
 }
 
-void decompose_subresource(const D3D12_RESOURCE_DESC &desc, UINT subresource, UINT *mip, UINT *array_slice)
+void decompose_subresource(const D3D12_RESOURCE_DESC &desc, UINT subresource, UINT *mip, UINT *array_slice,
+                           UINT *plane)
 {
-    // Single-plane formats only.
     const UINT mip_levels = resolve_mip_levels(desc);
+    const UINT slices = array_size(desc);
     *mip = subresource % mip_levels;
-    *array_slice = (subresource / mip_levels) % array_size(desc);
+    *array_slice = (subresource / mip_levels) % slices;
+    if (plane)
+        *plane = subresource / (mip_levels * slices);
 }
 
 bool compute_copyable_footprints(const D3D12_RESOURCE_DESC &desc, UINT first_subresource,
@@ -83,8 +124,12 @@ bool compute_copyable_footprints(const D3D12_RESOURCE_DESC &desc, UINT first_sub
     // Offsets are aligned relative to base_offset, as in vkd3d-proton.
     UINT64 offset = 0, total = 0;
     for (UINT i = 0; i < num_subresources; ++i) {
-        UINT mip, array_slice;
-        decompose_subresource(desc, first_subresource + i, &mip, &array_slice);
+        UINT mip, array_slice, plane;
+        decompose_subresource(desc, first_subresource + i, &mip, &array_slice, &plane);
+        const bool planar = !is_buffer && plane_count(desc.Format) > 1;
+        if (planar)
+            info = {1, 1, plane_bytes_per_texel(desc.Format, plane), 0};
+        const DXGI_FORMAT footprint_format = planar ? plane_format(desc.Format, plane) : desc.Format;
         const Extent extent = subresource_extent(desc, mip);
         // Block-compressed extents are rounded up to whole blocks.
         const UINT width = static_cast<UINT>(align_up(extent.width, info.block_width));
@@ -96,7 +141,7 @@ bool compute_copyable_footprints(const D3D12_RESOURCE_DESC &desc, UINT first_sub
 
         if (layouts) {
             layouts[i].Offset = base_offset + offset;
-            layouts[i].Footprint = {is_buffer ? DXGI_FORMAT_UNKNOWN : desc.Format, width, height, depth,
+            layouts[i].Footprint = {is_buffer ? DXGI_FORMAT_UNKNOWN : footprint_format, width, height, depth,
                                     static_cast<UINT>(row_pitch)};
         }
         if (num_rows)

@@ -94,6 +94,12 @@ struct Device {
     std::vector<std::pair<uint64_t, Buffer *>> buffers;
 };
 
+struct Heap {
+    Device *device;
+    id<MTLHeap> heap;
+    mtlb_storage storage;
+};
+
 struct Buffer {
     Buffer(Device *d, id<MTLBuffer> b, uint64_t address, uint64_t length)
         : device(d), buffer(b), gpu_address(address), size(length) {}
@@ -102,6 +108,7 @@ struct Buffer {
     id<MTLBuffer> buffer;
     uint64_t gpu_address;
     uint64_t size;
+    bool placed = false;  // lives in a heap, which owns its residency
 
     // Texture buffer views (typed views and UAV counters), created on first use and kept for the
     // buffer's life: (byte offset, pixel format, texel count, writable).
@@ -115,6 +122,7 @@ struct Texture {
     Device *device;
     id<MTLTexture> texture;
     mtlb_format format;
+    bool placed = false;
 
     // Pixel-format views, created on first use and kept for the texture's life
     // (command buffers do not retain what they reference).
@@ -137,7 +145,8 @@ struct Pipeline {
     MTLSize threadgroup_size = {1, 1, 1};
 
     id<MTLRenderPipelineState> state;
-    id<MTLDepthStencilState> depth_stencil;  // nil when depth/stencil is unused
+    id<MTLDepthStencilState> depth_stencil;      // the description's depth and stencil state
+    id<MTLDepthStencilState> depth_stencil_off;  // for passes without depth-stencil attachment
     MTLCullMode cull_mode;
     MTLWinding winding;
     MTLTriangleFillMode fill_mode;
@@ -145,6 +154,19 @@ struct Pipeline {
     float depth_bias;
     float slope_scaled_depth_bias;
     float depth_bias_clamp;
+
+    // The pipeline is built for the depth-stencil format of its description. A pass with another (or
+    // no) depth-stencil attachment gets a variant, built when first needed.
+    MTLRenderPipelineDescriptor *descriptor = nil;
+    MTLPixelFormat depth_format = MTLPixelFormatInvalid;
+    MTLPixelFormat stencil_format = MTLPixelFormatInvalid;
+    std::mutex variants_mutex;
+    std::map<uint64_t, id<MTLRenderPipelineState>> variants;
+    Device *device = nullptr;
+
+    // The render pipeline state for a pass whose attachments have these pixel formats; nil with
+    // fail() set when the variant cannot be built.
+    id<MTLRenderPipelineState> state_for(MTLPixelFormat depth, MTLPixelFormat stencil);
 };
 
 struct Queue {
@@ -206,6 +228,14 @@ uint64_t to_handle(T *object)
 
 // Records the failure description returned by mtlb_last_error() and returns `code`.
 mtlb_result fail(mtlb_result code, const std::string &message);
+
+// Adds `buffer` to / removes it from the table that resolves GPU addresses.
+void register_buffer(Buffer *buffer);
+void unregister_buffer(Buffer *buffer);
+
+// The Metal descriptor for a texture of `desc`; nil (with `error` set) for formats Metal cannot do. Placed
+// textures are not hazard tracked.
+MTLTextureDescriptor *make_texture_descriptor(const mtlb_texture_desc *desc, bool placed, std::string *error);
 
 // Finds the buffer containing `address` and the offset of `address` inside it.
 Buffer *find_buffer(Device *device, uint64_t address, uint64_t *offset);

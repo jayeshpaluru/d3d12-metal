@@ -74,11 +74,11 @@ public:
     void STDMETHODCALLTYPE IASetVertexBuffers(UINT StartSlot, UINT NumViews, const D3D12_VERTEX_BUFFER_VIEW *pViews) override;
     void STDMETHODCALLTYPE SOSetTargets(UINT, UINT, const D3D12_STREAM_OUTPUT_BUFFER_VIEW *) override { D3D12M_STUB_LOG(); }
     void STDMETHODCALLTYPE OMSetRenderTargets(UINT NumRenderTargetDescriptors, const D3D12_CPU_DESCRIPTOR_HANDLE *pRenderTargetDescriptors, BOOL RTsSingleHandleToDescriptorRange, const D3D12_CPU_DESCRIPTOR_HANDLE *pDepthStencilDescriptor) override;
-    void STDMETHODCALLTYPE ClearDepthStencilView(D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_CLEAR_FLAGS, FLOAT, UINT8, UINT, const D3D12_RECT *) override { D3D12M_STUB_LOG(); }
+    void STDMETHODCALLTYPE ClearDepthStencilView(D3D12_CPU_DESCRIPTOR_HANDLE DepthStencilView, D3D12_CLEAR_FLAGS ClearFlags, FLOAT Depth, UINT8 Stencil, UINT NumRects, const D3D12_RECT *pRects) override;
     void STDMETHODCALLTYPE ClearRenderTargetView(D3D12_CPU_DESCRIPTOR_HANDLE RenderTargetView, const FLOAT ColorRGBA[ 4 ], UINT NumRects, const D3D12_RECT *pRects) override;
     void STDMETHODCALLTYPE ClearUnorderedAccessViewUint(D3D12_GPU_DESCRIPTOR_HANDLE ViewGPUHandleInCurrentHeap, D3D12_CPU_DESCRIPTOR_HANDLE ViewCPUHandle, ID3D12Resource *pResource, const UINT Values[ 4 ], UINT NumRects, const D3D12_RECT *pRects) override;
     void STDMETHODCALLTYPE ClearUnorderedAccessViewFloat(D3D12_GPU_DESCRIPTOR_HANDLE ViewGPUHandleInCurrentHeap, D3D12_CPU_DESCRIPTOR_HANDLE ViewCPUHandle, ID3D12Resource *pResource, const FLOAT Values[ 4 ], UINT NumRects, const D3D12_RECT *pRects) override;
-    void STDMETHODCALLTYPE DiscardResource(ID3D12Resource *, const D3D12_DISCARD_REGION *) override { D3D12M_STUB_LOG(); }
+    void STDMETHODCALLTYPE DiscardResource(ID3D12Resource *, const D3D12_DISCARD_REGION *) override {}  // contents may be dropped: nothing to do
     void STDMETHODCALLTYPE BeginQuery(ID3D12QueryHeap *, D3D12_QUERY_TYPE, UINT) override { D3D12M_STUB_LOG(); }
     void STDMETHODCALLTYPE EndQuery(ID3D12QueryHeap *, D3D12_QUERY_TYPE, UINT) override { D3D12M_STUB_LOG(); }
     void STDMETHODCALLTYPE ResolveQueryData(ID3D12QueryHeap *, D3D12_QUERY_TYPE, UINT, UINT, ID3D12Resource *, UINT64) override { D3D12M_STUB_LOG(); }
@@ -90,7 +90,7 @@ public:
     // ID3D12GraphicsCommandList1
     void STDMETHODCALLTYPE AtomicCopyBufferUINT(ID3D12Resource *, UINT64, ID3D12Resource *, UINT64, UINT, ID3D12Resource *const *, const D3D12_SUBRESOURCE_RANGE_UINT64 *) override { D3D12M_STUB_LOG(); }
     void STDMETHODCALLTYPE AtomicCopyBufferUINT64(ID3D12Resource *, UINT64, ID3D12Resource *, UINT64, UINT, ID3D12Resource *const *, const D3D12_SUBRESOURCE_RANGE_UINT64 *) override { D3D12M_STUB_LOG(); }
-    void STDMETHODCALLTYPE OMSetDepthBounds(FLOAT, FLOAT) override { D3D12M_STUB_LOG(); }
+    void STDMETHODCALLTYPE OMSetDepthBounds(FLOAT, FLOAT) override { D3D12M_STUB_LOG(); }  // Metal has no depth bounds test
     void STDMETHODCALLTYPE SetSamplePositions(UINT, UINT, D3D12_SAMPLE_POSITION *) override { D3D12M_STUB_LOG(); }
     void STDMETHODCALLTYPE ResolveSubresourceRegion(ID3D12Resource *, UINT, UINT, UINT, ID3D12Resource *, UINT, D3D12_RECT *, DXGI_FORMAT, D3D12_RESOLVE_MODE) override { D3D12M_STUB_LOG(); }
     void STDMETHODCALLTYPE SetViewInstanceMask(UINT) override { D3D12M_STUB_LOG(); }

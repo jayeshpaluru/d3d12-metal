@@ -24,6 +24,11 @@ mtlb_render_target to_render_target(const RenderTargetDescriptor &rtv)
     return {rtv.texture, rtv.view_format, rtv.mip_level, rtv.array_slice, 0};
 }
 
+const RenderTargetDescriptor &dsv_from_handle(D3D12_CPU_DESCRIPTOR_HANDLE handle)
+{
+    return *reinterpret_cast<const RenderTargetDescriptor *>(handle.ptr);
+}
+
 } // namespace
 
 HRESULT CommandList::create(Device *device, D3D12_COMMAND_LIST_TYPE type, ID3D12CommandAllocator *allocator,
@@ -212,10 +217,13 @@ void CommandList::OMSetRenderTargets(UINT count, const D3D12_CPU_DESCRIPTOR_HAND
 {
     if (count > MTLB_MAX_RENDER_TARGETS || (count && !rtvs))
         return;
-    if (dsv)
-        D3D12M_STUB_LOG();  // depth-stencil views are not implemented
     auto *cmd = append<mtlb_cmd_set_render_targets>(MTLB_CMD_SET_RENDER_TARGETS, count * sizeof(mtlb_render_target));
     cmd->count = count;
+    if (dsv) {
+        const RenderTargetDescriptor &view = dsv_from_handle(*dsv);
+        cmd->depth = to_render_target(view);
+        cmd->depth_flags = view.flags;
+    }
     for (UINT i = 0; i < count; ++i) {
         D3D12_CPU_DESCRIPTOR_HANDLE handle = single_handle_to_range
                                                  ? D3D12_CPU_DESCRIPTOR_HANDLE{rtvs[0].ptr + i * kDescriptorSize}
@@ -235,6 +243,21 @@ void CommandList::ClearRenderTargetView(D3D12_CPU_DESCRIPTOR_HANDLE view, const 
     auto *cmd = append<mtlb_cmd_clear_rtv>(MTLB_CMD_CLEAR_RTV);
     cmd->target = to_render_target(rtv);
     std::copy_n(color, 4, cmd->color);
+}
+
+void CommandList::ClearDepthStencilView(D3D12_CPU_DESCRIPTOR_HANDLE view, D3D12_CLEAR_FLAGS flags, FLOAT depth,
+                                        UINT8 stencil, UINT num_rects, const D3D12_RECT *)
+{
+    const RenderTargetDescriptor &dsv = dsv_from_handle(view);
+    if (!dsv.texture || !(flags & (D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL)))
+        return;
+    if (num_rects)
+        D3D12M_LOG("ClearDepthStencilView: clear rectangles are ignored, the whole view is cleared");
+    auto *cmd = append<mtlb_cmd_clear_dsv>(MTLB_CMD_CLEAR_DSV);
+    cmd->target = to_render_target(dsv);
+    cmd->flags = ((flags & D3D12_CLEAR_FLAG_DEPTH) ? MTLB_CLEAR_DEPTH : 0) | ((flags & D3D12_CLEAR_FLAG_STENCIL) ? MTLB_CLEAR_STENCIL : 0);
+    cmd->depth = depth;
+    cmd->stencil = stencil;
 }
 
 // ---- Root arguments ---------------------------------------------------------
@@ -654,8 +677,12 @@ void CommandList::CopyTextureRegion(const D3D12_TEXTURE_COPY_LOCATION *dst, UINT
     }
 
     const D3D12_RESOURCE_DESC &td = texture_resource->desc();
-    UINT mip, array_slice;
-    decompose_subresource(td, subresource, &mip, &array_slice);
+    UINT mip, array_slice, plane;
+    decompose_subresource(td, subresource, &mip, &array_slice, &plane);
+    if (plane_count(td.Format) > 1) {
+        // A plane of a depth-stencil texture: texels of the plane's own size.
+        info = {1, 1, plane_bytes_per_texel(td.Format, plane), 0};
+    }
 
     // The copied region spans `box` of the source image (the whole source
     // subresource or footprint when no box is given). `texture_origin` is where
@@ -698,6 +725,7 @@ void CommandList::CopyTextureRegion(const D3D12_TEXTURE_COPY_LOCATION *dst, UINT
     r.bytes_per_image = slice_pitch;
     r.mip_level = mip;
     r.array_slice = array_slice;
+    r.plane = plane;
     r.x = texture_origin[0];
     r.y = texture_origin[1];
     r.z = texture_origin[2];

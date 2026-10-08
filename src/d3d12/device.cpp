@@ -385,13 +385,69 @@ void Device::CreateRenderTargetView(ID3D12Resource *resource, const D3D12_RENDER
     // DXGI_FORMAT_UNKNOWN means the texture's format.
     if (desc->Format != DXGI_FORMAT_UNKNOWN && to_mtlb_format(desc->Format) != to_mtlb_format(texture->desc().Format))
         slot->view_format = to_mtlb_format(desc->Format);
+    // One mip level and one slice (a layered view renders to its first slice).
     switch (desc->ViewDimension) {
+    case D3D12_RTV_DIMENSION_TEXTURE1D:
+        slot->mip_level = desc->Texture1D.MipSlice;
+        break;
+    case D3D12_RTV_DIMENSION_TEXTURE1DARRAY:
+        slot->mip_level = desc->Texture1DArray.MipSlice;
+        slot->array_slice = desc->Texture1DArray.FirstArraySlice;
+        break;
     case D3D12_RTV_DIMENSION_TEXTURE2D:
         slot->mip_level = desc->Texture2D.MipSlice;
         break;
     case D3D12_RTV_DIMENSION_TEXTURE2DARRAY:
         slot->mip_level = desc->Texture2DArray.MipSlice;
         slot->array_slice = desc->Texture2DArray.FirstArraySlice;
+        break;
+    case D3D12_RTV_DIMENSION_TEXTURE2DMSARRAY:
+        slot->array_slice = desc->Texture2DMSArray.FirstArraySlice;
+        break;
+    case D3D12_RTV_DIMENSION_TEXTURE3D:
+        slot->mip_level = desc->Texture3D.MipSlice;
+        slot->array_slice = desc->Texture3D.FirstWSlice;
+        break;
+    default:
+        break;
+    }
+}
+
+void Device::CreateDepthStencilView(ID3D12Resource *resource, const D3D12_DEPTH_STENCIL_VIEW_DESC *desc,
+                                    D3D12_CPU_DESCRIPTOR_HANDLE dest)
+{
+    auto *slot = reinterpret_cast<RenderTargetDescriptor *>(dest.ptr);
+    *slot = {};
+    auto *texture = ours<Resource>(resource);
+    if (!texture || texture->is_buffer())
+        return;
+
+    slot->texture = texture->texture();
+    if (!desc)
+        return;
+    if (desc->Format != DXGI_FORMAT_UNKNOWN && to_mtlb_format(desc->Format) != to_mtlb_format(texture->desc().Format))
+        slot->view_format = to_mtlb_format(desc->Format);
+    if (desc->Flags & D3D12_DSV_FLAG_READ_ONLY_DEPTH)
+        slot->flags |= MTLB_DEPTH_READ_ONLY;
+    if (desc->Flags & D3D12_DSV_FLAG_READ_ONLY_STENCIL)
+        slot->flags |= MTLB_STENCIL_READ_ONLY;
+    switch (desc->ViewDimension) {
+    case D3D12_DSV_DIMENSION_TEXTURE1D:
+        slot->mip_level = desc->Texture1D.MipSlice;
+        break;
+    case D3D12_DSV_DIMENSION_TEXTURE1DARRAY:
+        slot->mip_level = desc->Texture1DArray.MipSlice;
+        slot->array_slice = desc->Texture1DArray.FirstArraySlice;
+        break;
+    case D3D12_DSV_DIMENSION_TEXTURE2D:
+        slot->mip_level = desc->Texture2D.MipSlice;
+        break;
+    case D3D12_DSV_DIMENSION_TEXTURE2DARRAY:
+        slot->mip_level = desc->Texture2DArray.MipSlice;
+        slot->array_slice = desc->Texture2DArray.FirstArraySlice;
+        break;
+    case D3D12_DSV_DIMENSION_TEXTURE2DMSARRAY:
+        slot->array_slice = desc->Texture2DMSArray.FirstArraySlice;
         break;
     default:
         break;

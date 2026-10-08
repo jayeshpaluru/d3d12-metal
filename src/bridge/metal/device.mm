@@ -26,14 +26,17 @@ Buffer *find_buffer(Device *device, uint64_t address, uint64_t *offset)
     std::shared_lock<std::shared_mutex> lock(device->buffers_mutex);
     auto it = std::upper_bound(device->buffers.begin(), device->buffers.end(), address,
                                [](uint64_t a, const std::pair<uint64_t, Buffer *> &b) { return a < b.first; });
-    if (it == device->buffers.begin())
-        return nullptr;
-    --it;
-    Buffer *buffer = it->second;
-    if (address - buffer->gpu_address >= buffer->size)
-        return nullptr;
-    *offset = address - buffer->gpu_address;
-    return buffer;
+    // Buffers placed over each other in a heap overlap: the nearest start below may be a short one, so look
+    // back through the buffers that start at or before the address until one covers it.
+    for (int steps = 0; it != device->buffers.begin() && steps < 64; ++steps) {
+        --it;
+        Buffer *buffer = it->second;
+        if (address - buffer->gpu_address < buffer->size) {
+            *offset = address - buffer->gpu_address;
+            return buffer;
+        }
+    }
+    return nullptr;
 }
 
 void commit_residency(Device *device)
@@ -156,12 +159,7 @@ mtlb_result mtlb_buffer_create(mtlb_device handle, uint64_t size, mtlb_storage s
         return fail(MTLB_ERROR_OUT_OF_MEMORY, "newBufferWithLength failed");
 
     auto *buffer = new Buffer(device, mtl_buffer, mtl_buffer.gpuAddress, size);
-    {
-        std::lock_guard<std::shared_mutex> lock(device->buffers_mutex);
-        auto at = std::lower_bound(device->buffers.begin(), device->buffers.end(), buffer->gpu_address,
-                                   [](const std::pair<uint64_t, Buffer *> &b, uint64_t a) { return b.first < a; });
-        device->buffers.insert(at, {buffer->gpu_address, buffer});
-    }
+    register_buffer(buffer);
     device->add_resident(mtl_buffer);
 
     if (info) {
@@ -178,15 +176,9 @@ void mtlb_buffer_destroy(mtlb_buffer handle)
     Buffer *buffer = from_handle<Buffer>(handle);
     if (!buffer)
         return;
-    {
-        std::lock_guard<std::shared_mutex> lock(buffer->device->buffers_mutex);
-        auto &buffers = buffer->device->buffers;
-        auto at = std::lower_bound(buffers.begin(), buffers.end(), buffer->gpu_address,
-                                   [](const std::pair<uint64_t, Buffer *> &b, uint64_t a) { return b.first < a; });
-        if (at != buffers.end() && at->first == buffer->gpu_address)
-            buffers.erase(at);
-    }
-    buffer->device->remove_resident(buffer->buffer);
+    unregister_buffer(buffer);
+    if (!buffer->placed)
+        buffer->device->remove_resident(buffer->buffer);
     delete buffer;
 }
 
@@ -203,42 +195,10 @@ mtlb_result mtlb_texture_create(mtlb_device handle, const mtlb_texture_desc *des
     if (!device || !desc || !out)
         return MTLB_ERROR_INVALID_ARGUMENT;
 
-    const bool depth_stencil = desc->usage & MTLB_TEXTURE_USAGE_DEPTH_STENCIL;
-    MTLPixelFormat pixel_format = to_texture_pixel_format(desc->format, depth_stencil);
-    if (pixel_format == MTLPixelFormatInvalid)
-        return fail(MTLB_ERROR_UNSUPPORTED, "unsupported texture format " + std::to_string(desc->format));
-
-    MTLTextureDescriptor *td = [MTLTextureDescriptor new];
-    td.pixelFormat = pixel_format;
-    td.width = desc->width;
-    td.height = desc->dimension == MTLB_TEXTURE_1D ? 1 : desc->height;
-    td.mipmapLevelCount = desc->mip_levels ? desc->mip_levels : 1;
-    td.sampleCount = desc->sample_count ? desc->sample_count : 1;
-    td.storageMode = desc->storage == MTLB_STORAGE_SHARED ? MTLStorageModeShared : MTLStorageModePrivate;
-
-    // Metal shader converter 3 expects 1D textures to be 2D textures.
-    const bool is_3d = desc->dimension == MTLB_TEXTURE_3D;
-    const bool is_array = !is_3d && desc->depth_or_array_size > 1;
-    if (is_3d) {
-        td.textureType = MTLTextureType3D;
-        td.depth = desc->depth_or_array_size;
-    } else if (td.sampleCount > 1) {
-        td.textureType = is_array ? MTLTextureType2DMultisampleArray : MTLTextureType2DMultisample;
-    } else {
-        td.textureType = is_array ? MTLTextureType2DArray : MTLTextureType2D;
-    }
-    if (is_array)
-        td.arrayLength = desc->depth_or_array_size;
-
-    MTLTextureUsage usage = MTLTextureUsagePixelFormatView;
-    if (desc->usage & MTLB_TEXTURE_USAGE_SHADER_READ)
-        usage |= MTLTextureUsageShaderRead;
-    if (desc->usage & MTLB_TEXTURE_USAGE_SHADER_WRITE)
-        usage |= MTLTextureUsageShaderWrite;
-    if (desc->usage & MTLB_TEXTURE_USAGE_RENDER_TARGET)
-        usage |= MTLTextureUsageRenderTarget;
-    td.usage = usage;
-
+    std::string error;
+    MTLTextureDescriptor *td = make_texture_descriptor(desc, false, &error);
+    if (!td)
+        return fail(MTLB_ERROR_UNSUPPORTED, error);
     id<MTLTexture> mtl_texture = [device->device newTextureWithDescriptor:td];
     if (!mtl_texture)
         return fail(MTLB_ERROR_OUT_OF_MEMORY, "newTextureWithDescriptor failed");
@@ -255,7 +215,8 @@ void mtlb_texture_destroy(mtlb_texture handle)
     Texture *texture = from_handle<Texture>(handle);
     if (!texture)
         return;
-    texture->device->remove_resident(texture->texture);
+    if (!texture->placed)
+        texture->device->remove_resident(texture->texture);
     delete texture;
 }
 

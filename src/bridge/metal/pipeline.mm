@@ -230,10 +230,6 @@ MTLStencilDescriptor *to_stencil(const mtlb_stencil_face &face, uint32_t read_ma
     return s;
 }
 
-// Render passes never attach depth-stencil yet (DSV milestone). Until they do,
-// pipelines declare no depth or stencil format and depth-stencil state stays off.
-constexpr bool kDepthStencilSupported = false;
-
 // Returns the shared depth-stencil state for the description's relevant fields.
 id<MTLDepthStencilState> get_depth_stencil(Device *device, const mtlb_pipeline_desc &desc, bool enabled)
 {
@@ -355,7 +351,8 @@ extern "C" mtlb_result mtlb_pipeline_create(mtlb_device handle, const mtlb_pipel
     MTLRenderPipelineDescriptor *pd = [MTLRenderPipelineDescriptor new];
     pd.vertexFunction = vs->function;
     pd.fragmentFunction = ps ? ps->function : nil;
-    pd.rasterizationEnabled = ps != nullptr;
+    // A depth-only pipeline has no fragment function but still rasterizes.
+    pd.rasterizationEnabled = ps != nullptr || desc->dsv_format != MTLB_FORMAT_UNKNOWN;
     pd.rasterSampleCount = desc->sample_count ? desc->sample_count : 1;
     pd.inputPrimitiveTopology = to_topology_class(desc->topology_type);
 
@@ -388,11 +385,17 @@ extern "C" mtlb_result mtlb_pipeline_create(mtlb_device handle, const mtlb_pipel
         ca.alphaBlendOperation = to_blend_op(blend.blend_op_alpha);
     }
 
-    if (!kDepthStencilSupported
-        && (desc->dsv_format != MTLB_FORMAT_UNKNOWN || desc->depth_enable || desc->stencil_enable)) {
-        static std::atomic<bool> logged{false};
-        if (!logged.exchange(true))
-            std::fprintf(stderr, "d3d12-metal: depth-stencil is not supported yet, pipelines render without it\n");
+    // D24_UNORM_S8_UINT is a 32-bit depth with 8-bit stencil here (docs/STATUS.md).
+    MTLPixelFormat depth_format = MTLPixelFormatInvalid, stencil_format = MTLPixelFormatInvalid;
+    if (desc->dsv_format != MTLB_FORMAT_UNKNOWN) {
+        depth_format = to_texture_pixel_format(desc->dsv_format, true);
+        if (depth_format == MTLPixelFormatInvalid)
+            return fail(MTLB_ERROR_UNSUPPORTED, "unsupported depth-stencil format " + std::to_string(desc->dsv_format));
+        pd.depthAttachmentPixelFormat = depth_format;
+        if (depth_format == MTLPixelFormatDepth32Float_Stencil8) {
+            stencil_format = depth_format;
+            pd.stencilAttachmentPixelFormat = stencil_format;
+        }
     }
 
     NSError *ns_error = nil;
@@ -400,13 +403,19 @@ extern "C" mtlb_result mtlb_pipeline_create(mtlb_device handle, const mtlb_pipel
     if (!state)
         return fail(MTLB_ERROR_COMPILE_FAILED, std::string("newRenderPipelineState: ") + ns_error.localizedDescription.UTF8String);
 
-    id<MTLDepthStencilState> depth_stencil = get_depth_stencil(device, *desc, kDepthStencilSupported);
-    if (!depth_stencil)
+    id<MTLDepthStencilState> depth_stencil = get_depth_stencil(device, *desc, true);
+    id<MTLDepthStencilState> depth_stencil_off = get_depth_stencil(device, *desc, false);
+    if (!depth_stencil || !depth_stencil_off)
         return fail(MTLB_ERROR_COMPILE_FAILED, "newDepthStencilState failed");
 
     auto *pipeline = new Pipeline();
+    pipeline->device = device;
     pipeline->state = state;
+    pipeline->descriptor = pd;
+    pipeline->depth_format = depth_format;
+    pipeline->stencil_format = stencil_format;
     pipeline->depth_stencil = depth_stencil;
+    pipeline->depth_stencil_off = depth_stencil_off;
     pipeline->cull_mode = desc->cull_mode == MTLB_CULL_FRONT ? MTLCullModeFront
                           : desc->cull_mode == MTLB_CULL_BACK ? MTLCullModeBack : MTLCullModeNone;
     pipeline->winding = desc->front_counter_clockwise ? MTLWindingCounterClockwise : MTLWindingClockwise;
@@ -417,6 +426,28 @@ extern "C" mtlb_result mtlb_pipeline_create(mtlb_device handle, const mtlb_pipel
     pipeline->depth_bias_clamp = desc->depth_bias_clamp;
     *out = to_handle(pipeline);
     return MTLB_OK;
+}
+
+id<MTLRenderPipelineState> mtlb::Pipeline::state_for(MTLPixelFormat depth, MTLPixelFormat stencil)
+{
+    if (depth == depth_format && stencil == stencil_format)
+        return state;
+    const uint64_t key = (uint64_t(depth) << 32) | uint64_t(stencil);
+    std::lock_guard<std::mutex> lock(variants_mutex);
+    auto it = variants.find(key);
+    if (it != variants.end())
+        return it->second;
+    MTLRenderPipelineDescriptor *copy = [descriptor copy];
+    copy.depthAttachmentPixelFormat = depth;
+    copy.stencilAttachmentPixelFormat = stencil;
+    NSError *error = nil;
+    id<MTLRenderPipelineState> variant = [device->device newRenderPipelineStateWithDescriptor:copy error:&error];
+    if (!variant) {
+        fail(MTLB_ERROR_COMPILE_FAILED, std::string("pipeline variant for another depth-stencil format: ") + error.localizedDescription.UTF8String);
+        return nil;
+    }
+    variants.emplace(key, variant);
+    return variant;
 }
 
 extern "C" mtlb_result mtlb_compute_pipeline_create(mtlb_device handle, const mtlb_compute_pipeline_desc *desc,

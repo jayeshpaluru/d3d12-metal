@@ -55,6 +55,7 @@ typedef enum mtlb_cmd_type {
     MTLB_CMD_DISPATCH,
     MTLB_CMD_CLEAR_BUFFER,
     MTLB_CMD_CLEAR_TEXTURE_UAV,
+    MTLB_CMD_CLEAR_DSV,
 } mtlb_cmd_type;
 
 typedef struct mtlb_cmd_header {
@@ -85,14 +86,34 @@ typedef struct mtlb_render_target {
     uint32_t reserved;
 } mtlb_render_target;
 
-/* Binds the colour targets for later draws. Depth-stencil views are not
- * recorded yet (DSV milestone). */
+enum {
+    MTLB_DEPTH_READ_ONLY = 1u << 0,    /* the depth plane is only read */
+    MTLB_STENCIL_READ_ONLY = 1u << 1,
+};
+
+/* Binds the colour targets and the depth-stencil view (texture 0: none) for later draws. */
 typedef struct mtlb_cmd_set_render_targets {
     mtlb_cmd_header header;
     uint32_t count;            /* at most MTLB_MAX_RENDER_TARGETS */
-    uint32_t reserved;
+    uint32_t depth_flags;      /* MTLB_DEPTH_READ_ONLY | MTLB_STENCIL_READ_ONLY */
+    mtlb_render_target depth;
     mtlb_render_target targets[];
 } mtlb_cmd_set_render_targets;
+
+enum {
+    MTLB_CLEAR_DEPTH = 1u << 0,
+    MTLB_CLEAR_STENCIL = 1u << 1,
+};
+
+/* Clears the depth and/or stencil plane of a view. The view need not be bound. */
+typedef struct mtlb_cmd_clear_dsv {
+    mtlb_cmd_header header;
+    mtlb_render_target target;
+    uint32_t flags;            /* MTLB_CLEAR_* */
+    float depth;
+    uint32_t stencil;
+    uint32_t reserved;
+} mtlb_cmd_clear_dsv;
 
 /* Clears one view. The view need not be bound. */
 typedef struct mtlb_cmd_clear_rtv {
@@ -228,7 +249,7 @@ typedef struct mtlb_texture_copy_region {
     uint32_t array_slice;
     uint32_t x, y, z;
     uint32_t width, height, depth;
-    uint32_t reserved;
+    uint32_t plane;            /* depth-stencil textures: 0 depth, 1 stencil; else 0 */
 } mtlb_texture_copy_region;
 
 /* Used by both MTLB_CMD_COPY_TEXTURE_TO_BUFFER and MTLB_CMD_COPY_BUFFER_TO_TEXTURE;
@@ -300,8 +321,9 @@ MTLB_ASSERT_SIZE(mtlb_cmd_dispatch, 24);
 MTLB_ASSERT_SIZE(mtlb_cmd_set_descriptor_heaps, 24);
 MTLB_ASSERT_SIZE(mtlb_cmd_copy_texture_texture, 80);
 MTLB_ASSERT_SIZE(mtlb_render_target, 24);
-MTLB_ASSERT_SIZE(mtlb_cmd_set_render_targets, 16);
-MTLB_ASSERT_OFFSET(mtlb_cmd_set_render_targets, targets, 16);
+MTLB_ASSERT_SIZE(mtlb_cmd_set_render_targets, 40);
+MTLB_ASSERT_OFFSET(mtlb_cmd_set_render_targets, targets, 40);
+MTLB_ASSERT_SIZE(mtlb_cmd_clear_dsv, 48);
 MTLB_ASSERT_SIZE(mtlb_cmd_clear_rtv, 48);
 MTLB_ASSERT_OFFSET(mtlb_cmd_clear_rtv, color, 32);
 MTLB_ASSERT_SIZE(mtlb_cmd_reset_state, 8);

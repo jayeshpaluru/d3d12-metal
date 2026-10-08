@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <optional>
 #include <vector>
 
 #define IR_PRIVATE_IMPLEMENTATION
@@ -66,6 +67,8 @@ struct Target {
 struct DrawState {
     Target targets[MTLB_MAX_RENDER_TARGETS];
     uint32_t num_targets = 0;
+    Target depth;                // the depth-stencil view; no texture: none
+    uint32_t depth_flags = 0;    // MTLB_*_READ_ONLY
     Pipeline *pipeline = nullptr;
     MTLViewport viewports[MTLB_MAX_VIEWPORTS];
     uint32_t num_viewports = 0;
@@ -117,10 +120,14 @@ private:
         kAll = (kHeaps << 1) - 1,
     };
 
-    // A CLEAR_RTV waiting for the next pass that binds its view (or a clear-only pass).
+    // A CLEAR_RTV or CLEAR_DSV waiting for the next pass that binds its view (or a clear-only pass).
     struct PendingClear {
         Target target;
-        float color[4];
+        bool depth_stencil = false;
+        float color[4] = {};      // colour clears
+        uint32_t aspects = 0;     // depth-stencil clears: MTLB_CLEAR_DEPTH | MTLB_CLEAR_STENCIL
+        float depth = 0;
+        uint32_t stencil = 0;
     };
 
     void mark_all_dirty() { dirty_ = kAll; }
@@ -133,6 +140,8 @@ private:
     mtlb_result reset_state(const mtlb_cmd_reset_state &cmd);
     mtlb_result set_render_targets(const mtlb_cmd_set_render_targets &cmd);
     mtlb_result clear_rtv(const mtlb_cmd_clear_rtv &cmd);
+    mtlb_result clear_dsv(const mtlb_cmd_clear_dsv &cmd);
+    mtlb_result add_clear(const PendingClear &clear);
     mtlb_result set_pipeline(const mtlb_cmd_set_pipeline &cmd);
     mtlb_result set_viewports(const mtlb_cmd_set_viewports &cmd);
     mtlb_result set_scissors(const mtlb_cmd_set_scissors &cmd);
@@ -156,7 +165,8 @@ private:
     mtlb_result copy_buffer_to_texture(const mtlb_cmd_copy_texture &cmd);
 
     mtlb_result resolve_target(const mtlb_render_target &t, Target *out);
-    bool is_bound(const Target &t) const;
+    bool is_bound(const PendingClear &clear) const;
+    void attach_depth(MTLRenderPassDescriptor *pass, const Target &t, id<MTLTexture> view, const PendingClear *clear);
     mtlb_result open_render_pass();
     mtlb_result flush_clears(bool keep_bound);
     mtlb_result clear_only_pass(const PendingClear &clear);
@@ -225,6 +235,8 @@ private:
     uint32_t dirty_ = kAll;  // state_ pieces the current render encoder has not seen
     uint32_t dirty_compute_ = kAll;  // the same for the compute encoder
     NSUInteger target_width_ = 0, target_height_ = 0;
+    MTLPixelFormat pass_depth_format_ = MTLPixelFormatInvalid;    // attachments of the open pass
+    MTLPixelFormat pass_stencil_format_ = MTLPixelFormatInvalid;
 };
 
 void Replay::note_error(mtlb_result result)
@@ -318,9 +330,11 @@ mtlb_result Replay::resolve_target(const mtlb_render_target &t, Target *out)
     return MTLB_OK;
 }
 
-bool Replay::is_bound(const Target &t) const
+bool Replay::is_bound(const PendingClear &clear) const
 {
-    return std::find(state_.targets, state_.targets + state_.num_targets, t) != state_.targets + state_.num_targets;
+    if (clear.depth_stencil)
+        return state_.depth == clear.target;
+    return std::find(state_.targets, state_.targets + state_.num_targets, clear.target) != state_.targets + state_.num_targets;
 }
 
 mtlb_result Replay::set_render_targets(const mtlb_cmd_set_render_targets &cmd)
@@ -333,14 +347,21 @@ mtlb_result Replay::set_render_targets(const mtlb_cmd_set_render_targets &cmd)
         if (result != MTLB_OK)
             return result;
     }
+    Target depth;
+    mtlb_result result = resolve_target(cmd.depth, &depth);
+    if (result != MTLB_OK)
+        return result;
     // Binding the same targets again must not break the pass.
-    if (cmd.count == state_.num_targets && std::equal(targets, targets + cmd.count, state_.targets))
+    if (cmd.count == state_.num_targets && std::equal(targets, targets + cmd.count, state_.targets)
+        && depth == state_.depth && cmd.depth_flags == state_.depth_flags)
         return MTLB_OK;
 
     end_render();
     std::copy(targets, targets + cmd.count, state_.targets);
     std::fill(state_.targets + cmd.count, state_.targets + MTLB_MAX_RENDER_TARGETS, Target{});
     state_.num_targets = cmd.count;
+    state_.depth = depth;
+    state_.depth_flags = cmd.depth_flags;
     // Clears for views that are no longer bound can only run as passes of their own.
     return flush_clears(true);
 }
@@ -353,26 +374,57 @@ mtlb_result Replay::clear_rtv(const mtlb_cmd_clear_rtv &cmd)
         return result;
     if (!target.texture)
         return fail(MTLB_ERROR_INVALID_ARGUMENT, "CLEAR_RTV without a texture");
+    PendingClear clear;
+    clear.target = target;
+    std::copy_n(cmd.color, 4, clear.color);
+    return add_clear(clear);
+}
+
+mtlb_result Replay::clear_dsv(const mtlb_cmd_clear_dsv &cmd)
+{
+    PendingClear clear;
+    mtlb_result result = resolve_target(cmd.target, &clear.target);
+    if (result != MTLB_OK)
+        return result;
+    if (!clear.target.texture)
+        return fail(MTLB_ERROR_INVALID_ARGUMENT, "CLEAR_DSV without a texture");
+    clear.depth_stencil = true;
+    clear.aspects = cmd.flags;
+    clear.depth = cmd.depth;
+    clear.stencil = cmd.stencil;
+    return add_clear(clear);
+}
+
+// A clear waits for the next pass that binds its view and becomes that pass's load action.
+mtlb_result Replay::add_clear(const PendingClear &clear)
+{
     if (render_) {
         // Draws may already have landed in the open pass. A clear of one of its
         // targets must come after them; a clear of any other view must not stay
         // pending while later draws in this list might read it. Either way the
         // pass ends, and a view outside it is cleared at once.
-        const bool bound = is_bound(target);
+        const bool bound = is_bound(clear);
         end_render();
-        if (!bound) {
-            PendingClear clear{target, {}};
-            std::copy_n(cmd.color, 4, clear.color);
+        if (!bound)
             return clear_only_pass(clear);
+    }
+    auto same_view = [&](const PendingClear &c) { return c.target == clear.target && c.depth_stencil == clear.depth_stencil; };
+    PendingClear merged = clear;
+    // A newer clear of the same view supersedes a pending one (for depth-stencil, plane by plane).
+    for (const PendingClear &c : clears_) {
+        if (!same_view(c) || !clear.depth_stencil)
+            continue;
+        if (!(clear.aspects & MTLB_CLEAR_DEPTH) && (c.aspects & MTLB_CLEAR_DEPTH)) {
+            merged.aspects |= MTLB_CLEAR_DEPTH;
+            merged.depth = c.depth;
+        }
+        if (!(clear.aspects & MTLB_CLEAR_STENCIL) && (c.aspects & MTLB_CLEAR_STENCIL)) {
+            merged.aspects |= MTLB_CLEAR_STENCIL;
+            merged.stencil = c.stencil;
         }
     }
-    // A newer clear of the same view supersedes a pending one.
-    clears_.erase(std::remove_if(clears_.begin(), clears_.end(),
-                                 [&](const PendingClear &c) { return c.target == target; }),
-                  clears_.end());
-    PendingClear clear{target, {}};
-    std::copy_n(cmd.color, 4, clear.color);
-    clears_.push_back(clear);
+    clears_.erase(std::remove_if(clears_.begin(), clears_.end(), same_view), clears_.end());
+    clears_.push_back(merged);
     return MTLB_OK;
 }
 
@@ -382,7 +434,7 @@ mtlb_result Replay::flush_clears(bool keep_bound)
 {
     end_render();
     for (auto it = clears_.begin(); it != clears_.end();) {
-        if (keep_bound && is_bound(it->target)) {
+        if (keep_bound && is_bound(*it)) {
             ++it;
             continue;
         }
@@ -394,19 +446,70 @@ mtlb_result Replay::flush_clears(bool keep_bound)
     return MTLB_OK;
 }
 
+// Sets up the depth and stencil attachments of `pass` on `view`, clearing the planes `clear` names.
+void Replay::attach_depth(MTLRenderPassDescriptor *pass, const Target &t, id<MTLTexture> view, const PendingClear *clear)
+{
+    const bool has_stencil = view.pixelFormat == MTLPixelFormatDepth32Float_Stencil8;
+    const uint32_t aspects = clear ? clear->aspects : 0;
+    MTLRenderPassDepthAttachmentDescriptor *da = pass.depthAttachment;
+    da.texture = view;
+    da.level = t.mip_level;
+    da.slice = t.array_slice;
+    da.storeAction = MTLStoreActionStore;
+    da.loadAction = (aspects & MTLB_CLEAR_DEPTH) ? MTLLoadActionClear : MTLLoadActionLoad;
+    if (aspects & MTLB_CLEAR_DEPTH)
+        da.clearDepth = clear->depth;
+    if (has_stencil) {
+        MTLRenderPassStencilAttachmentDescriptor *sa = pass.stencilAttachment;
+        sa.texture = view;
+        sa.level = t.mip_level;
+        sa.slice = t.array_slice;
+        sa.storeAction = MTLStoreActionStore;
+        sa.loadAction = (aspects & MTLB_CLEAR_STENCIL) ? MTLLoadActionClear : MTLLoadActionLoad;
+        if (aspects & MTLB_CLEAR_STENCIL)
+            sa.clearStencil = clear->stencil;
+    }
+}
+
 mtlb_result Replay::clear_only_pass(const PendingClear &clear)
 {
     id<MTLTexture> view = attachment_texture(clear.target.texture, clear.target.view_format);
     if (!view)
         return fail(MTLB_ERROR_UNSUPPORTED, "unsupported attachment view format");
     MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
-    MTLRenderPassColorAttachmentDescriptor *ca = pass.colorAttachments[0];
-    ca.texture = view;
-    ca.level = clear.target.mip_level;
-    ca.slice = clear.target.array_slice;
-    ca.loadAction = MTLLoadActionClear;
-    ca.storeAction = MTLStoreActionStore;
-    ca.clearColor = MTLClearColorMake(clear.color[0], clear.color[1], clear.color[2], clear.color[3]);
+    if (clear.depth_stencil) {
+        // Only the planes being cleared are attached; the other keeps its contents.
+        const bool has_stencil = view.pixelFormat == MTLPixelFormatDepth32Float_Stencil8;
+        if (clear.aspects & MTLB_CLEAR_DEPTH) {
+            MTLRenderPassDepthAttachmentDescriptor *da = pass.depthAttachment;
+            da.texture = view;
+            da.level = clear.target.mip_level;
+            da.slice = clear.target.array_slice;
+            da.loadAction = MTLLoadActionClear;
+            da.storeAction = MTLStoreActionStore;
+            da.clearDepth = clear.depth;
+        }
+        if (has_stencil && (clear.aspects & MTLB_CLEAR_STENCIL)) {
+            MTLRenderPassStencilAttachmentDescriptor *sa = pass.stencilAttachment;
+            sa.texture = view;
+            sa.level = clear.target.mip_level;
+            sa.slice = clear.target.array_slice;
+            sa.loadAction = MTLLoadActionClear;
+            sa.storeAction = MTLStoreActionStore;
+            sa.clearStencil = clear.stencil;
+        }
+    } else {
+        MTLRenderPassColorAttachmentDescriptor *ca = pass.colorAttachments[0];
+        ca.texture = view;
+        ca.level = clear.target.mip_level;
+        if (view.textureType == MTLTextureType3D)
+            ca.depthPlane = clear.target.array_slice;
+        else
+            ca.slice = clear.target.array_slice;
+        ca.loadAction = MTLLoadActionClear;
+        ca.storeAction = MTLStoreActionStore;
+        ca.clearColor = MTLClearColorMake(clear.color[0], clear.color[1], clear.color[2], clear.color[3]);
+    }
     render_ = new_render_encoder(pass);
     end_render();
     return MTLB_OK;
@@ -423,6 +526,16 @@ mtlb_result Replay::open_render_pass()
 
     MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
     target_width_ = target_height_ = 0;
+    pass_depth_format_ = pass_stencil_format_ = MTLPixelFormatInvalid;
+    auto take_clear = [&](const Target &t, bool depth_stencil) -> std::optional<PendingClear> {
+        auto it = std::find_if(clears_.begin(), clears_.end(),
+                               [&](const PendingClear &c) { return c.target == t && c.depth_stencil == depth_stencil; });
+        if (it == clears_.end())
+            return std::nullopt;
+        PendingClear clear = *it;
+        clears_.erase(it);
+        return clear;
+    };
     for (uint32_t i = 0; i < state_.num_targets; ++i) {
         const Target &t = state_.targets[i];
         if (!t.texture)
@@ -433,15 +546,30 @@ mtlb_result Replay::open_render_pass()
         MTLRenderPassColorAttachmentDescriptor *ca = pass.colorAttachments[i];
         ca.texture = view;
         ca.level = t.mip_level;
-        ca.slice = t.array_slice;
+        if (view.textureType == MTLTextureType3D)
+            ca.depthPlane = t.array_slice;
+        else
+            ca.slice = t.array_slice;
         ca.loadAction = MTLLoadActionLoad;
         ca.storeAction = MTLStoreActionStore;
-        auto clear = std::find_if(clears_.begin(), clears_.end(), [&](const PendingClear &c) { return c.target == t; });
-        if (clear != clears_.end()) {
+        if (std::optional<PendingClear> clear = take_clear(t, false)) {
             ca.loadAction = MTLLoadActionClear;
             ca.clearColor = MTLClearColorMake(clear->color[0], clear->color[1], clear->color[2], clear->color[3]);
-            clears_.erase(clear);
         }
+        NSUInteger w = std::max<NSUInteger>(view.width >> t.mip_level, 1);
+        NSUInteger h = std::max<NSUInteger>(view.height >> t.mip_level, 1);
+        target_width_ = target_width_ ? std::min(target_width_, w) : w;
+        target_height_ = target_height_ ? std::min(target_height_, h) : h;
+    }
+    if (state_.depth.texture) {
+        const Target &t = state_.depth;
+        id<MTLTexture> view = attachment_texture(t.texture, t.view_format);
+        if (!view)
+            return fail(MTLB_ERROR_UNSUPPORTED, "unsupported depth-stencil view format");
+        const std::optional<PendingClear> clear = take_clear(t, true);
+        attach_depth(pass, t, view, clear ? &*clear : nullptr);
+        pass_depth_format_ = view.pixelFormat;
+        pass_stencil_format_ = view.pixelFormat == MTLPixelFormatDepth32Float_Stencil8 ? view.pixelFormat : MTLPixelFormatInvalid;
         NSUInteger w = std::max<NSUInteger>(view.width >> t.mip_level, 1);
         NSUInteger h = std::max<NSUInteger>(view.height >> t.mip_level, 1);
         target_width_ = target_width_ ? std::min(target_width_, w) : w;
@@ -465,8 +593,13 @@ mtlb_result Replay::apply_state()
     }
 
     if (dirty_ & kPipeline) {
-        [render_ setRenderPipelineState:state_.pipeline->state];
-        [render_ setDepthStencilState:state_.pipeline->depth_stencil];
+        id<MTLRenderPipelineState> pipeline_state = state_.pipeline->state_for(pass_depth_format_, pass_stencil_format_);
+        if (!pipeline_state)
+            return MTLB_ERROR_COMPILE_FAILED;
+        [render_ setRenderPipelineState:pipeline_state];
+        // Without a depth-stencil attachment, depth and stencil tests pass, as in D3D12.
+        [render_ setDepthStencilState:pass_depth_format_ == MTLPixelFormatInvalid ? state_.pipeline->depth_stencil_off
+                                                                                  : state_.pipeline->depth_stencil];
         [render_ setCullMode:state_.pipeline->cull_mode];
         [render_ setFrontFacingWinding:state_.pipeline->winding];
         [render_ setTriangleFillMode:state_.pipeline->fill_mode];
@@ -512,7 +645,8 @@ mtlb_result Replay::begin_draw(bool *ready)
     *ready = false;
     if (!state_.pipeline)
         return fail(MTLB_ERROR_INVALID_ARGUMENT, "draw without a pipeline");
-    if (std::none_of(state_.targets, state_.targets + state_.num_targets, [](const Target &t) { return t.texture; })) {
+    if (!state_.depth.texture
+        && std::none_of(state_.targets, state_.targets + state_.num_targets, [](const Target &t) { return t.texture; })) {
         if (!warned_no_targets_)
             std::fprintf(stderr, "d3d12-metal: draw skipped, no render targets are bound\n");
         warned_no_targets_ = true;
@@ -563,14 +697,18 @@ mtlb_result Replay::copy_texture(const mtlb_texture_copy_region &r, bool to_buff
         return fail(MTLB_ERROR_INVALID_ARGUMENT, "invalid texture copy");
     MTLOrigin origin = {r.x, r.y, r.z};
     MTLSize size = {r.width, r.height, r.depth};
+    // A depth-stencil texture is copied one plane at a time.
+    MTLBlitOption options = MTLBlitOptionNone;
+    if (texture->texture.pixelFormat == MTLPixelFormatDepth32Float_Stencil8)
+        options = r.plane == 0 ? MTLBlitOptionDepthFromDepthStencil : MTLBlitOptionStencilFromDepthStencil;
     if (to_buffer) {
         [enc copyFromTexture:texture->texture sourceSlice:r.array_slice sourceLevel:r.mip_level
                 sourceOrigin:origin sourceSize:size toBuffer:buffer->buffer destinationOffset:r.buffer_offset
-           destinationBytesPerRow:r.bytes_per_row destinationBytesPerImage:r.bytes_per_image];
+           destinationBytesPerRow:r.bytes_per_row destinationBytesPerImage:r.bytes_per_image options:options];
     } else {
         [enc copyFromBuffer:buffer->buffer sourceOffset:r.buffer_offset sourceBytesPerRow:r.bytes_per_row
             sourceBytesPerImage:r.bytes_per_image sourceSize:size toTexture:texture->texture
-           destinationSlice:r.array_slice destinationLevel:r.mip_level destinationOrigin:origin];
+           destinationSlice:r.array_slice destinationLevel:r.mip_level destinationOrigin:origin options:options];
     }
     return MTLB_OK;
 }
@@ -868,6 +1006,7 @@ mtlb_result Replay::execute(const mtlb_cmd_header *header)
     case MTLB_CMD_RESET_STATE: return dispatch(header, &Replay::reset_state);
     case MTLB_CMD_SET_RENDER_TARGETS: return dispatch(header, &Replay::set_render_targets);
     case MTLB_CMD_CLEAR_RTV: return dispatch(header, &Replay::clear_rtv);
+    case MTLB_CMD_CLEAR_DSV: return dispatch(header, &Replay::clear_dsv);
     case MTLB_CMD_SET_PIPELINE: return dispatch(header, &Replay::set_pipeline);
     case MTLB_CMD_SET_VIEWPORTS: return dispatch(header, &Replay::set_viewports);
     case MTLB_CMD_SET_SCISSORS: return dispatch(header, &Replay::set_scissors);
