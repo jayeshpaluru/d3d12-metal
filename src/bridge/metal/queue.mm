@@ -76,6 +76,7 @@ private:
     };
 
     mtlb_result execute(const mtlb_cmd_header *cmd);
+    mtlb_result reset_state();
     mtlb_result begin_render_pass(const mtlb_cmd_begin_render_pass *cmd);
     mtlb_result apply_state();
     mtlb_result draw(const mtlb_cmd_draw *cmd);
@@ -313,9 +314,70 @@ mtlb_result Replay::copy_texture(const mtlb_texture_copy_region &r, bool to_buff
     return MTLB_OK;
 }
 
+// Size of the fixed part of each record type, or 0 for an unknown type.
+size_t fixed_size(uint32_t type)
+{
+    switch (type) {
+    case MTLB_CMD_BEGIN_RENDER_PASS: return sizeof(mtlb_cmd_begin_render_pass);
+    case MTLB_CMD_END_RENDER_PASS: return sizeof(mtlb_cmd_end_render_pass);
+    case MTLB_CMD_SET_PIPELINE: return sizeof(mtlb_cmd_set_pipeline);
+    case MTLB_CMD_SET_VIEWPORTS: return sizeof(mtlb_cmd_set_viewports);
+    case MTLB_CMD_SET_SCISSORS: return sizeof(mtlb_cmd_set_scissors);
+    case MTLB_CMD_SET_TOPOLOGY: return sizeof(mtlb_cmd_set_topology);
+    case MTLB_CMD_SET_VERTEX_BUFFERS: return sizeof(mtlb_cmd_set_vertex_buffers);
+    case MTLB_CMD_SET_INDEX_BUFFER: return sizeof(mtlb_cmd_set_index_buffer);
+    case MTLB_CMD_SET_GRAPHICS_ROOT_ARGS: return sizeof(mtlb_cmd_set_graphics_root_args);
+    case MTLB_CMD_SET_BLEND_FACTOR: return sizeof(mtlb_cmd_set_blend_factor);
+    case MTLB_CMD_SET_STENCIL_REF: return sizeof(mtlb_cmd_set_stencil_ref);
+    case MTLB_CMD_DRAW: return sizeof(mtlb_cmd_draw);
+    case MTLB_CMD_DRAW_INDEXED: return sizeof(mtlb_cmd_draw_indexed);
+    case MTLB_CMD_COPY_BUFFER: return sizeof(mtlb_cmd_copy_buffer);
+    case MTLB_CMD_COPY_TEXTURE_TO_BUFFER: return sizeof(mtlb_cmd_copy_texture_to_buffer);
+    case MTLB_CMD_COPY_BUFFER_TO_TEXTURE: return sizeof(mtlb_cmd_copy_buffer_to_texture);
+    case MTLB_CMD_SIGNAL_EVENT: return sizeof(mtlb_cmd_signal_event);
+    case MTLB_CMD_WAIT_EVENT: return sizeof(mtlb_cmd_wait_event);
+    case MTLB_CMD_RESET_STATE: return sizeof(mtlb_cmd_reset_state);
+    default: return 0;
+    }
+}
+
+// True when `count` elements of `element_size` bytes fit after the fixed part
+// of a record of `size` bytes.
+bool array_fits(uint32_t size, size_t fixed, uint64_t count, size_t element_size)
+{
+    return count <= (size - fixed) / element_size;
+}
+
+mtlb_result Replay::reset_state()
+{
+    if (render_)
+        return fail(MTLB_ERROR_INVALID_ARGUMENT, "RESET_STATE inside a render pass");
+    pipeline_ = nullptr;
+    viewports_.clear();
+    scissors_.clear();
+    topology_ = MTLB_TOPOLOGY_TRIANGLE_LIST;
+    std::fill(std::begin(vertex_buffers_), std::end(vertex_buffers_), VertexBuffer{});
+    index_address_ = 0;
+    index_size_ = 0;
+    root_args_.clear();
+    std::fill_n(blend_factor_, 4, 1.0f);
+    stencil_ref_ = 0;
+    dirty_ = kAll;
+    vertex_dirty_ = ~0u;
+    return MTLB_OK;
+}
+
 mtlb_result Replay::execute(const mtlb_cmd_header *header)
 {
+    const size_t fixed = fixed_size(header->type);
+    if (!fixed)
+        return fail(MTLB_ERROR_INVALID_ARGUMENT, "unknown command type " + std::to_string(header->type));
+    if (header->size < fixed)
+        return fail(MTLB_ERROR_INVALID_ARGUMENT, "command " + std::to_string(header->type) + " is too small");
+
     switch (header->type) {
+    case MTLB_CMD_RESET_STATE:
+        return reset_state();
     case MTLB_CMD_BEGIN_RENDER_PASS:
         return begin_render_pass(reinterpret_cast<const mtlb_cmd_begin_render_pass *>(header));
     case MTLB_CMD_END_RENDER_PASS:
@@ -330,6 +392,8 @@ mtlb_result Replay::execute(const mtlb_cmd_header *header)
     }
     case MTLB_CMD_SET_VIEWPORTS: {
         auto *cmd = reinterpret_cast<const mtlb_cmd_set_viewports *>(header);
+        if (!array_fits(header->size, fixed, cmd->count, sizeof(mtlb_viewport)))
+            return fail(MTLB_ERROR_INVALID_ARGUMENT, "viewport count exceeds the record");
         viewports_.clear();
         for (uint32_t i = 0; i < cmd->count; ++i) {
             const mtlb_viewport &v = cmd->viewports[i];
@@ -340,6 +404,8 @@ mtlb_result Replay::execute(const mtlb_cmd_header *header)
     }
     case MTLB_CMD_SET_SCISSORS: {
         auto *cmd = reinterpret_cast<const mtlb_cmd_set_scissors *>(header);
+        if (!array_fits(header->size, fixed, cmd->count, sizeof(mtlb_rect)))
+            return fail(MTLB_ERROR_INVALID_ARGUMENT, "scissor count exceeds the record");
         scissors_.assign(cmd->rects, cmd->rects + cmd->count);
         dirty_ |= kScissors;
         return MTLB_OK;
@@ -349,8 +415,9 @@ mtlb_result Replay::execute(const mtlb_cmd_header *header)
         return MTLB_OK;
     case MTLB_CMD_SET_VERTEX_BUFFERS: {
         auto *cmd = reinterpret_cast<const mtlb_cmd_set_vertex_buffers *>(header);
-        if (cmd->start_slot + cmd->count > MTLB_MAX_VERTEX_BUFFERS)
-            return fail(MTLB_ERROR_INVALID_ARGUMENT, "vertex buffer slot out of range");
+        if (uint64_t(cmd->start_slot) + cmd->count > MTLB_MAX_VERTEX_BUFFERS
+            || !array_fits(header->size, fixed, cmd->count, sizeof(mtlb_vertex_buffer)))
+            return fail(MTLB_ERROR_INVALID_ARGUMENT, "vertex buffer slots out of range");
         for (uint32_t i = 0; i < cmd->count; ++i) {
             vertex_buffers_[cmd->start_slot + i] = {cmd->buffers[i].gpu_address, cmd->buffers[i].stride};
             vertex_dirty_ |= 1u << (cmd->start_slot + i);
@@ -365,6 +432,8 @@ mtlb_result Replay::execute(const mtlb_cmd_header *header)
     }
     case MTLB_CMD_SET_GRAPHICS_ROOT_ARGS: {
         auto *cmd = reinterpret_cast<const mtlb_cmd_set_graphics_root_args *>(header);
+        if (!array_fits(header->size, fixed, cmd->data_size, 1))
+            return fail(MTLB_ERROR_INVALID_ARGUMENT, "root argument size exceeds the record");
         root_args_.assign(cmd->data, cmd->data + cmd->data_size);
         dirty_ |= kRootArgs;
         return MTLB_OK;
@@ -409,7 +478,7 @@ mtlb_result Replay::execute(const mtlb_cmd_header *header)
         return MTLB_OK;
     }
     default:
-        return fail(MTLB_ERROR_INVALID_ARGUMENT, "unknown command type " + std::to_string(header->type));
+        return MTLB_ERROR_INVALID_ARGUMENT;  // unreachable: fixed_size() rejects unknown types
     }
 }
 

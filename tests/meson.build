@@ -1,7 +1,7 @@
 test_deps = [directx_headers]
 test_inc = include_directories('.', '../src')
 
-foreach name : ['test_device', 'test_copy', 'test_texture_copy', 'test_rootsig']
+foreach name : ['test_device', 'test_copy', 'test_texture_copy', 'test_bridge_stream', 'test_rootsig']
   exe = executable(
     name, name + '.cpp',
     include_directories: test_inc,

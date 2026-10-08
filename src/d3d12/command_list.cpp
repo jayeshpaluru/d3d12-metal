@@ -54,6 +54,7 @@ HRESULT CommandList::create(Device *device, D3D12_COMMAND_LIST_TYPE type, ID3D12
         && type != D3D12_COMMAND_LIST_TYPE_COPY)
         return E_INVALIDARG;
     auto *list = new CommandList(device, type);
+    list->reset_state();
     if (initial_state)
         list->SetPipelineState(initial_state);
     HRESULT hr = list->QueryInterface(riid, out);
@@ -87,6 +88,8 @@ void CommandList::reset_state()
     safe_release(root_signature_);
     root_args_.clear();
     root_args_dirty_ = false;
+    // Replay state must not leak in from the previous list of the same submit.
+    append<mtlb_cmd_reset_state>(MTLB_CMD_RESET_STATE);
 }
 
 // ---- Render passes ----------------------------------------------------------

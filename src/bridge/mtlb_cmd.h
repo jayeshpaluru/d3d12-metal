@@ -47,6 +47,7 @@ typedef enum mtlb_cmd_type {
     MTLB_CMD_COPY_BUFFER_TO_TEXTURE,
     MTLB_CMD_SIGNAL_EVENT,
     MTLB_CMD_WAIT_EVENT,
+    MTLB_CMD_RESET_STATE,
 } mtlb_cmd_type;
 
 typedef struct mtlb_cmd_header {
@@ -58,6 +59,13 @@ static inline uint32_t mtlb_cmd_align(uint32_t size)
 {
     return (size + 7u) & ~7u;
 }
+
+/* Resets the persistent draw state to its defaults. The front-end starts every
+ * command list with one, so state never leaks from one list to the next within
+ * a single submit. Must not appear inside a render pass. */
+typedef struct mtlb_cmd_reset_state {
+    mtlb_cmd_header header;
+} mtlb_cmd_reset_state;
 
 /* ---- Render passes ------------------------------------------------------ */
 
