@@ -120,6 +120,9 @@ struct Swapchain {
     id<MTLRenderPipelineState> pipeline;  // fullscreen triangle sampling the back buffer
     MTLPixelFormat pixel_format;          // of the layer's drawables
 
+    ~Swapchain();
+    bool layer_owned = false;  // the layer came from the provider and goes back to its releaser
+
     std::atomic<bool> display_sync{true};
 
     // Debug aid: D3D12METAL_DUMP_PRESENT=<file.png> writes what the Nth present

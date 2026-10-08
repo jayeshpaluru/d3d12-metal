@@ -15,6 +15,7 @@ namespace {
 using namespace mtlb;
 
 LayerProvider g_layer_provider = nullptr;
+LayerReleaser g_layer_releaser = nullptr;
 
 const char *const kPresentSource = R"msl(
 #include <metal_stdlib>
@@ -94,9 +95,13 @@ void write_png(id<MTLTexture> texture, const std::string &path)
     CGContextRef context = CGBitmapContextCreate(pixels.mutableBytes, width, height, 8, pitch, color_space,
                                                  kCGImageAlphaNoneSkipFirst | kCGBitmapByteOrder32Little);
     CGImageRef image = context ? CGBitmapContextCreateImage(context) : nullptr;
-    NSURL *url = [NSURL fileURLWithPath:@(path.c_str())];
+    // A path that is not valid UTF-8 would make NSURL's convenience constructors throw.
+    CFURLRef url = CFURLCreateFromFileSystemRepresentation(nullptr, reinterpret_cast<const UInt8 *>(path.c_str()),
+                                                           static_cast<CFIndex>(path.size()), false);
     CGImageDestinationRef destination =
-        CGImageDestinationCreateWithURL((__bridge CFURLRef)url, CFSTR("public.png"), 1, nullptr);
+        url ? CGImageDestinationCreateWithURL(url, CFSTR("public.png"), 1, nullptr) : nullptr;
+    if (url)
+        CFRelease(url);
     bool ok = false;
     if (image && destination) {
         CGImageDestinationAddImage(destination, image, nullptr);
@@ -135,9 +140,21 @@ void draw_present_pass(id<MTLCommandBuffer> command_buffer, id<MTLTexture> targe
 
 namespace mtlb {
 
-void set_layer_provider(LayerProvider provider)
+Swapchain::~Swapchain()
+{
+    if (layer_owned && g_layer_releaser)
+        g_layer_releaser(layer);
+}
+
+void set_layer_provider(LayerProvider provider, LayerReleaser releaser)
 {
     g_layer_provider = provider;
+    g_layer_releaser = releaser;
+}
+
+LayerReleaser layer_releaser()
+{
+    return g_layer_releaser;
 }
 
 LayerProvider layer_provider()
@@ -154,13 +171,19 @@ Drawable acquire_drawable(Swapchain *swapchain, uint32_t sync_interval)
     }
 
     Drawable result;
-    {
-        std::lock_guard<std::mutex> lock(swapchain->mutex);
-        result.pipeline = swapchain->pipeline;
-    }
     // Blocks while every drawable is in flight, which paces the application (and
     // for about a second when the window shows nothing); no lock may be held.
     result.drawable = [swapchain->layer nextDrawable];
+    {
+        // A resize may have changed the format since the drawable was configured
+        // or while it was being acquired: pair the drawable with a pipeline for its
+        // own format, and skip the frame when none matches.
+        std::lock_guard<std::mutex> lock(swapchain->mutex);
+        if (result.drawable && result.drawable.texture.pixelFormat == swapchain->pixel_format)
+            result.pipeline = swapchain->pipeline;
+        else if (result.drawable)
+            result.drawable = nil;
+    }
     if (!result.drawable) {
         static std::atomic<bool> logged{false};
         if (!logged.exchange(true))
@@ -219,6 +242,7 @@ mtlb_result mtlb_swapchain_create(mtlb_device handle, const mtlb_swapchain_desc 
     auto swapchain = std::make_unique<Swapchain>();
     swapchain->device = device;
     swapchain->layer = layer;
+    swapchain->layer_owned = true;
     swapchain->pixel_format = pixel_format;
     // The dump is a BGRA8 PNG: not available for the wider formats.
     if (const char *dump = getenv("D3D12METAL_DUMP_PRESENT");
@@ -231,12 +255,15 @@ mtlb_result mtlb_swapchain_create(mtlb_device handle, const mtlb_swapchain_desc 
     if (!swapchain->pipeline)
         return MTLB_ERROR_COMPILE_FAILED;
     const uint32_t drawables = desc->buffer_count >= 3 ? 3 : 2;
+    // Bounded wait: if the main thread is busy the configuration still happens, just later.
+    id<MTLDevice> mtl_device = device->device;
+    const uint32_t width = desc->width, height = desc->height;  // `desc` is gone if the wait times out
     run_on_main(^{
-        layer.device = device->device;
+        layer.device = mtl_device;
         layer.framebufferOnly = YES;
         layer.maximumDrawableCount = drawables;
         layer.displaySyncEnabled = YES;
-        configure_layer(layer, pixel_format, desc->width, desc->height);
+        configure_layer(layer, pixel_format, width, height);
     });
     *out = to_handle(swapchain.release());
     return MTLB_OK;

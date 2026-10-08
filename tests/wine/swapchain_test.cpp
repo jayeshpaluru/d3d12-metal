@@ -168,9 +168,31 @@ int main()
                 output_desc.DesktopCoordinates.right - output_desc.DesktopCoordinates.left,
                 output_desc.DesktopCoordinates.bottom - output_desc.DesktopCoordinates.top, modes);
 
-    swap_chain.Reset();
-    swap_chain2.Reset();
-    swap_chain1.Reset();
+    // Swap chains come and go on one window: the first and last cycle create the
+    // window's Metal view, the ones in between share it. Every one must present.
+    {
+        ComPtr<IDXGISwapChain1> extra;
+        CHECK_HR(ctx.factory->CreateSwapChainForHwnd(ctx.queue.Get(), window, &desc, nullptr, nullptr, &extra));
+        swap_chain.Reset();
+        swap_chain2.Reset();
+        swap_chain1.Reset();  // the first swap chain, which created the view, goes before `extra`
+        ComPtr<IDXGISwapChain3> extra3;
+        CHECK_HR(extra.As(&extra3));
+        Renderer extra_renderer(ctx, extra3.Get());
+        extra_renderer.frame(colors[1], 1);
+    }
+    for (int i = 0; i < 20; ++i) {
+        DXGI_SWAP_CHAIN_DESC1 cycle_desc = desc;
+        cycle_desc.Flags = 0;
+        cycle_desc.BufferCount = 2 + i % 2;
+        ComPtr<IDXGISwapChain1> cycle;
+        CHECK_HR(ctx.factory->CreateSwapChainForHwnd(ctx.queue.Get(), window, &cycle_desc, nullptr, nullptr, &cycle));
+        ComPtr<IDXGISwapChain3> cycle3;
+        CHECK_HR(cycle.As(&cycle3));
+        Renderer cycle_renderer(ctx, cycle3.Get());
+        cycle_renderer.frame(colors[i % 3], 1);
+    }
+    std::printf("swapchain_test: create/destroy cycles OK\n");
     DestroyWindow(window);
     std::printf("swapchain_test: PASS\n");
     return 0;
