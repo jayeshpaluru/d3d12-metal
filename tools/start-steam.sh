@@ -3,7 +3,6 @@
 # test prefix, whose wineserver the test scripts kill).
 #   WINE_ROOT             directory with bin/wine [the Gcenx Wine Devel app in deps]
 #   STEAM_WINEPREFIX      prefix with Steam installed [deps/wineprefix-steam]
-#   STEAM_DESKTOP         run inside a Wine virtual desktop of this size, e.g. 1280x800
 #   STEAM_CEF_FLAGS       extra steam.exe flags ["-cef-disable-gpu"]
 #   STEAMWEBHELPER_EXTRA  Chromium switches the webhelper shim appends ["--in-process-gpu"]
 # Pass --restart to stop everything running in that prefix first.
@@ -60,8 +59,4 @@ if ! cmp -s "$shim" "$cef/steamwebhelper.exe"; then
     cp "$shim" "$cef/steamwebhelper.exe"
 fi
 
-desktop=()
-if [ -n "${STEAM_DESKTOP:-}" ]; then
-    desktop=(explorer "/desktop=steam,$STEAM_DESKTOP")
-fi
-exec "$WINE_ROOT/bin/wine" ${desktop[@]+"${desktop[@]}"} 'C:\Program Files (x86)\Steam\steam.exe' -no-cef-sandbox -noverifyfiles ${STEAM_CEF_FLAGS--cef-disable-gpu} "$@"
+exec "$WINE_ROOT/bin/wine" 'C:\Program Files (x86)\Steam\steam.exe' -no-cef-sandbox -noverifyfiles ${STEAM_CEF_FLAGS--cef-disable-gpu} "$@"
