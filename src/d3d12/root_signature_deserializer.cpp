@@ -75,9 +75,7 @@ HRESULT make_deserializer(ParsedRootSignature &&rs, REFIID riid, void **out)
     T *obj = new (std::nothrow) T(std::move(rs));
     if (!obj)
         return E_OUTOFMEMORY;
-    HRESULT hr = obj->QueryInterface(riid, out);
-    obj->Release();
-    return hr;
+    return hand_out(obj, riid, out);
 }
 
 } // namespace

@@ -29,9 +29,7 @@ HRESULT RootSignature::create(Device *device, const void *blob, size_t size, REF
                               layout.parameters[i].size});
     rs->argument_buffer_size_ = layout.argument_buffer_size;
 
-    hr = rs->QueryInterface(riid, out);
-    rs->Release();
-    return hr;
+    return hand_out(rs, riid, out);
 }
 
 RootSignature::~RootSignature()

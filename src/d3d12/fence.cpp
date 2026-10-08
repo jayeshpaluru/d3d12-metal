@@ -16,9 +16,7 @@ HRESULT Fence::create(Device *device, UINT64 initial_value, REFIID riid, void **
         fence->Release();
         return E_FAIL;
     }
-    HRESULT hr = fence->QueryInterface(riid, out);
-    fence->Release();
-    return hr;
+    return hand_out(fence, riid, out);
 }
 
 Fence::~Fence()

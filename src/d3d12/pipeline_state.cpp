@@ -122,9 +122,7 @@ HRESULT PipelineState::create_graphics(Device *device, const D3D12_GRAPHICS_PIPE
     pso->root_signature_ = root_signature;
     root_signature->AddRef();
 
-    HRESULT hr = pso->QueryInterface(riid, out);
-    pso->Release();
-    return hr;
+    return hand_out(pso, riid, out);
 }
 
 PipelineState::~PipelineState()

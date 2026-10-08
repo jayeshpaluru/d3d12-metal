@@ -46,6 +46,17 @@ HRESULT query_interfaces(Derived *self, REFIID riid, void **out)
     return S_OK;
 }
 
+// Hands a newly created object (holding its creation reference) to the caller
+// as `riid`: queries the interface, then drops the creation reference. The
+// object is destroyed when the query fails.
+template <typename T>
+HRESULT hand_out(T *object, REFIID riid, void **out)
+{
+    HRESULT hr = object->QueryInterface(riid, out);
+    object->Release();
+    return hr;
+}
+
 // Releases a COM pointer and clears it.
 template <typename T>
 void safe_release(T *&p)

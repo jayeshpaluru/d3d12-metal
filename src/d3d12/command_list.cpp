@@ -37,16 +37,13 @@ HRESULT CommandList::create(Device *device, D3D12_COMMAND_LIST_TYPE type, ID3D12
         return E_POINTER;
     if (!allocator)
         return E_INVALIDARG;
-    if (type != D3D12_COMMAND_LIST_TYPE_DIRECT && type != D3D12_COMMAND_LIST_TYPE_COMPUTE
-        && type != D3D12_COMMAND_LIST_TYPE_COPY)
+    if (!supported_list_type(type))
         return E_INVALIDARG;
     auto *list = new CommandList(device, type);
     list->reset_state();
     if (initial_state)
         list->SetPipelineState(initial_state);
-    HRESULT hr = list->QueryInterface(riid, out);
-    list->Release();
-    return hr;
+    return hand_out(list, riid, out);
 }
 
 CommandList::~CommandList()

@@ -12,8 +12,7 @@ HRESULT CommandQueue::create(Device *device, const D3D12_COMMAND_QUEUE_DESC &des
 {
     if (!out)
         return E_POINTER;
-    if (desc.Type != D3D12_COMMAND_LIST_TYPE_DIRECT && desc.Type != D3D12_COMMAND_LIST_TYPE_COMPUTE
-        && desc.Type != D3D12_COMMAND_LIST_TYPE_COPY)
+    if (!supported_list_type(desc.Type))
         return E_INVALIDARG;
     auto *queue = new CommandQueue(device);
     queue->desc_ = desc;
@@ -22,9 +21,7 @@ HRESULT CommandQueue::create(Device *device, const D3D12_COMMAND_QUEUE_DESC &des
         queue->Release();
         return E_FAIL;
     }
-    HRESULT hr = queue->QueryInterface(riid, out);
-    queue->Release();
-    return hr;
+    return hand_out(queue, riid, out);
 }
 
 CommandQueue::~CommandQueue()

@@ -28,9 +28,7 @@ HRESULT DescriptorHeap::create(Device *device, const D3D12_DESCRIPTOR_HEAP_DESC 
         heap->host_storage_.assign(size_t(desc.NumDescriptors) * kDescriptorSize, 0);
         heap->storage_ = heap->host_storage_.data();
     }
-    HRESULT hr = heap->QueryInterface(riid, out);
-    heap->Release();
-    return hr;
+    return hand_out(heap, riid, out);
 }
 
 DescriptorHeap::~DescriptorHeap()

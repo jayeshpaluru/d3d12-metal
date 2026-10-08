@@ -142,12 +142,11 @@ public:
 
         DXGI_ADAPTER_DESC1 desc;
         found->GetDesc1(&desc);
-        if (desc.AdapterLuid.LowPart != luid.LowPart || desc.AdapterLuid.HighPart != luid.HighPart)
-            hr = DXGI_ERROR_NOT_FOUND;
-        else
-            hr = found->QueryInterface(riid, adapter);
-        found->Release();
-        return hr;
+        if (desc.AdapterLuid.LowPart != luid.LowPart || desc.AdapterLuid.HighPart != luid.HighPart) {
+            found->Release();
+            return DXGI_ERROR_NOT_FOUND;
+        }
+        return hand_out(found, riid, adapter);
     }
 
     HRESULT STDMETHODCALLTYPE EnumWarpAdapter(REFIID, void **adapter) override
@@ -201,9 +200,7 @@ HRESULT create_dxgi_factory(UINT flags, REFIID riid, void **out)
     *out = nullptr;
 
     Factory *factory = new Factory(flags);
-    HRESULT hr = factory->QueryInterface(riid, out);
-    factory->Release();
-    return hr;
+    return hand_out(factory, riid, out);
 }
 
 } // namespace d3d12m

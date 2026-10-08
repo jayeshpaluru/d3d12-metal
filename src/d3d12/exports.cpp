@@ -20,9 +20,7 @@ D3D12M_EXPORT HRESULT D3D12CreateDevice(IUnknown *, D3D_FEATURE_LEVEL minimum_fe
         created->Release();
         return S_FALSE;
     }
-    hr = created->QueryInterface(riid, device);
-    created->Release();
-    return hr;
+    return hand_out(created, riid, device);
 }
 
 D3D12M_EXPORT HRESULT D3D12GetDebugInterface(REFIID, void **debug)

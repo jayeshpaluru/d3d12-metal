@@ -45,6 +45,13 @@ private:
     PrivateData private_data_;
 };
 
+// The command list types this layer can create allocators, lists and queues for.
+inline bool supported_list_type(D3D12_COMMAND_LIST_TYPE type)
+{
+    return type == D3D12_COMMAND_LIST_TYPE_DIRECT || type == D3D12_COMMAND_LIST_TYPE_COMPUTE
+           || type == D3D12_COMMAND_LIST_TYPE_COPY;
+}
+
 // Answers ID3D12DeviceChild::GetDevice for `device`.
 HRESULT query_device(Device *device, REFIID riid, void **out);
 

@@ -29,13 +29,10 @@ inline HRESULT CommandAllocator::create(Device *device, D3D12_COMMAND_LIST_TYPE 
 {
     if (!out)
         return E_POINTER;
-    if (type != D3D12_COMMAND_LIST_TYPE_DIRECT && type != D3D12_COMMAND_LIST_TYPE_COMPUTE
-        && type != D3D12_COMMAND_LIST_TYPE_COPY)
+    if (!supported_list_type(type))
         return E_INVALIDARG;
     auto *allocator = new CommandAllocator(device, type);
-    HRESULT hr = allocator->QueryInterface(riid, out);
-    allocator->Release();
-    return hr;
+    return hand_out(allocator, riid, out);
 }
 
 } // namespace d3d12m

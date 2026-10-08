@@ -14,10 +14,11 @@ HRESULT Resource::create_committed(Device *device, const D3D12_HEAP_PROPERTIES &
     resource->desc_ = desc;
     resource->heap_ = heap;
     HRESULT hr = resource->is_buffer() ? resource->init_buffer() : resource->init_texture();
-    if (SUCCEEDED(hr))
-        hr = resource->QueryInterface(riid, out);
-    resource->Release();
-    return hr;
+    if (FAILED(hr)) {
+        resource->Release();
+        return hr;
+    }
+    return hand_out(resource, riid, out);
 }
 
 // Every buffer uses shared storage, whatever the heap type.
