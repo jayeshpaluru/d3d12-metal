@@ -105,7 +105,12 @@ public:
     void note_span_error() { note_error(fail(MTLB_ERROR_INVALID_ARGUMENT, "span without data")); }
     mtlb_result error() const { return error_; }
     const std::string &error_message() const { return error_message_; }
-    void finish() { end_encoders(); }
+    void finish()
+    {
+        end_encoders();
+        for (; debug_depth_ > 0; --debug_depth_)
+            [cb_ popDebugGroup];
+    }
 
 private:
     enum Dirty : uint32_t {
@@ -117,7 +122,8 @@ private:
         kStencilRef = 1u << 5,
         kVertexBuffers = 1u << 6,
         kHeaps = 1u << 7,
-        kAll = (kHeaps << 1) - 1,
+        kQuery = 1u << 8,
+        kAll = (kQuery << 1) - 1,
     };
 
     // A CLEAR_RTV or CLEAR_DSV waiting for the next pass that binds its view (or a clear-only pass).
@@ -158,6 +164,12 @@ private:
     mtlb_result dispatch_compute(const mtlb_cmd_dispatch &cmd);
     mtlb_result barrier(const mtlb_cmd_barrier &cmd);
     mtlb_result resolve(const mtlb_cmd_resolve &cmd);
+    mtlb_result begin_query(const mtlb_cmd_query &cmd);
+    mtlb_result end_query(const mtlb_cmd_query &cmd);
+    mtlb_result resolve_query(const mtlb_cmd_resolve_query &cmd);
+    mtlb_result marker(const mtlb_cmd_marker &cmd);
+    mtlb_result write_immediate(const mtlb_cmd_write_immediate &cmd);
+    mtlb_result timestamp(QueryHeap *heap, uint32_t index);
     mtlb_result execute_indirect(const mtlb_cmd_execute_indirect &cmd);
     mtlb_result clear_buffer(const mtlb_cmd_clear_buffer &cmd);
     mtlb_result clear_texture_uav(const mtlb_cmd_clear_texture_uav &cmd);
@@ -244,6 +256,14 @@ private:
     // D3D12METAL_NO_BARRIERS=1 turns the synchronisation off (for showing that the barrier tests need it).
     const bool sync_disabled_ = getenv("D3D12METAL_NO_BARRIERS") != nullptr;
     bool sync_needed_ = !sync_disabled_;
+    // The occlusion query in progress: render passes opened while it lasts count into its heap's buffer.
+    QueryHeap *visibility_heap_ = nullptr;
+    struct ActiveQuery {
+        bool active = false;
+        uint32_t index = 0;
+        MTLVisibilityResultMode mode = MTLVisibilityResultModeDisabled;
+    } query_;
+    int debug_depth_ = 0;  // debug groups this submission has opened and not closed yet
     NSUInteger target_width_ = 0, target_height_ = 0;
     MTLPixelFormat pass_depth_format_ = MTLPixelFormatInvalid;    // attachments of the open pass
     MTLPixelFormat pass_stencil_format_ = MTLPixelFormatInvalid;
@@ -590,6 +610,8 @@ mtlb_result Replay::open_render_pass()
         target_height_ = target_height_ ? std::min(target_height_, h) : h;
     }
 
+    if (visibility_heap_ && visibility_heap_->results)
+        pass.visibilityResultBuffer = visibility_heap_->results;
     render_ = new_render_encoder(pass);
     if (!render_)
         return fail(MTLB_ERROR_DEVICE, "renderCommandEncoderWithDescriptor failed");
@@ -647,6 +669,8 @@ mtlb_result Replay::apply_state()
         [render_ setVertexBytes:state_.vertex_buffers length:sizeof(state_.vertex_buffers) atIndex:kIRVertexBufferBindPoint];
     if (dirty_ & kHeaps)
         bind_heaps(0);
+    if ((dirty_ & kQuery) && query_.active)
+        [render_ setVisibilityResultMode:query_.mode offset:uint64_t(query_.index) * 8];
     dirty_ = 0;
     return MTLB_OK;
 }
@@ -740,6 +764,8 @@ mtlb_result Replay::dispatch(const mtlb_cmd_header *header, mtlb_result (Replay:
 mtlb_result Replay::reset_state(const mtlb_cmd_reset_state &)
 {
     sync_needed_ = !sync_disabled_;
+    query_.active = false;
+    visibility_heap_ = nullptr;
     // Whatever the previous list left (open pass, pending clears) completes first.
     mtlb_result result = flush_clears(false);
     if (result != MTLB_OK)
@@ -877,6 +903,158 @@ void Replay::bind_heaps(uint32_t compute_stage)
             [render_ setFragmentBuffer:heap->buffer offset:offset atIndex:points[i]];
         }
     }
+}
+
+mtlb_result Replay::begin_query(const mtlb_cmd_query &cmd)
+{
+    auto *heap = from_handle<QueryHeap>(cmd.heap);
+    if (!heap || cmd.index >= heap->count)
+        return fail(MTLB_ERROR_INVALID_ARGUMENT, "invalid query");
+    if (cmd.type != MTLB_QUERY_OCCLUSION && cmd.type != MTLB_QUERY_BINARY_OCCLUSION)
+        return MTLB_OK;  // statistics queries have no data to collect
+    if (!heap->results)
+        return fail(MTLB_ERROR_INVALID_ARGUMENT, "not an occlusion query heap");
+    // The visibility buffer is a property of a render pass: a pass that has none is ended so that the draws
+    // that follow open one that counts into this heap.
+    if (render_ && visibility_heap_ != heap)
+        end_render();
+    visibility_heap_ = heap;
+    query_.active = true;
+    query_.index = cmd.index;
+    query_.mode = cmd.type == MTLB_QUERY_BINARY_OCCLUSION ? MTLVisibilityResultModeBoolean : MTLVisibilityResultModeCounting;
+    if (render_)
+        [render_ setVisibilityResultMode:query_.mode offset:uint64_t(cmd.index) * 8];
+    else
+        dirty_ |= kQuery;
+    return MTLB_OK;
+}
+
+mtlb_result Replay::end_query(const mtlb_cmd_query &cmd)
+{
+    auto *heap = from_handle<QueryHeap>(cmd.heap);
+    if (!heap || cmd.index >= heap->count)
+        return fail(MTLB_ERROR_INVALID_ARGUMENT, "invalid query");
+    if (cmd.type == MTLB_QUERY_TIMESTAMP)
+        return timestamp(heap, cmd.index);
+    if ((cmd.type == MTLB_QUERY_OCCLUSION || cmd.type == MTLB_QUERY_BINARY_OCCLUSION) && query_.active) {
+        query_.active = false;
+        if (render_)
+            [render_ setVisibilityResultMode:MTLVisibilityResultModeDisabled offset:0];
+    }
+    return MTLB_OK;
+}
+
+// A timestamp is the end of a compute pass of its own, after the work before it (on this hardware counters
+// are sampled at the boundaries of encoders only).
+mtlb_result Replay::timestamp(QueryHeap *heap, uint32_t index)
+{
+    if (!heap->samples)
+        return MTLB_OK;
+    end_blit();
+    end_compute();
+    mtlb_result result = flush_clears(false);
+    if (result != MTLB_OK)
+        return result;
+    id<MTLComputePipelineState> kernel = internal_kernel(queue_->device, @"noop_kernel");
+    if (!kernel)
+        return MTLB_ERROR_COMPILE_FAILED;
+    MTLComputePassDescriptor *pass = [MTLComputePassDescriptor computePassDescriptor];
+    pass.sampleBufferAttachments[0].sampleBuffer = heap->samples;
+    pass.sampleBufferAttachments[0].startOfEncoderSampleIndex = MTLCounterDontSample;
+    pass.sampleBufferAttachments[0].endOfEncoderSampleIndex = index;
+    id<MTLComputeCommandEncoder> enc = [cb_ computeCommandEncoderWithDescriptor:pass];
+    if (queue_->fence_pending) {
+        [enc waitForFence:queue_->fence];
+        queue_->fence_pending = false;
+    }
+    sync_needed_ = false;
+    [enc setComputePipelineState:kernel];
+    [enc dispatchThreads:MTLSizeMake(1, 1, 1) threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
+    [enc updateFence:queue_->fence];
+    queue_->fence_pending = true;
+    [enc endEncoding];
+    sync_needed_ = true;
+    return MTLB_OK;
+}
+
+mtlb_result Replay::resolve_query(const mtlb_cmd_resolve_query &cmd)
+{
+    auto *heap = from_handle<QueryHeap>(cmd.heap);
+    Buffer *dst = from_handle<Buffer>(cmd.dst);
+    if (!heap || !dst || uint64_t(cmd.start) + cmd.count > heap->count)
+        return fail(MTLB_ERROR_INVALID_ARGUMENT, "invalid query resolve");
+    const uint64_t element = cmd.type == MTLB_QUERY_PIPELINE_STATISTICS ? 88 : cmd.type == MTLB_QUERY_SO_STATISTICS ? 16 : 8;
+    const uint64_t bytes = element * cmd.count;
+    if (cmd.dst_offset > dst->size || bytes > dst->size - cmd.dst_offset)
+        return fail(MTLB_ERROR_INVALID_ARGUMENT, "query results do not fit the destination");
+    if (!bytes)
+        return MTLB_OK;
+    id<MTLBlitCommandEncoder> enc = blit();
+    if (element != 8 || cmd.type == MTLB_QUERY_PIPELINE_STATISTICS || cmd.type == MTLB_QUERY_SO_STATISTICS) {
+        [enc fillBuffer:dst->buffer range:NSMakeRange(cmd.dst_offset, bytes) value:0];
+    } else if (cmd.type == MTLB_QUERY_TIMESTAMP) {
+        if (heap->samples)
+            [enc resolveCounters:heap->samples inRange:NSMakeRange(cmd.start, cmd.count) destinationBuffer:dst->buffer
+               destinationOffset:cmd.dst_offset];
+        else
+            [enc fillBuffer:dst->buffer range:NSMakeRange(cmd.dst_offset, bytes) value:0];
+    } else if (heap->results) {
+        [enc copyFromBuffer:heap->results sourceOffset:uint64_t(cmd.start) * 8 toBuffer:dst->buffer
+          destinationOffset:cmd.dst_offset size:bytes];
+    }
+    return MTLB_OK;
+}
+
+mtlb_result Replay::marker(const mtlb_cmd_marker &cmd)
+{
+    if (!array_fits<char>(cmd, cmd.length))
+        return fail(MTLB_ERROR_INVALID_ARGUMENT, "marker text exceeds the record");
+    NSString *text = [[NSString alloc] initWithBytes:cmd.text length:strnlen(cmd.text, cmd.length) encoding:NSUTF8StringEncoding];
+    if (!text)
+        text = @"?";
+    switch (cmd.kind) {
+    case 0:
+        [cb_ pushDebugGroup:text];
+        ++debug_depth_;
+        break;
+    case 1:
+        if (debug_depth_ > 0) {
+            [cb_ popDebugGroup];
+            --debug_depth_;
+        }
+        break;
+    default:
+        [cb_ pushDebugGroup:text];
+        [cb_ popDebugGroup];
+        break;
+    }
+    return MTLB_OK;
+}
+
+mtlb_result Replay::write_immediate(const mtlb_cmd_write_immediate &cmd)
+{
+    uint64_t offset = 0;
+    Buffer *buffer = find_buffer(queue_->device, cmd.address, &offset);
+    if (!buffer || (cmd.size != 4 && cmd.size != 8) || offset + cmd.size > buffer->size)
+        return fail(MTLB_ERROR_INVALID_ARGUMENT, "invalid immediate write");
+    id<MTLComputePipelineState> kernel = internal_kernel(queue_->device, @"write_immediate");
+    if (!kernel)
+        return MTLB_ERROR_COMPILE_FAILED;
+    // After everything recorded before it, and before whatever follows.
+    sync_needed_ = !sync_disabled_;
+    end_blit();
+    end_render();
+    id<MTLComputeCommandEncoder> enc = compute();
+    const uint64_t where[2] = {offset, cmd.size};
+    [enc setComputePipelineState:kernel];
+    [enc setBuffer:buffer->buffer offset:0 atIndex:0];
+    [enc setBytes:&cmd.value length:sizeof(cmd.value) atIndex:1];
+    [enc setBytes:where length:sizeof(where) atIndex:2];
+    [enc dispatchThreads:MTLSizeMake(1, 1, 1) threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
+    dirty_compute_ = kAll;
+    end_compute();
+    sync_needed_ = !sync_disabled_;
+    return MTLB_OK;
 }
 
 // A resolve is a render pass with no draws: the multisampled texture is loaded and stored with a resolve.
@@ -1221,6 +1399,11 @@ mtlb_result Replay::execute(const mtlb_cmd_header *header)
     case MTLB_CMD_DISPATCH: return dispatch(header, &Replay::dispatch_compute);
     case MTLB_CMD_BARRIER: return dispatch(header, &Replay::barrier);
     case MTLB_CMD_RESOLVE: return dispatch(header, &Replay::resolve);
+    case MTLB_CMD_BEGIN_QUERY: return dispatch(header, &Replay::begin_query);
+    case MTLB_CMD_END_QUERY: return dispatch(header, &Replay::end_query);
+    case MTLB_CMD_RESOLVE_QUERY: return dispatch(header, &Replay::resolve_query);
+    case MTLB_CMD_MARKER: return dispatch(header, &Replay::marker);
+    case MTLB_CMD_WRITE_IMMEDIATE: return dispatch(header, &Replay::write_immediate);
     case MTLB_CMD_EXECUTE_INDIRECT: return dispatch(header, &Replay::execute_indirect);
     case MTLB_CMD_CLEAR_BUFFER: return dispatch(header, &Replay::clear_buffer);
     case MTLB_CMD_CLEAR_TEXTURE_UAV: return dispatch(header, &Replay::clear_texture_uav);
@@ -1259,6 +1442,8 @@ void commit_open(Queue *queue)
 {
     if (!queue->open)
         return;
+    for (; queue->debug_depth > 0; --queue->debug_depth)
+        [queue->open popDebugGroup];
     commit_residency(queue->device);
     [queue->open commit];
     queue->open = nil;
@@ -1337,6 +1522,24 @@ mtlb_result mtlb_queue_present(mtlb_queue handle, mtlb_swapchain swapchain_handl
     if (drawable.drawable)
         encode_present(queue, open_command_buffer(queue), swapchain, texture, drawable);
     commit_open(queue);
+    return MTLB_OK;
+}
+
+// Debug groups on the queue's open command buffer.
+mtlb_result mtlb_queue_marker(mtlb_queue handle, uint32_t kind, const char *text)
+{
+    Queue *queue = from_handle<Queue>(handle);
+    if (!queue)
+        return MTLB_ERROR_INVALID_ARGUMENT;
+    std::lock_guard<std::mutex> lock(queue->mutex);
+    id<MTLCommandBuffer> cb = open_command_buffer(queue);
+    if (kind == 0) {
+        [cb pushDebugGroup:text ? @(text) : @"?"];
+        ++queue->debug_depth;
+    } else if (queue->debug_depth > 0) {
+        [cb popDebugGroup];
+        --queue->debug_depth;
+    }
     return MTLB_OK;
 }
 

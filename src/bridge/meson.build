@@ -7,6 +7,7 @@ if host_system == 'darwin'
     'metal/kernels.mm',
     'metal/notify.mm',
     'metal/pipeline.mm',
+    'metal/queries.mm',
     'metal/queue.mm',
     'metal/swapchain.mm',
   )

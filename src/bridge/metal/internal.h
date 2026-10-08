@@ -94,6 +94,14 @@ struct Device {
     std::vector<std::pair<uint64_t, Buffer *>> buffers;
 };
 
+struct QueryHeap {
+    Device *device;
+    uint32_t kind;
+    uint32_t count;
+    id<MTLBuffer> results;                    // occlusion counts, 8 bytes per query
+    id<MTLCounterSampleBuffer> samples;       // timestamps (nil where the GPU cannot sample them)
+};
+
 struct Heap {
     Device *device;
     id<MTLHeap> heap;
@@ -182,6 +190,8 @@ struct Queue {
     // Orders encoders on this queue: resources are reached through GPU addresses and descriptor
     // tables, which Metal's automatic hazard tracking does not see, so every encoder updates
     // the fence when it ends and the next one waits for it (queue.mm).
+    int debug_depth = 0;  // debug groups opened on the open command buffer by mtlb_queue_marker
+
     id<MTLFence> fence = nil;
     bool fence_pending = false;  // an encoder updated the fence and no later encoder has waited yet
 };

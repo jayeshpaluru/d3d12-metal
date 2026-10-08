@@ -20,6 +20,20 @@ kernel void clear_buffer(device uchar *dst [[buffer(0)]], constant uchar *patter
         element[b] = pattern[b];
 }
 
+// WriteBufferImmediate: stores a 32- or 64-bit value `size` bytes wide at `base` bytes into `dst`.
+kernel void write_immediate(device uchar *dst [[buffer(0)]], constant ulong &value [[buffer(1)]],
+                            constant ulong2 &where [[buffer(2)]])
+{
+    device uchar *at = dst + where.x;
+    if (where.y == 8)
+        *reinterpret_cast<device ulong *>(at) = value;
+    else
+        *reinterpret_cast<device uint *>(at) = uint(value);
+}
+
+// A timestamp query takes its sample at the end of a compute pass, which needs a dispatch to exist.
+kernel void noop_kernel() {}
+
 // ExecuteIndirect: turns the application's commands into one record per command for the draws or dispatches the
 // CPU encodes: a copy of the current root arguments (and vertex buffer table) with the command's changes applied,
 // and its action arguments, zeroed for commands past the count.

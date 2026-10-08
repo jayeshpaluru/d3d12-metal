@@ -58,6 +58,7 @@ typedef uint64_t mtlb_event;
 typedef uint64_t mtlb_notify;
 typedef uint64_t mtlb_swapchain;
 typedef uint64_t mtlb_heap;
+typedef uint64_t mtlb_query_heap;
 
 /* ------------------------------------------------------------------------ */
 /* Formats                                                                  */
@@ -612,6 +613,31 @@ MTLB_EXPORT mtlb_result mtlb_swapchain_resize(mtlb_swapchain swapchain, uint32_t
  * presents without waiting for the display. */
 MTLB_EXPORT mtlb_result mtlb_queue_present(mtlb_queue queue, mtlb_swapchain swapchain, mtlb_texture texture,
                                            uint32_t sync_interval);
+
+/* ------------------------------------------------------------------------ */
+/* Queries                                                                  */
+/* ------------------------------------------------------------------------ */
+
+/* Query kinds and types; the values equal D3D12_QUERY_TYPE. A heap of kind OCCLUSION serves both occlusion
+ * query types. */
+enum {
+    MTLB_QUERY_OCCLUSION = 0,
+    MTLB_QUERY_BINARY_OCCLUSION = 1,
+    MTLB_QUERY_TIMESTAMP = 2,
+    MTLB_QUERY_PIPELINE_STATISTICS = 3,
+    MTLB_QUERY_SO_STATISTICS = 4,
+};
+
+MTLB_EXPORT mtlb_result mtlb_query_heap_create(mtlb_device device, uint32_t kind, uint32_t count, mtlb_query_heap *out);
+MTLB_EXPORT void mtlb_query_heap_destroy(mtlb_query_heap heap);
+
+/* GPU timestamps tick at this rate. */
+MTLB_EXPORT uint64_t mtlb_timestamp_frequency(mtlb_device device);
+/* The GPU clock and the CPU clock (mach_absolute_time ticks) sampled together. */
+MTLB_EXPORT mtlb_result mtlb_gpu_clock(mtlb_device device, uint64_t *gpu_ticks, uint64_t *cpu_ticks);
+
+/* Debug groups on the queue's open command buffer (kind: 0 push, 1 pop; a signpost is a push and a pop). */
+MTLB_EXPORT mtlb_result mtlb_queue_marker(mtlb_queue queue, uint32_t kind, const char *text);
 
 /* ------------------------------------------------------------------------ */
 /* Completion notifications                                                 */

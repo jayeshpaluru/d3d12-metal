@@ -59,6 +59,11 @@ typedef enum mtlb_cmd_type {
     MTLB_CMD_BARRIER,
     MTLB_CMD_EXECUTE_INDIRECT,
     MTLB_CMD_RESOLVE,
+    MTLB_CMD_BEGIN_QUERY,
+    MTLB_CMD_END_QUERY,
+    MTLB_CMD_RESOLVE_QUERY,
+    MTLB_CMD_MARKER,
+    MTLB_CMD_WRITE_IMMEDIATE,
 } mtlb_cmd_type;
 
 typedef struct mtlb_cmd_header {
@@ -390,8 +395,51 @@ typedef struct mtlb_cmd_resolve {
     uint32_t reserved;
 } mtlb_cmd_resolve;
 
+/* Queries. Occlusion counts are written by the render passes between BEGIN and END; a timestamp is taken when
+ * the work before the END record has finished; statistics queries have no data (zeros). RESOLVE copies the
+ * results of `count` queries from `start` to a buffer as D3D12 lays them out (8 bytes each; pipeline statistics
+ * 88, stream output statistics 16). */
+typedef struct mtlb_cmd_query {
+    mtlb_cmd_header header;
+    mtlb_query_heap heap;
+    uint32_t type;             /* MTLB_QUERY_* */
+    uint32_t index;
+} mtlb_cmd_query;
+
+typedef struct mtlb_cmd_resolve_query {
+    mtlb_cmd_header header;
+    mtlb_query_heap heap;
+    mtlb_buffer dst;
+    uint64_t dst_offset;
+    uint32_t type;
+    uint32_t start;
+    uint32_t count;
+    uint32_t reserved;
+} mtlb_cmd_resolve_query;
+
+/* A debug group boundary or label: kind 0 push, 1 pop, 2 signpost; `text` is NUL-terminated within the record. */
+typedef struct mtlb_cmd_marker {
+    mtlb_cmd_header header;
+    uint32_t kind;
+    uint32_t length;
+    char text[];
+} mtlb_cmd_marker;
+
+/* WriteBufferImmediate: a 32- or 64-bit value stored at a GPU address, after the work recorded before it. */
+typedef struct mtlb_cmd_write_immediate {
+    mtlb_cmd_header header;
+    uint64_t address;
+    uint64_t value;
+    uint32_t size;             /* 4 or 8 */
+    uint32_t reserved;
+} mtlb_cmd_write_immediate;
+
 MTLB_ASSERT_SIZE(mtlb_cmd_header, 8);
 MTLB_ASSERT_SIZE(mtlb_cmd_resolve, 48);
+MTLB_ASSERT_SIZE(mtlb_cmd_query, 24);
+MTLB_ASSERT_SIZE(mtlb_cmd_resolve_query, 48);
+MTLB_ASSERT_SIZE(mtlb_cmd_marker, 16);
+MTLB_ASSERT_SIZE(mtlb_cmd_write_immediate, 32);
 MTLB_ASSERT_SIZE(mtlb_indirect_arg, 16);
 MTLB_ASSERT_SIZE(mtlb_cmd_execute_indirect, 48);
 MTLB_ASSERT_OFFSET(mtlb_cmd_execute_indirect, args, 48);
