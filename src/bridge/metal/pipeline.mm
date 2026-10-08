@@ -98,6 +98,13 @@ mtlb_result convert_stage(Device *device, RootSignature *root_signature, const v
     if (!out.function)
         return fail(MTLB_ERROR_COMPILE_FAILED, std::string("function not found in converted library: ") + function_name);
 
+    if (ir_stage == IRShaderStageCompute) {
+        IRVersionedCSInfo info;
+        if (!IRShaderReflectionCopyComputeInfo(reflection.get(), IRReflectionVersion_1_0, &info))
+            return fail(MTLB_ERROR_COMPILE_FAILED, "compute reflection unavailable");
+        std::copy_n(info.info_1_0.tg_size, 3, out.threadgroup_size);
+        IRShaderReflectionReleaseComputeInfo(&info);
+    }
     if (ir_stage == IRShaderStageVertex) {
         IRVersionedVSInfo info;
         if (!IRShaderReflectionCopyVertexInfo(reflection.get(), IRReflectionVersion_1_0, &info))
@@ -402,6 +409,33 @@ extern "C" mtlb_result mtlb_pipeline_create(mtlb_device handle, const mtlb_pipel
     pipeline->depth_bias = static_cast<float>(desc->depth_bias);
     pipeline->slope_scaled_depth_bias = desc->slope_scaled_depth_bias;
     pipeline->depth_bias_clamp = desc->depth_bias_clamp;
+    *out = to_handle(pipeline);
+    return MTLB_OK;
+}
+
+extern "C" mtlb_result mtlb_compute_pipeline_create(mtlb_device handle, const mtlb_compute_pipeline_desc *desc,
+                                                    mtlb_pipeline *out)
+{
+    Device *device = from_handle<Device>(handle);
+    if (!device || !desc || !out || !desc->cs_dxil || !desc->cs_size || !desc->root_signature)
+        return MTLB_ERROR_INVALID_ARGUMENT;
+    RootSignature *root_signature = from_handle<RootSignature>(desc->root_signature);
+    if (!root_signature)
+        return MTLB_ERROR_INVALID_ARGUMENT;
+
+    std::shared_ptr<const ShaderStage> cs;
+    mtlb_result result = get_stage(device, root_signature, desc->cs_dxil, desc->cs_size, desc->cs_entry,
+                                   IRShaderStageCompute, cs);
+    if (result != MTLB_OK)
+        return result;
+
+    NSError *ns_error = nil;
+    id<MTLComputePipelineState> state = [device->device newComputePipelineStateWithFunction:cs->function error:&ns_error];
+    if (!state)
+        return fail(MTLB_ERROR_COMPILE_FAILED, std::string("newComputePipelineState: ") + ns_error.localizedDescription.UTF8String);
+    auto *pipeline = new Pipeline();
+    pipeline->compute = state;
+    pipeline->threadgroup_size = MTLSizeMake(cs->threadgroup_size[0], cs->threadgroup_size[1], cs->threadgroup_size[2]);
     *out = to_handle(pipeline);
     return MTLB_OK;
 }

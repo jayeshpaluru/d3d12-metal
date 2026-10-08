@@ -44,6 +44,14 @@ public:
     T STDMETHODCALLTYPE name() override { return (expr); }
 #endif
 
+// The castable format list parameter of the newest resource creation methods is
+// const in DirectX-Headers and not in the MinGW headers.
+#ifdef _WIN32
+#define D3D12M_CASTABLE_FORMATS DXGI_FORMAT *
+#else
+#define D3D12M_CASTABLE_FORMATS const DXGI_FORMAT *
+#endif
+
 // The HRESULT for a failed bridge call.
 inline HRESULT to_hresult(mtlb_result result)
 {

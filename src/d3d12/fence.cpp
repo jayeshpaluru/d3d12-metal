@@ -7,11 +7,12 @@
 
 namespace d3d12m {
 
-HRESULT Fence::create(Device *device, UINT64 initial_value, REFIID riid, void **out)
+HRESULT Fence::create(Device *device, UINT64 initial_value, D3D12_FENCE_FLAGS flags, REFIID riid, void **out)
 {
     if (!out)
         return E_POINTER;
     auto *fence = new Fence(device);
+    fence->flags_ = flags;
     mtlb_result result = mtlb_event_create(device->handle(), initial_value, &fence->event_);
     if (result != MTLB_OK) {
         fence->Release();

@@ -6,7 +6,7 @@
 
 namespace d3d12m {
 
-class Resource final : public ChildImpl<ID3D12Resource> {
+class Resource final : public ChildImpl<ID3D12Resource2> {
 public:
     static HRESULT create_committed(Device *device, const D3D12_HEAP_PROPERTIES &heap,
                                     const D3D12_RESOURCE_DESC &desc, REFIID riid, void **out);
@@ -18,7 +18,8 @@ public:
 
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **out) override
     {
-        return query_interfaces<IUnknown, ID3D12Object, ID3D12DeviceChild, ID3D12Pageable, ID3D12Resource>(this, riid, out);
+        return query_interfaces<IUnknown, ID3D12Object, ID3D12DeviceChild, ID3D12Pageable, ID3D12Resource, ID3D12Resource1,
+                                ID3D12Resource2>(this, riid, out);
     }
 
     HRESULT STDMETHODCALLTYPE Map(UINT subresource, const D3D12_RANGE *read_range, void **data) override;
@@ -28,10 +29,20 @@ public:
     HRESULT STDMETHODCALLTYPE WriteToSubresource(UINT, const D3D12_BOX *, const void *, UINT, UINT) override { D3D12M_STUB_HR(); }
     HRESULT STDMETHODCALLTYPE ReadFromSubresource(void *, UINT, UINT, UINT, const D3D12_BOX *) override { D3D12M_STUB_HR(); }
     HRESULT STDMETHODCALLTYPE GetHeapProperties(D3D12_HEAP_PROPERTIES *heap, D3D12_HEAP_FLAGS *flags) override;
+    // ID3D12Resource1
+    HRESULT STDMETHODCALLTYPE GetProtectedResourceSession(REFIID, void **) override { return DXGI_ERROR_NOT_FOUND; }
+    // ID3D12Resource2
+    D3D12M_AGGREGATE_RETURN(D3D12_RESOURCE_DESC1, GetDesc1, desc1())
 
 private:
     explicit Resource(Device *device) : ChildImpl(device) {}
     ~Resource() override;
+
+    D3D12_RESOURCE_DESC1 desc1() const
+    {
+        return {desc_.Dimension, desc_.Alignment, desc_.Width, desc_.Height, desc_.DepthOrArraySize, desc_.MipLevels,
+                desc_.Format, desc_.SampleDesc, desc_.Layout, desc_.Flags, {}};
+    }
 
     HRESULT init_buffer();
     HRESULT init_texture();

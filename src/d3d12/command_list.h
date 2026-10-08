@@ -15,7 +15,7 @@
 
 namespace d3d12m {
 
-class CommandList final : public ChildImpl<ID3D12GraphicsCommandList1> {
+class CommandList final : public ChildImpl<ID3D12GraphicsCommandList7> {
 public:
     // Creates a list in the recording state.
     static HRESULT create(Device *device, D3D12_COMMAND_LIST_TYPE type, ID3D12CommandAllocator *allocator,
@@ -27,7 +27,9 @@ public:
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **out) override
     {
         return query_interfaces<IUnknown, ID3D12Object, ID3D12DeviceChild, ID3D12CommandList,
-                                ID3D12GraphicsCommandList, ID3D12GraphicsCommandList1>(this, riid, out);
+                                ID3D12GraphicsCommandList, ID3D12GraphicsCommandList1, ID3D12GraphicsCommandList2,
+                                ID3D12GraphicsCommandList3, ID3D12GraphicsCommandList4, ID3D12GraphicsCommandList5,
+                                ID3D12GraphicsCommandList6, ID3D12GraphicsCommandList7>(this, riid, out);
     }
 
     // ID3D12CommandList
@@ -92,6 +94,27 @@ public:
     void STDMETHODCALLTYPE SetSamplePositions(UINT, UINT, D3D12_SAMPLE_POSITION *) override { D3D12M_STUB_LOG(); }
     void STDMETHODCALLTYPE ResolveSubresourceRegion(ID3D12Resource *, UINT, UINT, UINT, ID3D12Resource *, UINT, D3D12_RECT *, DXGI_FORMAT, D3D12_RESOLVE_MODE) override { D3D12M_STUB_LOG(); }
     void STDMETHODCALLTYPE SetViewInstanceMask(UINT) override { D3D12M_STUB_LOG(); }
+    // ID3D12GraphicsCommandList2
+    void STDMETHODCALLTYPE WriteBufferImmediate(UINT, const D3D12_WRITEBUFFERIMMEDIATE_PARAMETER *, const D3D12_WRITEBUFFERIMMEDIATE_MODE *) override { D3D12M_STUB_LOG(); }
+    // ID3D12GraphicsCommandList3
+    void STDMETHODCALLTYPE SetProtectedResourceSession(ID3D12ProtectedResourceSession *) override { D3D12M_STUB_LOG(); }
+    // ID3D12GraphicsCommandList4
+    void STDMETHODCALLTYPE BeginRenderPass(UINT, const D3D12_RENDER_PASS_RENDER_TARGET_DESC *, const D3D12_RENDER_PASS_DEPTH_STENCIL_DESC *, D3D12_RENDER_PASS_FLAGS) override { D3D12M_STUB_LOG(); }
+    void STDMETHODCALLTYPE EndRenderPass() override { D3D12M_STUB_LOG(); }
+    void STDMETHODCALLTYPE InitializeMetaCommand(ID3D12MetaCommand *, const void *, SIZE_T) override { D3D12M_STUB_LOG(); }
+    void STDMETHODCALLTYPE ExecuteMetaCommand(ID3D12MetaCommand *, const void *, SIZE_T) override { D3D12M_STUB_LOG(); }
+    void STDMETHODCALLTYPE BuildRaytracingAccelerationStructure(const D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC *, UINT, const D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_DESC *) override { D3D12M_STUB_LOG(); }
+    void STDMETHODCALLTYPE EmitRaytracingAccelerationStructurePostbuildInfo(const D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_DESC *, UINT, const D3D12_GPU_VIRTUAL_ADDRESS *) override { D3D12M_STUB_LOG(); }
+    void STDMETHODCALLTYPE CopyRaytracingAccelerationStructure(D3D12_GPU_VIRTUAL_ADDRESS, D3D12_GPU_VIRTUAL_ADDRESS, D3D12_RAYTRACING_ACCELERATION_STRUCTURE_COPY_MODE) override { D3D12M_STUB_LOG(); }
+    void STDMETHODCALLTYPE SetPipelineState1(ID3D12StateObject *) override { D3D12M_STUB_LOG(); }
+    void STDMETHODCALLTYPE DispatchRays(const D3D12_DISPATCH_RAYS_DESC *) override { D3D12M_STUB_LOG(); }
+    // ID3D12GraphicsCommandList5
+    void STDMETHODCALLTYPE RSSetShadingRate(D3D12_SHADING_RATE, const D3D12_SHADING_RATE_COMBINER *) override { D3D12M_STUB_LOG(); }
+    void STDMETHODCALLTYPE RSSetShadingRateImage(ID3D12Resource *) override { D3D12M_STUB_LOG(); }
+    // ID3D12GraphicsCommandList6
+    void STDMETHODCALLTYPE DispatchMesh(UINT, UINT, UINT) override { D3D12M_STUB_LOG(); }
+    // ID3D12GraphicsCommandList7
+    void STDMETHODCALLTYPE Barrier(UINT32, const D3D12_BARRIER_GROUP *) override { D3D12M_STUB_LOG(); }
 
 private:
     CommandList(Device *device, D3D12_COMMAND_LIST_TYPE type) : ChildImpl(device), type_(type) {}

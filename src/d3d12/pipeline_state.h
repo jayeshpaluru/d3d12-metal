@@ -12,7 +12,14 @@ public:
     static HRESULT create_graphics(Device *device, const D3D12_GRAPHICS_PIPELINE_STATE_DESC &desc,
                                    REFIID riid, void **out);
 
+    static HRESULT create_compute(Device *device, const D3D12_COMPUTE_PIPELINE_STATE_DESC &desc,
+                                  REFIID riid, void **out);
+    // CreatePipelineState: parses the subobject stream into a graphics or compute description.
+    static HRESULT create_from_stream(Device *device, const D3D12_PIPELINE_STATE_STREAM_DESC &stream,
+                                      REFIID riid, void **out);
+
     mtlb_pipeline handle() const { return pipeline_; }
+    bool is_compute() const { return compute_; }
 
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **out) override
     {
@@ -26,6 +33,7 @@ private:
     ~PipelineState() override;
 
     mtlb_pipeline pipeline_ = 0;
+    bool compute_ = false;
     RootSignature *root_signature_ = nullptr;  // owned reference
 };
 

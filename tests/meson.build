@@ -23,6 +23,17 @@ foreach shader : ['color', 'vertex_input']
   shader_headers += {shader: headers}
 endforeach
 
+# Compute shaders: shaders/<name>.hlsl -> g_<name>_cs.
+compute_headers = {}
+foreach shader : ['noop']
+  compute_headers += {shader: custom_target(
+    shader + '_cs',
+    input: 'shaders/' + shader + '.hlsl',
+    output: shader + '_cs.h',
+    command: [dxc, '-T', 'cs_6_0', '-E', 'CSMain', '-Fh', '@OUTPUT@', '-Vn', 'g_' + shader + '_cs', '@INPUT@'],
+  )}
+endforeach
+
 # [test, shaders it includes]
 tests = [
   ['test_device', []],
@@ -43,6 +54,9 @@ foreach t : tests
   foreach shader : t[1]
     sources += shader_headers[shader]
   endforeach
+  foreach shader : t.length() > 2 ? t[2] : []
+    sources += compute_headers[shader]
+  endforeach
   exe = executable(
     t[0], sources,
     include_directories: test_inc,
@@ -50,6 +64,23 @@ foreach t : tests
     link_with: d3d12_metal,
   )
   test(t[0], exe, timeout: 60)
+endforeach
+
+foreach t : portable_tests
+  sources = ['portable/p_' + t[0] + '.cpp']
+  foreach shader : t[1]
+    sources += shader_headers[shader]
+  endforeach
+  foreach shader : t[2]
+    sources += compute_headers[shader]
+  endforeach
+  exe = executable(
+    'p_' + t[0], sources,
+    include_directories: [test_inc, include_directories('portable')],
+    dependencies: test_deps,
+    link_with: d3d12_metal,
+  )
+  test('p_' + t[0], exe, timeout: 120)
 endforeach
 
 # The swap chain test: its Objective-C half (a layer standing in for a window) is a separate file.

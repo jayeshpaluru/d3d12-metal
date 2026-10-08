@@ -73,6 +73,13 @@ static void fill_caps(id<MTLDevice> device, mtlb_device_caps *out)
     out->recommended_max_working_set_size = device.recommendedMaxWorkingSetSize;
     out->max_buffer_length = device.maxBufferLength;
     out->has_unified_memory = device.hasUnifiedMemory;
+    for (uint32_t count : {1u, 2u, 4u, 8u, 16u}) {
+        if ([device supportsTextureSampleCount:count])
+            out->sample_counts |= 1u << count;
+    }
+    // Metal has no property for it; texture descriptor validation states 2^28 texels
+    // (measured on Apple GPUs: 268435456 passes, one more asserts).
+    out->max_texture_buffer_width = 1ull << 28;
 }
 
 } // namespace mtlb

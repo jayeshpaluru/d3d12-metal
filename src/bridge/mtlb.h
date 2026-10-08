@@ -144,6 +144,7 @@ enum {
     MTLB_FORMAT_FLAG_SRGB = 1u << 8,
     MTLB_FORMAT_FLAG_TYPELESS = 1u << 9,
     MTLB_FORMAT_FLAG_SHADER_WRITE = 1u << 10,  /* usable as a UAV */
+    MTLB_FORMAT_FLAG_BUFFER = 1u << 11,        /* usable as a typed buffer view */
 };
 
 typedef struct mtlb_format_info {
@@ -167,7 +168,8 @@ typedef struct mtlb_device_caps {
     uint64_t recommended_max_working_set_size;
     uint64_t max_buffer_length;
     uint32_t has_unified_memory;
-    uint32_t reserved;
+    uint32_t sample_counts;    /* bit n set: textures with n samples are supported */
+    uint64_t max_texture_buffer_width;  /* texels of a typed buffer view (texture buffer) */
 } mtlb_device_caps;
 
 /* Opens the Metal device with the given registry id (mtlb_device_caps::registry_id),
@@ -390,6 +392,18 @@ typedef struct mtlb_pipeline_desc {
     mtlb_input_element input_elements[MTLB_MAX_INPUT_ELEMENTS];
 } mtlb_pipeline_desc;
 
+typedef struct mtlb_compute_pipeline_desc {
+    const void *cs_dxil; uint64_t cs_size;
+    const char *cs_entry;      /* NULL: the entry point named in the DXIL */
+    mtlb_root_signature root_signature;
+} mtlb_compute_pipeline_desc;
+
+/* Converts the compute shader and builds the compute pipeline. The handle is an
+ * mtlb_pipeline like the graphics ones (destroy with mtlb_pipeline_destroy); the
+ * command stream tells the two kinds apart. */
+MTLB_EXPORT mtlb_result mtlb_compute_pipeline_create(mtlb_device device, const mtlb_compute_pipeline_desc *desc,
+                                                     mtlb_pipeline *out);
+
 /* Converts the DXIL with the Metal shader converter against the root signature
  * and builds the render pipeline and depth-stencil state. */
 MTLB_EXPORT mtlb_result mtlb_pipeline_create(mtlb_device device, const mtlb_pipeline_desc *desc,
@@ -491,7 +505,7 @@ MTLB_ASSERT_SIZE(mtlb_notification, 16);
 MTLB_ASSERT_SIZE(mtlb_span, 16);
 MTLB_ASSERT_OFFSET(mtlb_span, size, 8);
 MTLB_ASSERT_SIZE(mtlb_format_info, 16);
-MTLB_ASSERT_SIZE(mtlb_device_caps, 288);
+MTLB_ASSERT_SIZE(mtlb_device_caps, 296);
 MTLB_ASSERT_SIZE(mtlb_buffer_info, 24);
 MTLB_ASSERT_OFFSET(mtlb_buffer_info, gpu_address, 8);
 MTLB_ASSERT_SIZE(mtlb_descriptor, 24);
@@ -505,6 +519,7 @@ MTLB_ASSERT_SIZE(mtlb_render_target_blend, 32);
 MTLB_ASSERT_SIZE(mtlb_root_parameter_layout, 8);
 MTLB_ASSERT_SIZE(mtlb_root_signature_layout, 520);
 MTLB_ASSERT_SIZE(mtlb_pipeline_desc, 2192);
+MTLB_ASSERT_SIZE(mtlb_compute_pipeline_desc, 32);
 MTLB_ASSERT_SIZE(mtlb_swapchain_desc, 24);
 
 #ifdef __cplusplus

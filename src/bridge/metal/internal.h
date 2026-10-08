@@ -29,6 +29,7 @@ struct ShaderStage {
     id<MTLFunction> function = nil;
     std::shared_ptr<IRShaderReflection> reflection;  // kept for stage-in synthesis
     uint32_t num_vertex_inputs = 0;
+    uint32_t threadgroup_size[3] = {1, 1, 1};  // compute stages
 
     // Vertex stage-in functions synthesized for this shader, by serialized input layout.
     std::mutex stage_in_mutex;
@@ -87,6 +88,10 @@ struct RootSignature {
 };
 
 struct Pipeline {
+    // A compute pipeline has `compute` set and none of the render state.
+    id<MTLComputePipelineState> compute = nil;
+    MTLSize threadgroup_size = {1, 1, 1};
+
     id<MTLRenderPipelineState> state;
     id<MTLDepthStencilState> depth_stencil;  // nil when depth/stencil is unused
     MTLCullMode cull_mode;

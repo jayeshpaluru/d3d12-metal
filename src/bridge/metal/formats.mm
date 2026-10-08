@@ -203,7 +203,12 @@ extern "C" mtlb_result mtlb_format_get_info(mtlb_format format, mtlb_format_info
     const Entry *e = find_format(format);
     if (!e)
         return MTLB_ERROR_UNSUPPORTED;
-    *out = {e->block_width, e->block_height, e->bytes_per_block,
-            e->flags | (e->vertex != MTLVertexFormatInvalid ? MTLB_FORMAT_FLAG_VERTEX : 0u)};
+    uint32_t flags = e->flags;
+    if (e->vertex != MTLVertexFormatInvalid)
+        flags |= MTLB_FORMAT_FLAG_VERTEX;
+    // Texture buffers take uncompressed colour formats that are not sRGB.
+    if (e->pixel != MTLPixelFormatInvalid && !(flags & (MTLB_FORMAT_FLAG_COMPRESSED | MTLB_FORMAT_FLAG_DEPTH | MTLB_FORMAT_FLAG_SRGB)))
+        flags |= MTLB_FORMAT_FLAG_BUFFER;
+    *out = {e->block_width, e->block_height, e->bytes_per_block, flags};
     return MTLB_OK;
 }

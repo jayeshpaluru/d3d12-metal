@@ -1,6 +1,7 @@
 #!/bin/bash
 # Runs the Win32 tests under Wine (build them first with tools/build-wine.sh):
 #   wine_basic.exe                  device, copies, offscreen triangle, fence events
+#   p_*.exe                         the portable tests (tests/portable), also run natively
 #   swapchain_test.exe              swap chain on a window: latency object, resize, formats, outputs
 #   hello_triangle.exe --selftest   renders in a window, reads the back buffer, checks pixels
 #   hello_triangle.exe --frames 300 on screen; the presented frame is checked, and so is a
@@ -79,6 +80,19 @@ else
     tail -20 "$logs/wine_basic.log"
 fi
 cleanup
+
+# --- portable tests (tests/portable): the same sources as the native suite ------------------
+for exe in "$out"/p_*.exe; do
+    name="$(basename "$exe" .exe)"
+    echo "== $name"
+    if run_limited 300 "$logs/$name.log" wine "$name.exe"; then
+        pass "$name"
+    else
+        fail "$name" "see $logs/$name.log"
+        tail -20 "$logs/$name.log"
+    fi
+    cleanup
+done
 
 # --- swapchain_test ----------------------------------------------------------------------
 echo "== swapchain_test"

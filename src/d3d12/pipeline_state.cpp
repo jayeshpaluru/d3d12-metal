@@ -123,6 +123,33 @@ HRESULT PipelineState::create_graphics(Device *device, const D3D12_GRAPHICS_PIPE
     return hand_out(pso, riid, out);
 }
 
+HRESULT PipelineState::create_compute(Device *device, const D3D12_COMPUTE_PIPELINE_STATE_DESC &desc, REFIID riid,
+                                      void **out)
+{
+    if (!out)
+        return E_POINTER;
+    auto *root_signature = ours<RootSignature>(desc.pRootSignature);
+    if (!root_signature || !desc.CS.pShaderBytecode || !desc.CS.BytecodeLength)
+        return E_INVALIDARG;
+
+    mtlb_compute_pipeline_desc pd{};
+    pd.cs_dxil = desc.CS.pShaderBytecode;
+    pd.cs_size = desc.CS.BytecodeLength;
+    pd.root_signature = root_signature->handle();
+
+    auto *pso = new PipelineState(device);
+    mtlb_result result = mtlb_compute_pipeline_create(device->handle(), &pd, &pso->pipeline_);
+    if (result != MTLB_OK) {
+        D3D12M_LOG("compute pipeline creation failed: %s", mtlb_last_error());
+        pso->Release();
+        return to_hresult(result);
+    }
+    pso->compute_ = true;
+    pso->root_signature_ = root_signature;
+    root_signature->AddRef();
+    return hand_out(pso, riid, out);
+}
+
 PipelineState::~PipelineState()
 {
     if (pipeline_)

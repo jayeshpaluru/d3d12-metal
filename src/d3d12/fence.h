@@ -12,26 +12,28 @@
 
 namespace d3d12m {
 
-class Fence final : public ChildImpl<ID3D12Fence> {
+class Fence final : public ChildImpl<ID3D12Fence1> {
 public:
-    static HRESULT create(Device *device, UINT64 initial_value, REFIID riid, void **out);
+    static HRESULT create(Device *device, UINT64 initial_value, D3D12_FENCE_FLAGS flags, REFIID riid, void **out);
 
     mtlb_event event() const { return event_; }
 
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **out) override
     {
-        return query_interfaces<IUnknown, ID3D12Object, ID3D12DeviceChild, ID3D12Pageable, ID3D12Fence>(this, riid, out);
+        return query_interfaces<IUnknown, ID3D12Object, ID3D12DeviceChild, ID3D12Pageable, ID3D12Fence, ID3D12Fence1>(this, riid, out);
     }
 
     UINT64 STDMETHODCALLTYPE GetCompletedValue() override;
     HRESULT STDMETHODCALLTYPE SetEventOnCompletion(UINT64 value, HANDLE event) override;
     HRESULT STDMETHODCALLTYPE Signal(UINT64 value) override;
+    D3D12_FENCE_FLAGS STDMETHODCALLTYPE GetCreationFlags() override { return flags_; }
 
 private:
     explicit Fence(Device *device) : ChildImpl(device) {}
     ~Fence() override;
 
     mtlb_event event_ = 0;
+    D3D12_FENCE_FLAGS flags_ = D3D12_FENCE_FLAG_NONE;
 };
 
 // Signals application events when fences reach the values they wait for. One

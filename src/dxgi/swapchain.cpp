@@ -426,7 +426,7 @@ private:
                 return E_FAIL;
             latency_ = std::make_shared<Latency>(event);
             void *fence = nullptr;
-            if (FAILED(Fence::create(queue_->device(), 0, __uuidof(ID3D12Fence), &fence)))
+            if (FAILED(Fence::create(queue_->device(), 0, D3D12_FENCE_FLAG_NONE, __uuidof(ID3D12Fence), &fence)))
                 return E_FAIL;
             fence_ = static_cast<ID3D12Fence *>(fence);
         }

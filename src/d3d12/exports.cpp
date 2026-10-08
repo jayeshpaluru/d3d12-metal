@@ -2,6 +2,7 @@
 #include "common/export.h"
 #include "common/log.h"
 #include "d3d12/device.h"
+#include "d3d12/dred.h"
 
 using namespace d3d12m;
 
@@ -10,7 +11,7 @@ D3D12M_EXPORT HRESULT D3D12CreateDevice(IUnknown *adapter, D3D_FEATURE_LEVEL min
     if (minimum_feature_level > D3D_FEATURE_LEVEL_12_0)
         return DXGI_ERROR_UNSUPPORTED;
 
-    ID3D12Device2 *created = nullptr;
+    ID3D12Device10 *created = nullptr;
     HRESULT hr = Device::create(adapter, &created);
     if (FAILED(hr))
         return hr;
@@ -22,10 +23,14 @@ D3D12M_EXPORT HRESULT D3D12CreateDevice(IUnknown *adapter, D3D_FEATURE_LEVEL min
     return hand_out(created, riid, device);
 }
 
-D3D12M_EXPORT HRESULT D3D12GetDebugInterface(REFIID, void **debug)
+D3D12M_EXPORT HRESULT D3D12GetDebugInterface(REFIID riid, void **debug)
 {
-    if (debug)
-        *debug = nullptr;
+    if (!debug)
+        return E_INVALIDARG;
+    *debug = nullptr;
+    // DRED settings are accepted and ignored; the debug layer and its info queue are absent.
+    if (riid == __uuidof(ID3D12DeviceRemovedExtendedDataSettings) || riid == __uuidof(ID3D12DeviceRemovedExtendedDataSettings1))
+        return dred_settings()->QueryInterface(riid, debug);
     return E_NOINTERFACE;
 }
 

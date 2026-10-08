@@ -16,7 +16,8 @@ if not dxc.found()
   warning('DXC not found (put dxc on PATH or pass -Ddxc=/path/to/dxc): wine_basic and hello_triangle are not built')
 else
   wine_shader_headers = {}
-  foreach shader : [['color', '../shaders/color.hlsl'], ['triangle', 'shaders/triangle.hlsl']]
+  foreach shader : [['color', '../shaders/color.hlsl'], ['triangle', 'shaders/triangle.hlsl'],
+                    ['vertex_input', '../shaders/vertex_input.hlsl']]
     headers = []
     foreach stage : [['vs', 'vs_6_0', 'VSMain'], ['ps', 'ps_6_0', 'PSMain']]
       headers += custom_target(
@@ -42,4 +43,32 @@ else
     cpp_args: wine_test_args,
     link_args: wine_test_link_args,
   )
+
+  # Compute shaders shared with the native tests.
+  wine_compute_headers = {}
+  foreach shader : ['noop']
+    wine_compute_headers += {shader: custom_target(
+      shader + '_cs',
+      input: '../shaders/' + shader + '.hlsl',
+      output: shader + '_cs.h',
+      command: [dxc, '-T', 'cs_6_0', '-E', 'CSMain', '-Fh', '@OUTPUT@', '-Vn', 'g_' + shader + '_cs', '@INPUT@'],
+    )}
+  endforeach
+
+  # The portable tests (tests/portable) as Win32 programs.
+  foreach t : portable_tests
+    sources = ['../portable/p_' + t[0] + '.cpp']
+    foreach shader : t[1]
+      sources += wine_shader_headers[shader]
+    endforeach
+    foreach shader : t[2]
+      sources += wine_compute_headers[shader]
+    endforeach
+    executable(
+      'p_' + t[0], sources,
+      include_directories: include_directories('../portable'),
+      cpp_args: wine_test_args,
+      link_args: wine_test_link_args,
+    )
+  endforeach
 endif

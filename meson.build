@@ -24,6 +24,13 @@ wine_unix = get_option('wine_unix')
 
 cxx = meson.get_compiler('cpp')
 
+# Tests that build both natively (against the dylib) and as Win32 programs (run under
+# Wine): [name, vertex/pixel shaders (tests/shaders/<name>.hlsl), compute shaders].
+# The source is tests/portable/p_<name>.cpp; see tests/portable/t12.h.
+portable_tests = [
+  ['interfaces', ['color'], ['noop']],
+]
+
 bridge_sources = []
 bridge_client_sources = []
 d3d12_sources = []
