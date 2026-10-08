@@ -157,6 +157,7 @@ private:
     mtlb_result set_descriptor_heaps(const mtlb_cmd_set_descriptor_heaps &cmd);
     mtlb_result dispatch_compute(const mtlb_cmd_dispatch &cmd);
     mtlb_result barrier(const mtlb_cmd_barrier &cmd);
+    mtlb_result execute_indirect(const mtlb_cmd_execute_indirect &cmd);
     mtlb_result clear_buffer(const mtlb_cmd_clear_buffer &cmd);
     mtlb_result clear_texture_uav(const mtlb_cmd_clear_texture_uav &cmd);
     mtlb_result copy_texture_texture(const mtlb_cmd_copy_texture_texture &cmd);
@@ -176,6 +177,7 @@ private:
     mtlb_result copy_texture(const mtlb_texture_copy_region &r, bool to_buffer);
     id<MTLBlitCommandEncoder> blit();
     id<MTLComputeCommandEncoder> compute();
+    id<MTLComputeCommandEncoder> prepare_dispatch();
     id<MTLRenderCommandEncoder> new_render_encoder(MTLRenderPassDescriptor *pass);
 
     // Every encoder ends by updating the queue's fence and every encoder starts by waiting for the
@@ -238,7 +240,9 @@ private:
     // The next encoder must wait for the one before it: a barrier or the start of a command list (command
     // lists may rely on D3D12's implicit state promotion and decay) came in between. A submission starts
     // with it set, as do the lists of one.
-    bool sync_needed_ = true;
+    // D3D12METAL_NO_BARRIERS=1 turns the synchronisation off (for showing that the barrier tests need it).
+    const bool sync_disabled_ = getenv("D3D12METAL_NO_BARRIERS") != nullptr;
+    bool sync_needed_ = !sync_disabled_;
     NSUInteger target_width_ = 0, target_height_ = 0;
     MTLPixelFormat pass_depth_format_ = MTLPixelFormatInvalid;    // attachments of the open pass
     MTLPixelFormat pass_stencil_format_ = MTLPixelFormatInvalid;
@@ -734,7 +738,7 @@ mtlb_result Replay::dispatch(const mtlb_cmd_header *header, mtlb_result (Replay:
 
 mtlb_result Replay::reset_state(const mtlb_cmd_reset_state &)
 {
-    sync_needed_ = true;
+    sync_needed_ = !sync_disabled_;
     // Whatever the previous list left (open pass, pending clears) completes first.
     mtlb_result result = flush_clears(false);
     if (result != MTLB_OK)
@@ -874,58 +878,176 @@ void Replay::bind_heaps(uint32_t compute_stage)
     }
 }
 
-mtlb_result Replay::dispatch_compute(const mtlb_cmd_dispatch &cmd)
+// The compute encoder with the application's compute pipeline, root arguments and descriptor heaps bound.
+id<MTLComputeCommandEncoder> Replay::prepare_dispatch()
 {
-    Pipeline *pipeline = state_.compute_pipeline;
-    if (!pipeline)
-        return fail(MTLB_ERROR_INVALID_ARGUMENT, "dispatch without a compute pipeline");
-    if (!cmd.x || !cmd.y || !cmd.z)
-        return MTLB_OK;  // an empty dispatch does nothing (Metal rejects it)
+    if (!state_.compute_pipeline) {
+        fail(MTLB_ERROR_INVALID_ARGUMENT, "dispatch without a compute pipeline");
+        return nil;
+    }
     id<MTLComputeCommandEncoder> enc = compute();
-    if (!enc)
-        return fail(MTLB_ERROR_DEVICE, "computeCommandEncoder failed");
+    if (!enc) {
+        fail(MTLB_ERROR_DEVICE, "computeCommandEncoder failed");
+        return nil;
+    }
     if (dirty_compute_ & kPipeline)
-        [enc setComputePipelineState:pipeline->compute];
+        [enc setComputePipelineState:state_.compute_pipeline->compute];
     if ((dirty_compute_ & kRootArgs) && state_.compute_root_args_size)
         [enc setBytes:state_.compute_root_args length:state_.compute_root_args_size atIndex:kIRArgumentBufferBindPoint];
     if (dirty_compute_ & kHeaps)
         bind_heaps(1);
     dirty_compute_ = 0;
-    [enc dispatchThreadgroups:MTLSizeMake(cmd.x, cmd.y, cmd.z) threadsPerThreadgroup:pipeline->threadgroup_size];
+    return enc;
+}
+
+mtlb_result Replay::dispatch_compute(const mtlb_cmd_dispatch &cmd)
+{
+    if (!state_.compute_pipeline)
+        return fail(MTLB_ERROR_INVALID_ARGUMENT, "dispatch without a compute pipeline");
+    if (!cmd.x || !cmd.y || !cmd.z)
+        return MTLB_OK;  // an empty dispatch does nothing (Metal rejects it)
+    id<MTLComputeCommandEncoder> enc = prepare_dispatch();
+    if (!enc)
+        return MTLB_ERROR_DEVICE;
+    [enc dispatchThreadgroups:MTLSizeMake(cmd.x, cmd.y, cmd.z) threadsPerThreadgroup:state_.compute_pipeline->threadgroup_size];
+    return MTLB_OK;
+}
+
+// ExecuteIndirect. A command with nothing but its action, and no count, is read from the application's buffer
+// as it is (Metal's indirect argument layouts equal D3D12's). Otherwise a kernel first turns every command into
+// a record of its own (root arguments and vertex buffer table with the command's changes, action arguments
+// zeroed past the count), and the encoder binds one record per command. The render pass or compute encoder of
+// the kernel is separate from the draws it feeds.
+mtlb_result Replay::execute_indirect(const mtlb_cmd_execute_indirect &cmd)
+{
+    if (!array_fits<mtlb_indirect_arg>(cmd, cmd.num_args) || cmd.stride == 0 || cmd.action < 1 || cmd.action > 3)
+        return fail(MTLB_ERROR_INVALID_ARGUMENT, "invalid indirect command");
+    if (cmd.max_count == 0)
+        return MTLB_OK;
+    uint64_t arg_offset = 0, count_offset = 0;
+    Buffer *arguments = find_buffer(queue_->device, cmd.arg_address, &arg_offset);
+    Buffer *count = cmd.count_address ? find_buffer(queue_->device, cmd.count_address, &count_offset) : nullptr;
+    if (!arguments || (cmd.count_address && !count))
+        return fail(MTLB_ERROR_INVALID_ARGUMENT, "indirect argument or count buffer not found");
+    const bool graphics = cmd.action != MTLB_INDIRECT_DISPATCH;
+    const bool direct = cmd.num_args == 0 && !cmd.count_address;
+    if (graphics && !state_.pipeline)
+        return fail(MTLB_ERROR_INVALID_ARGUMENT, "indirect draw without a pipeline");
+
+    id<MTLBuffer> scratch = nil;
+    uint32_t record_size = 0, vb_offset = 0, action_offset = 0, root_size = 0;
+    if (!direct) {
+        const uint8_t *root = graphics ? state_.root_args : state_.compute_root_args;
+        root_size = graphics ? state_.root_args_size : state_.compute_root_args_size;
+        vb_offset = (root_size + 15) & ~15u;
+        action_offset = vb_offset + sizeof(state_.vertex_buffers);  // 496 bytes, a multiple of 16
+        record_size = (action_offset + 32 + 15) & ~15u;
+        scratch = [queue_->device->device newBufferWithLength:uint64_t(record_size) * cmd.max_count
+                                                      options:MTLResourceStorageModePrivate | MTLResourceHazardTrackingModeUntracked];
+        if (!scratch)
+            return fail(MTLB_ERROR_OUT_OF_MEMORY, "indirect scratch buffer");
+        // The scratch buffer lives until the command buffer has run.
+        [cb_ addCompletedHandler:^(id<MTLCommandBuffer>) { (void)scratch; }];
+
+        id<MTLComputePipelineState> kernel = internal_kernel(queue_->device, @"translate_indirect");
+        if (!kernel)
+            return MTLB_ERROR_COMPILE_FAILED;
+        id<MTLComputeCommandEncoder> enc = compute();
+        struct Params {
+            uint32_t action, max_count, stride, action_src, num_args, root_size, vb_offset, action_offset, record_size,
+                has_count, pad[2];
+        } params = {cmd.action, cmd.max_count, cmd.stride, cmd.action_src_offset, cmd.num_args, root_size, vb_offset,
+                    action_offset, record_size, cmd.count_address ? 1u : 0u, {}};
+        const uint64_t base[2] = {arg_offset, count_offset};
+        const uint8_t zeros[16] = {};
+        [enc setComputePipelineState:kernel];
+        [enc setBuffer:arguments->buffer offset:0 atIndex:0];
+        if (cmd.num_args)
+            [enc setBytes:cmd.args length:cmd.num_args * sizeof(mtlb_indirect_arg) atIndex:1];
+        else
+            [enc setBytes:zeros length:sizeof(zeros) atIndex:1];
+        [enc setBytes:root_size ? static_cast<const void *>(root) : zeros length:std::max<uint32_t>(root_size, 16) atIndex:2];
+        [enc setBytes:state_.vertex_buffers length:sizeof(state_.vertex_buffers) atIndex:3];
+        [enc setBuffer:scratch offset:0 atIndex:4];
+        [enc setBytes:&params length:sizeof(params) atIndex:5];
+        [enc setBytes:base length:sizeof(base) atIndex:6];
+        [enc setBuffer:(count ? count : arguments)->buffer offset:0 atIndex:7];
+        [enc dispatchThreads:MTLSizeMake(cmd.max_count, 1, 1) threadsPerThreadgroup:MTLSizeMake(std::min<NSUInteger>(cmd.max_count, 64), 1, 1)];
+        dirty_compute_ = kAll;
+        if (graphics) {
+            end_compute();       // the draws below wait for the kernel
+            sync_needed_ = true;
+        } else {
+            [enc memoryBarrierWithScope:MTLBarrierScopeBuffers];
+        }
+    }
+
+    auto source = [&](uint32_t i, uint64_t *offset) -> id<MTLBuffer> {
+        if (direct) {
+            *offset = arg_offset + uint64_t(i) * cmd.stride + cmd.action_src_offset;
+            return arguments->buffer;
+        }
+        *offset = uint64_t(i) * record_size + action_offset;
+        return scratch;
+    };
+
+    if (!graphics) {
+        id<MTLComputeCommandEncoder> enc = prepare_dispatch();
+        if (!enc)
+            return MTLB_ERROR_DEVICE;
+        for (uint32_t i = 0; i < cmd.max_count; ++i) {
+            uint64_t offset;
+            id<MTLBuffer> buffer = source(i, &offset);
+            if (!direct && root_size)
+                [enc setBuffer:scratch offset:uint64_t(i) * record_size atIndex:kIRArgumentBufferBindPoint];
+            [enc dispatchThreadgroupsWithIndirectBuffer:buffer indirectBufferOffset:offset
+                                  threadsPerThreadgroup:state_.compute_pipeline->threadgroup_size];
+        }
+        dirty_compute_ |= kRootArgs;  // the application's arguments are bound again at its next dispatch
+        return MTLB_OK;
+    }
+
+    bool ready;
+    mtlb_result result = begin_draw(&ready);
+    if (result != MTLB_OK || !ready)
+        return result;
+    if (cmd.action == MTLB_INDIRECT_DRAW_INDEXED && (!state_.index_buffer || (state_.index_size != 2 && state_.index_size != 4)))
+        return fail(MTLB_ERROR_INVALID_ARGUMENT, "indexed indirect draw without a valid index buffer");
+    for (uint32_t i = 0; i < cmd.max_count; ++i) {
+        uint64_t offset;
+        id<MTLBuffer> buffer = source(i, &offset);
+        if (!direct) {
+            if (root_size) {
+                [render_ setVertexBuffer:scratch offset:uint64_t(i) * record_size atIndex:kIRArgumentBufferBindPoint];
+                [render_ setFragmentBuffer:scratch offset:uint64_t(i) * record_size atIndex:kIRArgumentBufferBindPoint];
+            }
+            [render_ setVertexBuffer:scratch offset:uint64_t(i) * record_size + vb_offset atIndex:kIRVertexBufferBindPoint];
+        }
+        if (cmd.action == MTLB_INDIRECT_DRAW)
+            IRRuntimeDrawPrimitives(render_, to_primitive_type(state_.topology), buffer, offset);
+        else
+            IRRuntimeDrawIndexedPrimitives(render_, to_primitive_type(state_.topology),
+                                           state_.index_size == 2 ? MTLIndexTypeUInt16 : MTLIndexTypeUInt32,
+                                           state_.index_buffer, state_.index_offset, buffer, offset);
+    }
+    if (!direct)
+        dirty_ |= kRootArgs | kVertexBuffers;  // the application's state is bound again at its next draw
     return MTLB_OK;
 }
 
 // Barriers synchronise the work before them with the work after. Between encoders that is the fence; inside
-// an open encoder a memory barrier (compute, render pass) orders the dispatches and draws around it, and
-// a render target or depth-stencil barrier ends the pass so its writes are stored.
+// an open compute encoder a memory barrier orders the dispatches around it. A render pass cannot be waited
+// on from the inside on this hardware (fragment work is not a stage a barrier can follow), so a barrier ends
+// it: its writes are stored and the next pass loads them.
 mtlb_result Replay::barrier(const mtlb_cmd_barrier &cmd)
 {
     if (!array_fits<mtlb_barrier>(cmd, cmd.count))
         return fail(MTLB_ERROR_INVALID_ARGUMENT, "barrier count exceeds the record");
-    bool ends_pass = false;
-    for (uint32_t i = 0; i < cmd.count; ++i) {
-        const mtlb_barrier &b = cmd.barriers[i];
-        if (!b.texture && !b.buffer) {
-            ends_pass = true;  // a barrier on all resources
-            continue;
-        }
-        Texture *texture = b.texture ? from_handle<Texture>(b.texture) : nullptr;
-        if (texture && render_) {
-            const Target any{texture, 0, 0, 0};
-            const auto is_target = [&](const Target &t) { return t.texture == any.texture; };
-            if (is_target(state_.depth) || std::any_of(state_.targets, state_.targets + state_.num_targets, is_target))
-                ends_pass = true;
-        }
-    }
+    if (sync_disabled_)
+        return MTLB_OK;
     sync_needed_ = true;
-    if (blit_)
-        end_blit();
-    if (ends_pass)
-        end_render();
-    if (render_) {
-        [render_ memoryBarrierWithScope:MTLBarrierScopeBuffers | MTLBarrierScopeTextures afterStages:MTLRenderStageFragment
-                           beforeStages:MTLRenderStageVertex];
-    }
+    end_blit();
+    end_render();
     if (compute_)
         [compute_ memoryBarrierWithScope:MTLBarrierScopeBuffers | MTLBarrierScopeTextures];
     return MTLB_OK;
@@ -1066,6 +1188,7 @@ mtlb_result Replay::execute(const mtlb_cmd_header *header)
     case MTLB_CMD_SET_DESCRIPTOR_HEAPS: return dispatch(header, &Replay::set_descriptor_heaps);
     case MTLB_CMD_DISPATCH: return dispatch(header, &Replay::dispatch_compute);
     case MTLB_CMD_BARRIER: return dispatch(header, &Replay::barrier);
+    case MTLB_CMD_EXECUTE_INDIRECT: return dispatch(header, &Replay::execute_indirect);
     case MTLB_CMD_CLEAR_BUFFER: return dispatch(header, &Replay::clear_buffer);
     case MTLB_CMD_CLEAR_TEXTURE_UAV: return dispatch(header, &Replay::clear_texture_uav);
     case MTLB_CMD_COPY_TEXTURE_TEXTURE: return dispatch(header, &Replay::copy_texture_texture);

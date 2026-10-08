@@ -9,6 +9,7 @@
 #include "d3d12/command_allocator.h"
 #include "d3d12/command_list.h"
 #include "d3d12/command_queue.h"
+#include "d3d12/command_signature.h"
 #include "d3d12/descriptor_heap.h"
 #include "d3d12/dred.h"
 #include "d3d12/fence.h"
@@ -254,6 +255,12 @@ HRESULT Device::CreateRootSignature(UINT, const void *blob, SIZE_T size, REFIID 
 HRESULT Device::CreateFence(UINT64 initial_value, D3D12_FENCE_FLAGS flags, REFIID riid, void **out)
 {
     return Fence::create(this, initial_value, flags, riid, out);
+}
+
+HRESULT Device::CreateCommandSignature(const D3D12_COMMAND_SIGNATURE_DESC *desc, ID3D12RootSignature *root_signature,
+                                       REFIID riid, void **out)
+{
+    return desc ? CommandSignature::create(this, *desc, root_signature, riid, out) : E_INVALIDARG;
 }
 
 HRESULT Device::CreateHeap(const D3D12_HEAP_DESC *desc, REFIID riid, void **out)

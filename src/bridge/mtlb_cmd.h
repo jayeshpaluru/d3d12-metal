@@ -57,6 +57,7 @@ typedef enum mtlb_cmd_type {
     MTLB_CMD_CLEAR_TEXTURE_UAV,
     MTLB_CMD_CLEAR_DSV,
     MTLB_CMD_BARRIER,
+    MTLB_CMD_EXECUTE_INDIRECT,
 } mtlb_cmd_type;
 
 typedef struct mtlb_cmd_header {
@@ -317,9 +318,8 @@ typedef struct mtlb_cmd_clear_texture_uav {
 
 /* Resource barriers. Resources are not hazard tracked: work on the queue is ordered by explicit
  * synchronisation, which a barrier asks for. Between two encoders nothing waits unless a barrier (or a
- * command list boundary) came in between; inside a compute or render encoder a barrier orders the
- * dispatches or draws around it; a barrier on a render target or depth-stencil ends the render pass
- * that has it attached. */
+ * command list boundary) came in between; a barrier ends the open render pass and blit encoder and
+ * orders the dispatches of the open compute encoder around it. */
 enum {
     MTLB_BARRIER_TRANSITION = 1,
     MTLB_BARRIER_UAV = 2,
@@ -340,7 +340,48 @@ typedef struct mtlb_cmd_barrier {
     mtlb_barrier barriers[];
 } mtlb_cmd_barrier;
 
+/* ExecuteIndirect. The commands are read by the GPU from an argument buffer, `stride` bytes apart: each starts
+ * with the arguments that change root arguments or vertex buffers (described by `args`), then the action's
+ * arguments at `action_src_offset` in the D3D12 layouts (draw: 4 dwords, indexed draw: 5, dispatch: 3).
+ * `max_count` commands run; if `count_address` is not 0 the number actually run is the dword stored there
+ * (at most max_count). */
+enum {
+    MTLB_INDIRECT_DRAW = 1,
+    MTLB_INDIRECT_DRAW_INDEXED = 2,
+    MTLB_INDIRECT_DISPATCH = 3,
+};
+
+enum {
+    MTLB_INDIRECT_ARG_CONSTANT = 1,    /* `size` bytes copied to dst_offset of the root arguments */
+    MTLB_INDIRECT_ARG_POINTER = 2,     /* a GPU address (8 bytes) copied to dst_offset of the root arguments */
+    MTLB_INDIRECT_ARG_VERTEX_BUFFER = 3, /* a D3D12_VERTEX_BUFFER_VIEW for slot dst_offset */
+    MTLB_INDIRECT_ARG_COMMAND_INDEX = 4, /* the command's index, to dst_offset of the root arguments */
+};
+
+typedef struct mtlb_indirect_arg {
+    uint32_t type;             /* MTLB_INDIRECT_ARG_* */
+    uint32_t dst_offset;
+    uint32_t size;
+    uint32_t src_offset;       /* in the command */
+} mtlb_indirect_arg;
+
+typedef struct mtlb_cmd_execute_indirect {
+    mtlb_cmd_header header;
+    uint32_t action;           /* MTLB_INDIRECT_* */
+    uint32_t max_count;
+    uint32_t stride;
+    uint32_t action_src_offset;
+    uint64_t arg_address;      /* GPU address of the first command */
+    uint64_t count_address;    /* GPU address of the count, or 0 */
+    uint32_t num_args;
+    uint32_t reserved;
+    mtlb_indirect_arg args[];
+} mtlb_cmd_execute_indirect;
+
 MTLB_ASSERT_SIZE(mtlb_cmd_header, 8);
+MTLB_ASSERT_SIZE(mtlb_indirect_arg, 16);
+MTLB_ASSERT_SIZE(mtlb_cmd_execute_indirect, 48);
+MTLB_ASSERT_OFFSET(mtlb_cmd_execute_indirect, args, 48);
 MTLB_ASSERT_SIZE(mtlb_barrier, 24);
 MTLB_ASSERT_SIZE(mtlb_cmd_barrier, 16);
 MTLB_ASSERT_SIZE(mtlb_cmd_clear_buffer, 56);

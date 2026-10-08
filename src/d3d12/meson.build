@@ -5,6 +5,7 @@ d3d12_sources += files(
   'clear_value.cpp',
   'command_list.cpp',
   'command_queue.cpp',
+  'command_signature.cpp',
   'descriptor_heap.cpp',
   'descriptors.cpp',
   'dred.cpp',

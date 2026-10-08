@@ -86,7 +86,7 @@ public:
     void STDMETHODCALLTYPE SetMarker(UINT, const void *, UINT) override { D3D12M_STUB_LOG(); }
     void STDMETHODCALLTYPE BeginEvent(UINT, const void *, UINT) override { D3D12M_STUB_LOG(); }
     void STDMETHODCALLTYPE EndEvent() override { D3D12M_STUB_LOG(); }
-    void STDMETHODCALLTYPE ExecuteIndirect(ID3D12CommandSignature *, UINT, ID3D12Resource *, UINT64, ID3D12Resource *, UINT64) override { D3D12M_STUB_LOG(); }
+    void STDMETHODCALLTYPE ExecuteIndirect(ID3D12CommandSignature *pCommandSignature, UINT MaxCommandCount, ID3D12Resource *pArgumentBuffer, UINT64 ArgumentBufferOffset, ID3D12Resource *pCountBuffer, UINT64 CountBufferOffset) override;
     // ID3D12GraphicsCommandList1
     void STDMETHODCALLTYPE AtomicCopyBufferUINT(ID3D12Resource *, UINT64, ID3D12Resource *, UINT64, UINT, ID3D12Resource *const *, const D3D12_SUBRESOURCE_RANGE_UINT64 *) override { D3D12M_STUB_LOG(); }
     void STDMETHODCALLTYPE AtomicCopyBufferUINT64(ID3D12Resource *, UINT64, ID3D12Resource *, UINT64, UINT, ID3D12Resource *const *, const D3D12_SUBRESOURCE_RANGE_UINT64 *) override { D3D12M_STUB_LOG(); }

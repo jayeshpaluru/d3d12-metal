@@ -5,6 +5,7 @@
 
 #include "d3d12/clear_value.h"
 #include "d3d12/command_allocator.h"
+#include "d3d12/command_signature.h"
 #include "d3d12/device.h"
 #include "d3d12/formats.h"
 #include "d3d12/pipeline_state.h"
@@ -601,6 +602,86 @@ void CommandList::clear_uav(D3D12_CPU_DESCRIPTOR_HANDLE view_handle, ID3D12Resou
         if (r.right > r.left && r.bottom > r.top)
             emit(r.left, r.top, r.right - r.left, r.bottom - r.top);
     }
+}
+
+// ExecuteIndirect: the signature's arguments become a description for the backend, with the root parameters
+// they change resolved to offsets in the root argument buffer of the current root signature.
+void CommandList::ExecuteIndirect(ID3D12CommandSignature *signature_ptr, UINT max_count, ID3D12Resource *argument_buffer,
+                                  UINT64 argument_offset, ID3D12Resource *count_buffer, UINT64 count_offset)
+{
+    auto *signature = ours<CommandSignature>(signature_ptr);
+    auto *arguments = ours<Resource>(argument_buffer);
+    auto *count = ours<Resource>(count_buffer);
+    if (closed_ || !signature || !arguments || !arguments->is_buffer() || (count_buffer && (!count || !count->is_buffer()))) {
+        D3D12M_LOG("ExecuteIndirect needs an open list and a command signature and buffers of this layer");
+        return;
+    }
+    const bool dispatch = signature->action() == D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH;
+    RootState &root = dispatch ? compute_ : graphics_;
+    if (dispatch ? (!has_compute_pipeline_ || !root.signature) : !prepare_draw()) {
+        D3D12M_LOG("ExecuteIndirect skipped: needs a pipeline and a root signature of the matching kind");
+        return;
+    }
+    if (dispatch)
+        flush_root_args(compute_, MTLB_CMD_SET_COMPUTE_ROOT_ARGS);
+
+    std::vector<mtlb_indirect_arg> args;
+    uint32_t source = 0, action_source = 0;
+    for (const D3D12_INDIRECT_ARGUMENT_DESC &a : signature->arguments()) {
+        mtlb_indirect_arg arg{};
+        arg.src_offset = source;
+        switch (a.Type) {
+        case D3D12_INDIRECT_ARGUMENT_TYPE_CONSTANT: {
+            const RootSignature::Slot *slot = find_slot(root, a.Constant.RootParameterIndex, D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS);
+            if (!slot || (a.Constant.DestOffsetIn32BitValues + a.Constant.Num32BitValuesToSet) * 4 > slot->size)
+                return;
+            arg.type = MTLB_INDIRECT_ARG_CONSTANT;
+            arg.dst_offset = slot->offset + a.Constant.DestOffsetIn32BitValues * 4;
+            arg.size = a.Constant.Num32BitValuesToSet * 4;
+            break;
+        }
+        case D3D12_INDIRECT_ARGUMENT_TYPE_CONSTANT_BUFFER_VIEW:
+        case D3D12_INDIRECT_ARGUMENT_TYPE_SHADER_RESOURCE_VIEW:
+        case D3D12_INDIRECT_ARGUMENT_TYPE_UNORDERED_ACCESS_VIEW: {
+            const UINT index = a.Type == D3D12_INDIRECT_ARGUMENT_TYPE_CONSTANT_BUFFER_VIEW ? a.ConstantBufferView.RootParameterIndex
+                               : a.Type == D3D12_INDIRECT_ARGUMENT_TYPE_SHADER_RESOURCE_VIEW ? a.ShaderResourceView.RootParameterIndex
+                                                                                             : a.UnorderedAccessView.RootParameterIndex;
+            const D3D12_ROOT_PARAMETER_TYPE type = a.Type == D3D12_INDIRECT_ARGUMENT_TYPE_CONSTANT_BUFFER_VIEW ? D3D12_ROOT_PARAMETER_TYPE_CBV
+                                                   : a.Type == D3D12_INDIRECT_ARGUMENT_TYPE_SHADER_RESOURCE_VIEW ? D3D12_ROOT_PARAMETER_TYPE_SRV
+                                                                                                                 : D3D12_ROOT_PARAMETER_TYPE_UAV;
+            const RootSignature::Slot *slot = find_slot(root, index, type);
+            if (!slot)
+                return;
+            arg.type = MTLB_INDIRECT_ARG_POINTER;
+            arg.dst_offset = slot->offset;
+            arg.size = 8;
+            break;
+        }
+        case D3D12_INDIRECT_ARGUMENT_TYPE_VERTEX_BUFFER_VIEW:
+            arg.type = MTLB_INDIRECT_ARG_VERTEX_BUFFER;
+            arg.dst_offset = a.VertexBuffer.Slot;
+            arg.size = 16;
+            break;
+        default:  // the action
+            action_source = source;
+            source += indirect_argument_size(a);
+            continue;
+        }
+        source += indirect_argument_size(a);
+        args.push_back(arg);
+    }
+
+    auto *cmd = append<mtlb_cmd_execute_indirect>(MTLB_CMD_EXECUTE_INDIRECT, args.size() * sizeof(mtlb_indirect_arg));
+    cmd->action = signature->action() == D3D12_INDIRECT_ARGUMENT_TYPE_DRAW ? MTLB_INDIRECT_DRAW
+                  : signature->action() == D3D12_INDIRECT_ARGUMENT_TYPE_DRAW_INDEXED ? MTLB_INDIRECT_DRAW_INDEXED
+                                                                                    : MTLB_INDIRECT_DISPATCH;
+    cmd->max_count = max_count;
+    cmd->stride = signature->stride();
+    cmd->action_src_offset = action_source;
+    cmd->arg_address = arguments->GetGPUVirtualAddress() + argument_offset;
+    cmd->count_address = count ? count->GetGPUVirtualAddress() + count_offset : 0;
+    cmd->num_args = static_cast<uint32_t>(args.size());
+    std::copy(args.begin(), args.end(), cmd->args);
 }
 
 void CommandList::Dispatch(UINT x, UINT y, UINT z)

@@ -34,6 +34,9 @@ portable_tests = [
   ['compute', [], ['fill']],
   ['depth', ['color'], ['probe']],
   ['heaps', [], ['probe']],
+  ['barriers', ['color'], ['probe', 'fill']],
+  ['queues', [], ['fill']],
+  ['large_buffers', [], ['probe']],
 ]
 
 bridge_sources = []
