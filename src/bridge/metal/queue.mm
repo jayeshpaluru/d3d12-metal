@@ -1621,6 +1621,36 @@ mtlb_result Replay::copy_texture_texture(const mtlb_cmd_copy_texture_texture &cm
     Texture *dst = from_handle<Texture>(cmd.dst), *src = from_handle<Texture>(cmd.src);
     if (!dst || !src)
         return fail(MTLB_ERROR_INVALID_ARGUMENT, "invalid texture copy");
+    mtlb_format_info src_info, dst_info;
+    if (mtlb_format_get_info(src->format, &src_info) == MTLB_OK && mtlb_format_get_info(dst->format, &dst_info) == MTLB_OK
+        && (src_info.block_width != dst_info.block_width || src_info.block_height != dst_info.block_height)
+        && src_info.bytes_per_block == dst_info.bytes_per_block && !cmd.whole) {
+        // A block-compressed texture and a texture of one texel per block (a compressor's output) copy block for
+        // block, which Metal only does through a buffer: the box is in the source's units, the origin in the
+        // destination's.
+        const uint32_t sbw = std::max<uint32_t>(src_info.block_width, 1), sbh = std::max<uint32_t>(src_info.block_height, 1);
+        const uint32_t dbw = std::max<uint32_t>(dst_info.block_width, 1), dbh = std::max<uint32_t>(dst_info.block_height, 1);
+        const uint32_t blocks_w = (cmd.width + sbw - 1) / sbw, blocks_h = (cmd.height + sbh - 1) / sbh;
+        if (!blocks_w || !blocks_h || !cmd.depth)
+            return MTLB_OK;
+        if (!subresource_exists(src->texture, cmd.src_mip, cmd.src_slice) || !subresource_exists(dst->texture, cmd.dst_mip, cmd.dst_slice)
+            || cmd.src_x % sbw || cmd.src_y % sbh || cmd.dst_x % dbw || cmd.dst_y % dbh)
+            return fail(MTLB_ERROR_INVALID_ARGUMENT, "texture copy between block sizes outside its textures or misaligned");
+        const uint64_t row = uint64_t(blocks_w) * src_info.bytes_per_block, image = row * blocks_h;
+        id<MTLBuffer> temp = [queue_->device->device newBufferWithLength:image * cmd.depth
+                                                                 options:MTLResourceStorageModePrivate | MTLResourceHazardTrackingModeUntracked];
+        if (!temp)
+            return fail(MTLB_ERROR_OUT_OF_MEMORY, "no memory for a texture copy between block sizes");
+        id<MTLBlitCommandEncoder> enc = blit();
+        [enc copyFromTexture:src->texture sourceSlice:cmd.src_slice sourceLevel:cmd.src_mip
+                sourceOrigin:MTLOriginMake(cmd.src_x, cmd.src_y, cmd.src_z) sourceSize:MTLSizeMake(blocks_w * sbw, blocks_h * sbh, cmd.depth)
+                    toBuffer:temp destinationOffset:0 destinationBytesPerRow:row destinationBytesPerImage:image];
+        [enc copyFromBuffer:temp sourceOffset:0 sourceBytesPerRow:row sourceBytesPerImage:image
+                 sourceSize:MTLSizeMake(blocks_w * dbw, blocks_h * dbh, cmd.depth) toTexture:dst->texture
+           destinationSlice:cmd.dst_slice destinationLevel:cmd.dst_mip
+          destinationOrigin:MTLOriginMake(cmd.dst_x, cmd.dst_y, cmd.dst_z)];
+        return MTLB_OK;
+    }
     uint32_t copy_w = cmd.width, copy_h = cmd.height, copy_d = cmd.depth;
     if (cmd.whole) {
         if (src->texture.mipmapLevelCount != dst->texture.mipmapLevelCount || slice_count_of(src->texture) != slice_count_of(dst->texture)
