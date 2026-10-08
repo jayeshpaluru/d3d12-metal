@@ -2,6 +2,7 @@
 // the front-end sustains. Games write tens of thousands of descriptors per frame, and under Wine a bridge
 // crossing costs about 350 ns, so descriptor creation must be a memory write. Prints one line per kind
 // ("descbench: <kind> <ns per descriptor>") and fails when a kind is implausibly slow (a bridge call per write).
+#include <algorithm>
 #include <chrono>
 
 #include "t12.h"
@@ -25,11 +26,15 @@ struct Bench {
         const int calls = kWrites / writes_per_call;
         for (int i = 0; i < 1000; ++i)  // warm up (creates the Metal views once)
             write(i);
-        const auto start = std::chrono::steady_clock::now();
-        for (int i = 0; i < calls; ++i)
-            write(i);
-        const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
-        const double ns = seconds * 1e9 / (double(calls) * writes_per_call);
+        // The best of three runs: a descheduled thread on a busy machine must not look like a slow path.
+        double ns = 1e30;
+        for (int run = 0; run < 3; ++run) {
+            const auto start = std::chrono::steady_clock::now();
+            for (int i = 0; i < calls; ++i)
+                write(i);
+            const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+            ns = std::min(ns, seconds * 1e9 / (double(calls) * writes_per_call));
+        }
         std::printf("descbench: %-28s %8.1f ns/descriptor  %6.2f M/s\n", name, ns, 1e3 / ns);
         std::fflush(stdout);
         if (ns > worst_ns)

@@ -98,6 +98,8 @@ double create_pipelines(int count, int first = 0)
     return std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
 }
 
+std::string g_cleanup_dir;
+
 mtlb_cache_stats stats()
 {
     mtlb_cache_stats s;
@@ -140,18 +142,24 @@ int main(int argc, char **argv)
     }
     if (mode != "") {
         // These modes start from an empty directory of their own.
-        dir += "/" + mode;
+        dir += "/" + mode + "-" + std::to_string(getpid());
         setenv("D3D12METAL_CACHE_DIR", dir.c_str(), 1);
         if (mode == "disabled")
             setenv("D3D12METAL_CACHE", "0", 1);
         if (mode == "evict")
             setenv("D3D12METAL_CACHE_MAX_MB", "1", 1);
     } else {
-        dir += "/cold-warm";
+        dir += "/cold-warm-" + std::to_string(getpid());  // repeated runs may overlap: one directory per process
         setenv("D3D12METAL_CACHE_DIR", dir.c_str(), 1);
     }
 
-    std::filesystem::remove_all(dir);  // a subdirectory of the test's own: always a cold start
+    std::error_code ignored;
+    std::filesystem::remove_all(dir, ignored);
+    g_cleanup_dir = dir;
+    std::atexit([] {
+        std::error_code e;
+        std::filesystem::remove_all(g_cleanup_dir, e);
+    });  // a subdirectory of the test's own: always a cold start
 
     if (mode == "disabled") {
         create_pipelines(3);
