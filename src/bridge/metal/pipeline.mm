@@ -75,6 +75,8 @@ mtlb_result convert_stage(Device *device, RootSignature *root_signature, const v
     OwnedObject input(IRObjectCreateFromDXIL(static_cast<const uint8_t *>(dxil), size, IRBytecodeOwnershipNone));
     IRError *error = nullptr;
     OwnedObject output(IRCompilerAllocCompileAndLink(compiler, entry, input.ptr, &error));
+    // The compiler outlives root signatures; do not leave it pointing at this one.
+    IRCompilerSetGlobalRootSignature(compiler, nullptr);
     if (!output.ptr)
         return fail(MTLB_ERROR_COMPILE_FAILED, error_text(error, "DXIL conversion failed"));
 
