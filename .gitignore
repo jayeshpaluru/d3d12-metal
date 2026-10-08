@@ -1,0 +1,9 @@
+build/
+*.dll
+*.exe
+*.dylib
+*.so
+*.metallib
+*.gputrace
+.DS_Store
+captures/
