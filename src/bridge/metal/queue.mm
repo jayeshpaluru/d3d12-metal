@@ -40,6 +40,13 @@ id<MTLTexture> attachment_texture(Texture *texture, uint32_t view_format)
     return view;
 }
 
+// True when `count` trailing elements of type E fit in the record `cmd`.
+template <class E, class T>
+bool array_fits(const T &cmd, uint64_t count)
+{
+    return count <= (cmd.header.size - sizeof(T)) / sizeof(E);
+}
+
 // Replays one command stream into a command buffer, opening and closing
 // encoders on demand and re-applying draw state on every new render encoder.
 class Replay {
@@ -86,19 +93,36 @@ private:
         float color[4];
     };
 
-    mtlb_result execute(const mtlb_cmd_header *cmd);
-    mtlb_result reset_state();
+    mtlb_result execute(const mtlb_cmd_header *header);
+    // Checks that a record is large enough for its type, then calls the handler.
+    template <class T>
+    mtlb_result dispatch(const mtlb_cmd_header *header, mtlb_result (Replay::*handler)(const T &));
+
+    mtlb_result reset_state(const mtlb_cmd_reset_state &cmd);
+    mtlb_result set_render_targets(const mtlb_cmd_set_render_targets &cmd);
+    mtlb_result clear_rtv(const mtlb_cmd_clear_rtv &cmd);
+    mtlb_result set_pipeline(const mtlb_cmd_set_pipeline &cmd);
+    mtlb_result set_viewports(const mtlb_cmd_set_viewports &cmd);
+    mtlb_result set_scissors(const mtlb_cmd_set_scissors &cmd);
+    mtlb_result set_topology(const mtlb_cmd_set_topology &cmd);
+    mtlb_result set_vertex_buffers(const mtlb_cmd_set_vertex_buffers &cmd);
+    mtlb_result set_index_buffer(const mtlb_cmd_set_index_buffer &cmd);
+    mtlb_result set_root_args(const mtlb_cmd_set_graphics_root_args &cmd);
+    mtlb_result set_blend_factor(const mtlb_cmd_set_blend_factor &cmd);
+    mtlb_result set_stencil_ref(const mtlb_cmd_set_stencil_ref &cmd);
+    mtlb_result draw(const mtlb_cmd_draw &cmd);
+    mtlb_result draw_indexed(const mtlb_cmd_draw_indexed &cmd);
+    mtlb_result copy_buffer(const mtlb_cmd_copy_buffer &cmd);
+    mtlb_result copy_texture_to_buffer(const mtlb_cmd_copy_texture_to_buffer &cmd);
+    mtlb_result copy_buffer_to_texture(const mtlb_cmd_copy_buffer_to_texture &cmd);
+
     mtlb_result resolve_target(const mtlb_render_target &t, Target *out);
-    mtlb_result set_render_targets(const mtlb_cmd_set_render_targets *cmd);
-    mtlb_result clear_rtv(const mtlb_cmd_clear_rtv *cmd);
     bool is_bound(const Target &t) const;
     mtlb_result open_render_pass();
     mtlb_result flush_clears(bool keep_bound);
     mtlb_result clear_only_pass(const PendingClear &clear);
     mtlb_result begin_draw(bool *ready);
     mtlb_result apply_state();
-    mtlb_result draw(const mtlb_cmd_draw *cmd);
-    mtlb_result draw_indexed(const mtlb_cmd_draw_indexed *cmd);
     mtlb_result copy_texture(const mtlb_texture_copy_region &r, bool to_buffer);
     id<MTLBlitCommandEncoder> blit();
     id<MTLRenderCommandEncoder> new_render_encoder(MTLRenderPassDescriptor *pass);
@@ -199,30 +223,32 @@ bool Replay::is_bound(const Target &t) const
     return std::find(targets_, targets_ + num_targets_, t) != targets_ + num_targets_;
 }
 
-mtlb_result Replay::set_render_targets(const mtlb_cmd_set_render_targets *cmd)
+mtlb_result Replay::set_render_targets(const mtlb_cmd_set_render_targets &cmd)
 {
+    if (cmd.count > MTLB_MAX_RENDER_TARGETS || !array_fits<mtlb_render_target>(cmd, cmd.count))
+        return fail(MTLB_ERROR_INVALID_ARGUMENT, "render target count out of range");
     Target targets[MTLB_MAX_RENDER_TARGETS];
-    for (uint32_t i = 0; i < cmd->count; ++i) {
-        mtlb_result result = resolve_target(cmd->targets[i], &targets[i]);
+    for (uint32_t i = 0; i < cmd.count; ++i) {
+        mtlb_result result = resolve_target(cmd.targets[i], &targets[i]);
         if (result != MTLB_OK)
             return result;
     }
     // Binding the same targets again must not break the pass.
-    if (cmd->count == num_targets_ && std::equal(targets, targets + cmd->count, targets_))
+    if (cmd.count == num_targets_ && std::equal(targets, targets + cmd.count, targets_))
         return MTLB_OK;
 
     end_render();
-    std::copy(targets, targets + cmd->count, targets_);
-    std::fill(targets_ + cmd->count, targets_ + MTLB_MAX_RENDER_TARGETS, Target{});
-    num_targets_ = cmd->count;
+    std::copy(targets, targets + cmd.count, targets_);
+    std::fill(targets_ + cmd.count, targets_ + MTLB_MAX_RENDER_TARGETS, Target{});
+    num_targets_ = cmd.count;
     // Clears for views that are no longer bound can only run as passes of their own.
     return flush_clears(true);
 }
 
-mtlb_result Replay::clear_rtv(const mtlb_cmd_clear_rtv *cmd)
+mtlb_result Replay::clear_rtv(const mtlb_cmd_clear_rtv &cmd)
 {
     Target target;
-    mtlb_result result = resolve_target(cmd->target, &target);
+    mtlb_result result = resolve_target(cmd.target, &target);
     if (result != MTLB_OK)
         return result;
     if (!target.texture)
@@ -235,7 +261,7 @@ mtlb_result Replay::clear_rtv(const mtlb_cmd_clear_rtv *cmd)
                                  [&](const PendingClear &c) { return c.target == target; }),
                   clears_.end());
     PendingClear clear{target, {}};
-    std::copy_n(cmd->color, 4, clear.color);
+    std::copy_n(cmd.color, 4, clear.color);
     clears_.push_back(clear);
     return MTLB_OK;
 }
@@ -383,18 +409,18 @@ mtlb_result Replay::begin_draw(bool *ready)
     return apply_state();
 }
 
-mtlb_result Replay::draw(const mtlb_cmd_draw *cmd)
+mtlb_result Replay::draw(const mtlb_cmd_draw &cmd)
 {
     bool ready;
     mtlb_result result = begin_draw(&ready);
     if (result != MTLB_OK || !ready)
         return result;
-    IRRuntimeDrawPrimitives(render_, to_primitive_type(topology_), cmd->start_vertex, cmd->vertex_count,
-                            cmd->instance_count, cmd->start_instance);
+    IRRuntimeDrawPrimitives(render_, to_primitive_type(topology_), cmd.start_vertex, cmd.vertex_count,
+                            cmd.instance_count, cmd.start_instance);
     return MTLB_OK;
 }
 
-mtlb_result Replay::draw_indexed(const mtlb_cmd_draw_indexed *cmd)
+mtlb_result Replay::draw_indexed(const mtlb_cmd_draw_indexed &cmd)
 {
     bool ready;
     mtlb_result result = begin_draw(&ready);
@@ -402,10 +428,10 @@ mtlb_result Replay::draw_indexed(const mtlb_cmd_draw_indexed *cmd)
         return result;
     if (!index_buffer_ || (index_size_ != 2 && index_size_ != 4))
         return fail(MTLB_ERROR_INVALID_ARGUMENT, "indexed draw without a valid index buffer");
-    IRRuntimeDrawIndexedPrimitives(render_, to_primitive_type(topology_), cmd->index_count,
+    IRRuntimeDrawIndexedPrimitives(render_, to_primitive_type(topology_), cmd.index_count,
                                    index_size_ == 2 ? MTLIndexTypeUInt16 : MTLIndexTypeUInt32, index_buffer_,
-                                   index_offset_ + uint64_t(cmd->start_index) * index_size_, cmd->instance_count,
-                                   cmd->base_vertex, cmd->start_instance);
+                                   index_offset_ + uint64_t(cmd.start_index) * index_size_, cmd.instance_count,
+                                   cmd.base_vertex, cmd.start_instance);
     return MTLB_OK;
 }
 
@@ -430,39 +456,15 @@ mtlb_result Replay::copy_texture(const mtlb_texture_copy_region &r, bool to_buff
     return MTLB_OK;
 }
 
-// Size of the fixed part of each record type, or 0 for an unknown type.
-size_t fixed_size(uint32_t type)
+template <class T>
+mtlb_result Replay::dispatch(const mtlb_cmd_header *header, mtlb_result (Replay::*handler)(const T &))
 {
-    switch (type) {
-    case MTLB_CMD_SET_RENDER_TARGETS: return sizeof(mtlb_cmd_set_render_targets);
-    case MTLB_CMD_CLEAR_RTV: return sizeof(mtlb_cmd_clear_rtv);
-    case MTLB_CMD_SET_PIPELINE: return sizeof(mtlb_cmd_set_pipeline);
-    case MTLB_CMD_SET_VIEWPORTS: return sizeof(mtlb_cmd_set_viewports);
-    case MTLB_CMD_SET_SCISSORS: return sizeof(mtlb_cmd_set_scissors);
-    case MTLB_CMD_SET_TOPOLOGY: return sizeof(mtlb_cmd_set_topology);
-    case MTLB_CMD_SET_VERTEX_BUFFERS: return sizeof(mtlb_cmd_set_vertex_buffers);
-    case MTLB_CMD_SET_INDEX_BUFFER: return sizeof(mtlb_cmd_set_index_buffer);
-    case MTLB_CMD_SET_GRAPHICS_ROOT_ARGS: return sizeof(mtlb_cmd_set_graphics_root_args);
-    case MTLB_CMD_SET_BLEND_FACTOR: return sizeof(mtlb_cmd_set_blend_factor);
-    case MTLB_CMD_SET_STENCIL_REF: return sizeof(mtlb_cmd_set_stencil_ref);
-    case MTLB_CMD_DRAW: return sizeof(mtlb_cmd_draw);
-    case MTLB_CMD_DRAW_INDEXED: return sizeof(mtlb_cmd_draw_indexed);
-    case MTLB_CMD_COPY_BUFFER: return sizeof(mtlb_cmd_copy_buffer);
-    case MTLB_CMD_COPY_TEXTURE_TO_BUFFER: return sizeof(mtlb_cmd_copy_texture_to_buffer);
-    case MTLB_CMD_COPY_BUFFER_TO_TEXTURE: return sizeof(mtlb_cmd_copy_buffer_to_texture);
-    case MTLB_CMD_RESET_STATE: return sizeof(mtlb_cmd_reset_state);
-    default: return 0;
-    }
+    if (header->size < sizeof(T))
+        return fail(MTLB_ERROR_INVALID_ARGUMENT, "command " + std::to_string(header->type) + " is too small");
+    return (this->*handler)(*reinterpret_cast<const T *>(header));
 }
 
-// True when `count` elements of `element_size` bytes fit after the fixed part
-// of a record of `size` bytes.
-bool array_fits(uint32_t size, size_t fixed, uint64_t count, size_t element_size)
-{
-    return count <= (size - fixed) / element_size;
-}
-
-mtlb_result Replay::reset_state()
+mtlb_result Replay::reset_state(const mtlb_cmd_reset_state &)
 {
     // Whatever the previous list left (open pass, pending clears) completes first.
     mtlb_result result = flush_clears(false);
@@ -486,115 +488,130 @@ mtlb_result Replay::reset_state()
     return MTLB_OK;
 }
 
+mtlb_result Replay::set_pipeline(const mtlb_cmd_set_pipeline &cmd)
+{
+    auto *pipeline = from_handle<Pipeline>(cmd.pipeline);
+    if (!pipeline)
+        return fail(MTLB_ERROR_INVALID_ARGUMENT, "invalid pipeline handle");
+    if (pipeline != pipeline_)
+        dirty_ |= kPipeline;
+    pipeline_ = pipeline;
+    return MTLB_OK;
+}
+
+mtlb_result Replay::set_viewports(const mtlb_cmd_set_viewports &cmd)
+{
+    if (cmd.count > MTLB_MAX_VIEWPORTS || !array_fits<mtlb_viewport>(cmd, cmd.count))
+        return fail(MTLB_ERROR_INVALID_ARGUMENT, "viewport count out of range");
+    num_viewports_ = cmd.count;
+    for (uint32_t i = 0; i < cmd.count; ++i) {
+        const mtlb_viewport &v = cmd.viewports[i];
+        viewports_[i] = {v.x, v.y, v.width, v.height, v.min_depth, v.max_depth};
+    }
+    dirty_ |= kViewports;
+    return MTLB_OK;
+}
+
+mtlb_result Replay::set_scissors(const mtlb_cmd_set_scissors &cmd)
+{
+    if (cmd.count > MTLB_MAX_VIEWPORTS || !array_fits<mtlb_rect>(cmd, cmd.count))
+        return fail(MTLB_ERROR_INVALID_ARGUMENT, "scissor count out of range");
+    num_scissors_ = cmd.count;
+    std::copy_n(cmd.rects, cmd.count, scissors_);
+    dirty_ |= kScissors;
+    return MTLB_OK;
+}
+
+mtlb_result Replay::set_topology(const mtlb_cmd_set_topology &cmd)
+{
+    topology_ = cmd.topology;
+    return MTLB_OK;
+}
+
+mtlb_result Replay::set_vertex_buffers(const mtlb_cmd_set_vertex_buffers &cmd)
+{
+    if (uint64_t(cmd.start_slot) + cmd.count > MTLB_MAX_VERTEX_BUFFERS || !array_fits<mtlb_vertex_buffer>(cmd, cmd.count))
+        return fail(MTLB_ERROR_INVALID_ARGUMENT, "vertex buffer slots out of range");
+    for (uint32_t i = 0; i < cmd.count; ++i)
+        vertex_buffers_[cmd.start_slot + i] = {cmd.buffers[i].gpu_address, cmd.buffers[i].size, cmd.buffers[i].stride};
+    dirty_ |= kVertexBuffers;
+    return MTLB_OK;
+}
+
+mtlb_result Replay::set_index_buffer(const mtlb_cmd_set_index_buffer &cmd)
+{
+    // Resolve the address once here rather than on every indexed draw.
+    Buffer *buffer = cmd.gpu_address ? find_buffer(queue_->device, cmd.gpu_address, &index_offset_) : nullptr;
+    index_buffer_ = buffer ? buffer->buffer : nil;
+    index_size_ = cmd.index_size;
+    return MTLB_OK;
+}
+
+mtlb_result Replay::set_root_args(const mtlb_cmd_set_graphics_root_args &cmd)
+{
+    if (!array_fits<uint8_t>(cmd, cmd.data_size))
+        return fail(MTLB_ERROR_INVALID_ARGUMENT, "root argument size exceeds the record");
+    root_args_ = cmd.data;
+    root_args_size_ = cmd.data_size;
+    dirty_ |= kRootArgs;
+    return MTLB_OK;
+}
+
+mtlb_result Replay::set_blend_factor(const mtlb_cmd_set_blend_factor &cmd)
+{
+    std::copy_n(cmd.factor, 4, blend_factor_);
+    dirty_ |= kBlendFactor;
+    return MTLB_OK;
+}
+
+mtlb_result Replay::set_stencil_ref(const mtlb_cmd_set_stencil_ref &cmd)
+{
+    stencil_ref_ = cmd.ref;
+    dirty_ |= kStencilRef;
+    return MTLB_OK;
+}
+
+mtlb_result Replay::copy_buffer(const mtlb_cmd_copy_buffer &cmd)
+{
+    Buffer *dst = from_handle<Buffer>(cmd.dst), *src = from_handle<Buffer>(cmd.src);
+    if (!dst || !src)
+        return fail(MTLB_ERROR_INVALID_ARGUMENT, "invalid buffer copy");
+    [blit() copyFromBuffer:src->buffer sourceOffset:cmd.src_offset toBuffer:dst->buffer
+         destinationOffset:cmd.dst_offset size:cmd.size];
+    return MTLB_OK;
+}
+
+mtlb_result Replay::copy_texture_to_buffer(const mtlb_cmd_copy_texture_to_buffer &cmd)
+{
+    return copy_texture(cmd.region, true);
+}
+
+mtlb_result Replay::copy_buffer_to_texture(const mtlb_cmd_copy_buffer_to_texture &cmd)
+{
+    return copy_texture(cmd.region, false);
+}
+
 mtlb_result Replay::execute(const mtlb_cmd_header *header)
 {
-    const size_t fixed = fixed_size(header->type);
-    if (!fixed)
-        return fail(MTLB_ERROR_INVALID_ARGUMENT, "unknown command type " + std::to_string(header->type));
-    if (header->size < fixed)
-        return fail(MTLB_ERROR_INVALID_ARGUMENT, "command " + std::to_string(header->type) + " is too small");
-
     switch (header->type) {
-    case MTLB_CMD_RESET_STATE:
-        return reset_state();
-    case MTLB_CMD_SET_RENDER_TARGETS: {
-        auto *cmd = reinterpret_cast<const mtlb_cmd_set_render_targets *>(header);
-        if (cmd->count > MTLB_MAX_RENDER_TARGETS || !array_fits(header->size, fixed, cmd->count, sizeof(mtlb_render_target)))
-            return fail(MTLB_ERROR_INVALID_ARGUMENT, "render target count out of range");
-        return set_render_targets(cmd);
-    }
-    case MTLB_CMD_CLEAR_RTV:
-        return clear_rtv(reinterpret_cast<const mtlb_cmd_clear_rtv *>(header));
-    case MTLB_CMD_SET_PIPELINE: {
-        auto *pipeline = from_handle<Pipeline>(reinterpret_cast<const mtlb_cmd_set_pipeline *>(header)->pipeline);
-        if (!pipeline)
-            return fail(MTLB_ERROR_INVALID_ARGUMENT, "invalid pipeline handle");
-        if (pipeline != pipeline_)
-            dirty_ |= kPipeline;
-        pipeline_ = pipeline;
-        return MTLB_OK;
-    }
-    case MTLB_CMD_SET_VIEWPORTS: {
-        auto *cmd = reinterpret_cast<const mtlb_cmd_set_viewports *>(header);
-        if (cmd->count > MTLB_MAX_VIEWPORTS || !array_fits(header->size, fixed, cmd->count, sizeof(mtlb_viewport)))
-            return fail(MTLB_ERROR_INVALID_ARGUMENT, "viewport count out of range");
-        num_viewports_ = cmd->count;
-        for (uint32_t i = 0; i < cmd->count; ++i) {
-            const mtlb_viewport &v = cmd->viewports[i];
-            viewports_[i] = {v.x, v.y, v.width, v.height, v.min_depth, v.max_depth};
-        }
-        dirty_ |= kViewports;
-        return MTLB_OK;
-    }
-    case MTLB_CMD_SET_SCISSORS: {
-        auto *cmd = reinterpret_cast<const mtlb_cmd_set_scissors *>(header);
-        if (cmd->count > MTLB_MAX_VIEWPORTS || !array_fits(header->size, fixed, cmd->count, sizeof(mtlb_rect)))
-            return fail(MTLB_ERROR_INVALID_ARGUMENT, "scissor count out of range");
-        num_scissors_ = cmd->count;
-        std::copy_n(cmd->rects, cmd->count, scissors_);
-        dirty_ |= kScissors;
-        return MTLB_OK;
-    }
-    case MTLB_CMD_SET_TOPOLOGY:
-        topology_ = reinterpret_cast<const mtlb_cmd_set_topology *>(header)->topology;
-        return MTLB_OK;
-    case MTLB_CMD_SET_VERTEX_BUFFERS: {
-        auto *cmd = reinterpret_cast<const mtlb_cmd_set_vertex_buffers *>(header);
-        if (uint64_t(cmd->start_slot) + cmd->count > MTLB_MAX_VERTEX_BUFFERS
-            || !array_fits(header->size, fixed, cmd->count, sizeof(mtlb_vertex_buffer)))
-            return fail(MTLB_ERROR_INVALID_ARGUMENT, "vertex buffer slots out of range");
-        for (uint32_t i = 0; i < cmd->count; ++i) {
-            vertex_buffers_[cmd->start_slot + i] = {cmd->buffers[i].gpu_address, cmd->buffers[i].size,
-                                                    cmd->buffers[i].stride};
-        }
-        dirty_ |= kVertexBuffers;
-        return MTLB_OK;
-    }
-    case MTLB_CMD_SET_INDEX_BUFFER: {
-        auto *cmd = reinterpret_cast<const mtlb_cmd_set_index_buffer *>(header);
-        // Resolve the address once here rather than on every indexed draw.
-        Buffer *buffer = cmd->gpu_address ? find_buffer(queue_->device, cmd->gpu_address, &index_offset_) : nullptr;
-        index_buffer_ = buffer ? buffer->buffer : nil;
-        index_size_ = cmd->index_size;
-        return MTLB_OK;
-    }
-    case MTLB_CMD_SET_GRAPHICS_ROOT_ARGS: {
-        auto *cmd = reinterpret_cast<const mtlb_cmd_set_graphics_root_args *>(header);
-        if (!array_fits(header->size, fixed, cmd->data_size, 1))
-            return fail(MTLB_ERROR_INVALID_ARGUMENT, "root argument size exceeds the record");
-        root_args_ = cmd->data;
-        root_args_size_ = cmd->data_size;
-        dirty_ |= kRootArgs;
-        return MTLB_OK;
-    }
-    case MTLB_CMD_SET_BLEND_FACTOR:
-        std::copy_n(reinterpret_cast<const mtlb_cmd_set_blend_factor *>(header)->factor, 4, blend_factor_);
-        dirty_ |= kBlendFactor;
-        return MTLB_OK;
-    case MTLB_CMD_SET_STENCIL_REF:
-        stencil_ref_ = reinterpret_cast<const mtlb_cmd_set_stencil_ref *>(header)->ref;
-        dirty_ |= kStencilRef;
-        return MTLB_OK;
-    case MTLB_CMD_DRAW:
-        return draw(reinterpret_cast<const mtlb_cmd_draw *>(header));
-    case MTLB_CMD_DRAW_INDEXED:
-        return draw_indexed(reinterpret_cast<const mtlb_cmd_draw_indexed *>(header));
-    case MTLB_CMD_COPY_BUFFER: {
-        auto *cmd = reinterpret_cast<const mtlb_cmd_copy_buffer *>(header);
-        Buffer *dst = from_handle<Buffer>(cmd->dst), *src = from_handle<Buffer>(cmd->src);
-        id<MTLBlitCommandEncoder> enc = blit();
-        if (!dst || !src || !enc)
-            return fail(MTLB_ERROR_INVALID_ARGUMENT, "invalid buffer copy");
-        [enc copyFromBuffer:src->buffer sourceOffset:cmd->src_offset toBuffer:dst->buffer
-          destinationOffset:cmd->dst_offset size:cmd->size];
-        return MTLB_OK;
-    }
-    case MTLB_CMD_COPY_TEXTURE_TO_BUFFER:
-        return copy_texture(reinterpret_cast<const mtlb_cmd_copy_texture_to_buffer *>(header)->region, true);
-    case MTLB_CMD_COPY_BUFFER_TO_TEXTURE:
-        return copy_texture(reinterpret_cast<const mtlb_cmd_copy_buffer_to_texture *>(header)->region, false);
-    default:
-        return MTLB_ERROR_INVALID_ARGUMENT;  // unreachable: fixed_size() rejects unknown types
+    case MTLB_CMD_RESET_STATE: return dispatch(header, &Replay::reset_state);
+    case MTLB_CMD_SET_RENDER_TARGETS: return dispatch(header, &Replay::set_render_targets);
+    case MTLB_CMD_CLEAR_RTV: return dispatch(header, &Replay::clear_rtv);
+    case MTLB_CMD_SET_PIPELINE: return dispatch(header, &Replay::set_pipeline);
+    case MTLB_CMD_SET_VIEWPORTS: return dispatch(header, &Replay::set_viewports);
+    case MTLB_CMD_SET_SCISSORS: return dispatch(header, &Replay::set_scissors);
+    case MTLB_CMD_SET_TOPOLOGY: return dispatch(header, &Replay::set_topology);
+    case MTLB_CMD_SET_VERTEX_BUFFERS: return dispatch(header, &Replay::set_vertex_buffers);
+    case MTLB_CMD_SET_INDEX_BUFFER: return dispatch(header, &Replay::set_index_buffer);
+    case MTLB_CMD_SET_GRAPHICS_ROOT_ARGS: return dispatch(header, &Replay::set_root_args);
+    case MTLB_CMD_SET_BLEND_FACTOR: return dispatch(header, &Replay::set_blend_factor);
+    case MTLB_CMD_SET_STENCIL_REF: return dispatch(header, &Replay::set_stencil_ref);
+    case MTLB_CMD_DRAW: return dispatch(header, &Replay::draw);
+    case MTLB_CMD_DRAW_INDEXED: return dispatch(header, &Replay::draw_indexed);
+    case MTLB_CMD_COPY_BUFFER: return dispatch(header, &Replay::copy_buffer);
+    case MTLB_CMD_COPY_TEXTURE_TO_BUFFER: return dispatch(header, &Replay::copy_texture_to_buffer);
+    case MTLB_CMD_COPY_BUFFER_TO_TEXTURE: return dispatch(header, &Replay::copy_buffer_to_texture);
+    default: return fail(MTLB_ERROR_INVALID_ARGUMENT, "unknown command type " + std::to_string(header->type));
     }
 }
 
