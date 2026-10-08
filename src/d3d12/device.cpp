@@ -192,7 +192,7 @@ void Device::CreateRenderTargetView(ID3D12Resource *resource, const D3D12_RENDER
 {
     auto *slot = reinterpret_cast<RenderTargetDescriptor *>(dest.ptr);
     *slot = {};
-    auto *texture = static_cast<Resource *>(resource);
+    auto *texture = ours<Resource>(resource);
     if (!texture || texture->is_buffer())
         return;
 

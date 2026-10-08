@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <string>
 
+#include "foreign_queue.h"
 #include "swapchain_support.h"
 #include "test_context.h"
 
@@ -75,6 +76,15 @@ int main()
     ComPtr<IDXGISwapChain1> swap_chain1;
     CHECK(factory->CreateSwapChainForHwnd(ctx.device.Get(), (HWND)1, &desc, nullptr, nullptr,
                                           swap_chain1.ReleaseAndGetAddressOf()) == DXGI_ERROR_INVALID_CALL);
+    // A queue wrapper that hides our queue is refused; one that forwards QueryInterface is seen through.
+    ComPtr<ID3D12CommandQueue> opaque_queue, forwarding_queue;
+    opaque_queue.Attach(new ForeignQueue(ctx.queue.Get(), false));
+    forwarding_queue.Attach(new ForeignQueue(ctx.queue.Get(), true));
+    CHECK(factory->CreateSwapChainForHwnd(opaque_queue.Get(), (HWND)1, &desc, nullptr, nullptr,
+                                          swap_chain1.ReleaseAndGetAddressOf()) == DXGI_ERROR_INVALID_CALL);
+    CHECK_HR(factory->CreateSwapChainForHwnd(forwarding_queue.Get(), (HWND)1, &desc, nullptr, nullptr,
+                                             swap_chain1.ReleaseAndGetAddressOf()));
+    swap_chain1.Reset();
     CHECK_HR(factory->CreateSwapChainForHwnd(ctx.queue.Get(), (HWND)1, &desc, nullptr, nullptr,
                                              swap_chain1.ReleaseAndGetAddressOf()));
     ComPtr<IDXGISwapChain3> swap_chain;

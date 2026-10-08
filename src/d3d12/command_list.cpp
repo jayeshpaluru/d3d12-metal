@@ -110,10 +110,14 @@ HRESULT CommandList::Reset(ID3D12CommandAllocator *allocator, ID3D12PipelineStat
 
 void CommandList::SetPipelineState(ID3D12PipelineState *pso)
 {
-    if (!pso)
+    auto *state = ours<PipelineState>(pso);
+    if (!state) {
+        if (pso)
+            D3D12M_LOG("SetPipelineState: the pipeline state is not from this layer");
         return;
+    }
     has_pipeline_ = true;
-    append<mtlb_cmd_set_pipeline>(MTLB_CMD_SET_PIPELINE)->pipeline = static_cast<PipelineState *>(pso)->handle();
+    append<mtlb_cmd_set_pipeline>(MTLB_CMD_SET_PIPELINE)->pipeline = state->handle();
 }
 
 void CommandList::IASetPrimitiveTopology(D3D12_PRIMITIVE_TOPOLOGY topology)
@@ -226,7 +230,11 @@ void CommandList::ClearRenderTargetView(D3D12_CPU_DESCRIPTOR_HANDLE view, const 
 
 void CommandList::SetGraphicsRootSignature(ID3D12RootSignature *signature)
 {
-    auto *rs = static_cast<RootSignature *>(signature);
+    auto *rs = ours<RootSignature>(signature);
+    if (signature && !rs) {
+        D3D12M_LOG("SetGraphicsRootSignature: the root signature is not from this layer");
+        return;
+    }
     if (rs == root_signature_)
         return;  // the same signature keeps its bindings
     if (rs)
@@ -336,10 +344,10 @@ void CommandList::DrawIndexedInstanced(UINT index_count, UINT instance_count, UI
 void CommandList::CopyBufferRegion(ID3D12Resource *dst, UINT64 dst_offset, ID3D12Resource *src, UINT64 src_offset,
                                    UINT64 size)
 {
-    auto *d = static_cast<Resource *>(dst);
-    auto *s = static_cast<Resource *>(src);
+    auto *d = ours<Resource>(dst);
+    auto *s = ours<Resource>(src);
     if (!d || !s || !d->is_buffer() || !s->is_buffer()) {
-        D3D12M_LOG("CopyBufferRegion needs two buffers");
+        D3D12M_LOG("CopyBufferRegion needs two buffers of this layer");
         return;
     }
     auto *cmd = append<mtlb_cmd_copy_buffer>(MTLB_CMD_COPY_BUFFER);
@@ -352,8 +360,8 @@ void CommandList::CopyBufferRegion(ID3D12Resource *dst, UINT64 dst_offset, ID3D1
 
 void CommandList::CopyResource(ID3D12Resource *dst, ID3D12Resource *src)
 {
-    auto *d = static_cast<Resource *>(dst);
-    auto *s = static_cast<Resource *>(src);
+    auto *d = ours<Resource>(dst);
+    auto *s = ours<Resource>(src);
     if (!d || !s || !d->is_buffer() || !s->is_buffer()) {
         D3D12M_STUB_LOG();  // texture copies are not implemented
         return;
@@ -377,8 +385,8 @@ void CommandList::CopyTextureRegion(const D3D12_TEXTURE_COPY_LOCATION *dst, UINT
         return;
     }
 
-    auto *buffer_resource = static_cast<Resource *>((to_buffer ? dst : src)->pResource);
-    auto *texture_resource = static_cast<Resource *>((to_buffer ? src : dst)->pResource);
+    auto *buffer_resource = ours<Resource>((to_buffer ? dst : src)->pResource);
+    auto *texture_resource = ours<Resource>((to_buffer ? src : dst)->pResource);
     const D3D12_PLACED_SUBRESOURCE_FOOTPRINT &placed = (to_buffer ? dst : src)->PlacedFootprint;
     const UINT subresource = (to_buffer ? src : dst)->SubresourceIndex;
     mtlb_format_info info;

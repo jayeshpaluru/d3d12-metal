@@ -2,6 +2,8 @@
 #pragma once
 
 #include <atomic>
+#include <cstdint>
+#include <cstring>
 
 #include "common/d3d12_uuids.h"
 
@@ -29,6 +31,28 @@ private:
     std::atomic<ULONG> refs_{1};
 };
 
+// Private identification of this layer's own objects. Application-supplied COM
+// pointers may be wrappers (overlays, proxies) or MSVC objects, so they are
+// never downcast with RTTI or a blind static_cast. Each final class answers
+// QueryInterface for internal_iid<Class>() with its own `Class *`; a foreign
+// object (or a wrapper that does not forward) answers E_NOINTERFACE.
+template <typename T>
+struct InternalTag {
+    static inline const char tag = 0;
+};
+
+template <typename T>
+GUID internal_iid()
+{
+    // The address of a per-class variable makes the IID unique per class and
+    // impossible for a foreign object to answer by accident.
+    GUID iid = {0x6d3d1200, 0x6d65, 0x7461, {0, 0, 0, 0, 0, 0, 0, 0}};
+    const uintptr_t address = reinterpret_cast<uintptr_t>(&InternalTag<T>::tag);
+    static_assert(sizeof(address) <= 8, "pointer fits the GUID tail");
+    std::memcpy(iid.Data4, &address, sizeof(address));
+    return iid;
+}
+
 // Answers QueryInterface for `self` with the first interface in Is whose IID
 // matches `riid`. Every interface must be a base of Derived, so one object
 // serves its whole inheritance chain (IUnknown ... most-derived interface).
@@ -38,12 +62,30 @@ HRESULT query_interfaces(Derived *self, REFIID riid, void **out)
     if (!out)
         return E_POINTER;
     void *found = nullptr;
+    if (riid == internal_iid<Derived>())
+        found = self;
+    else
     (void)((riid == __uuidof(Is) ? (found = static_cast<Is *>(self), true) : false) || ...);
     *out = found;
     if (!found)
         return E_NOINTERFACE;
     self->AddRef();
     return S_OK;
+}
+
+// Returns the object behind an application-supplied COM pointer as `T` if it
+// is one of this layer's, else nullptr. The caller's own reference keeps it
+// alive, so the reference taken by the query is dropped at once.
+template <typename T, typename P>
+T *ours(P *p)
+{
+    if (!p)
+        return nullptr;
+    void *object = nullptr;
+    if (FAILED(p->QueryInterface(internal_iid<T>(), &object)))
+        return nullptr;
+    static_cast<IUnknown *>(static_cast<T *>(object))->Release();
+    return static_cast<T *>(object);
 }
 
 // Hands a newly created object (holding its creation reference) to the caller

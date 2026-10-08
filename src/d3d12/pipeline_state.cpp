@@ -44,7 +44,9 @@ HRESULT PipelineState::create_graphics(Device *device, const D3D12_GRAPHICS_PIPE
     }
 
     // Only RootSignature objects of this layer can be passed in.
-    auto *root_signature = static_cast<RootSignature *>(desc.pRootSignature);
+    auto *root_signature = ours<RootSignature>(desc.pRootSignature);
+    if (!root_signature)
+        return E_INVALIDARG;
 
     mtlb_pipeline_desc pd{};
     pd.vs_dxil = desc.VS.pShaderBytecode;

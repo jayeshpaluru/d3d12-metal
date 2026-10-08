@@ -1,5 +1,6 @@
 #include "d3d12/command_queue.h"
 
+#include <new>
 #include <vector>
 
 #include "d3d12/command_list.h"
@@ -34,10 +35,19 @@ CommandQueue::~CommandQueue()
 void CommandQueue::ExecuteCommandLists(UINT count, ID3D12CommandList *const *lists)
 {
     // All lists go to the backend in a single submit, one span per list.
-    std::vector<mtlb_span> spans(count);
+    std::vector<mtlb_span> spans;
+    try {
+        spans.resize(count);
+    } catch (const std::bad_alloc &) {
+        return;
+    }
     for (UINT i = 0; i < count; ++i) {
         // Only this layer's command lists can be submitted.
-        auto *list = static_cast<CommandList *>(static_cast<ID3D12GraphicsCommandList1 *>(lists[i]));
+        auto *list = ours<CommandList>(lists[i]);
+        if (!list) {
+            D3D12M_LOG("ExecuteCommandLists: command list %u is not from this layer", i);
+            return;
+        }
         if (!list->closed()) {
             D3D12M_LOG("ExecuteCommandLists: command list %u is still recording", i);
             return;
@@ -50,16 +60,18 @@ void CommandQueue::ExecuteCommandLists(UINT count, ID3D12CommandList *const *lis
 
 HRESULT CommandQueue::Signal(ID3D12Fence *fence, UINT64 value)
 {
-    if (!fence)
+    auto *f = ours<Fence>(fence);
+    if (!f)
         return E_INVALIDARG;
-    return to_hresult(mtlb_queue_signal(queue_, static_cast<Fence *>(fence)->event(), value));
+    return to_hresult(mtlb_queue_signal(queue_, f->event(), value));
 }
 
 HRESULT CommandQueue::Wait(ID3D12Fence *fence, UINT64 value)
 {
-    if (!fence)
+    auto *f = ours<Fence>(fence);
+    if (!f)
         return E_INVALIDARG;
-    return to_hresult(mtlb_queue_wait(queue_, static_cast<Fence *>(fence)->event(), value));
+    return to_hresult(mtlb_queue_wait(queue_, f->event(), value));
 }
 
 HRESULT CommandQueue::GetTimestampFrequency(UINT64 *frequency)

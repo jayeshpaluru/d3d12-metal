@@ -103,12 +103,14 @@ public:
         if (!queue_unknown || FAILED(queue_unknown->QueryInterface(__uuidof(ID3D12CommandQueue),
                                                                    reinterpret_cast<void **>(&as_queue))))
             return DXGI_ERROR_INVALID_CALL;
-        auto *queue = dynamic_cast<CommandQueue *>(as_queue);
+        // The application may pass a wrapper that forwards to one of our queues.
+        auto *queue = ours<CommandQueue>(as_queue);
         if (!queue) {
             as_queue->Release();
             return DXGI_ERROR_INVALID_CALL;
         }
-        // The reference taken by the query is the one the swap chain keeps.
+        queue->AddRef();
+        as_queue->Release();
 
         auto *swap_chain = new SwapChain(factory, queue);
         swap_chain->window_ = window;

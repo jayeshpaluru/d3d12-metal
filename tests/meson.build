@@ -30,6 +30,7 @@ tests = [
   ['test_texture_copy', []],
   ['test_bridge_stream', []],
   ['test_fence_event', []],
+  ['test_foreign_objects', []],
   ['test_queue_sync', []],
   ['test_rootsig', []],
   ['test_triangle', ['color']],
