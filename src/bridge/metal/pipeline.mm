@@ -53,6 +53,12 @@ IRCompiler *thread_compiler()
         // Vertex shaders fetch their inputs through a separate stage-in function
         // (see get_stage_in) instead of Metal vertex fetch.
         IRCompilerSetStageInGenerationMode(compiler.ptr, IRStageInCodeGenerationModeUseSeparateStageInFunction);
+        // D3D12 semantics the converter leaves off by default: out-of-bounds buffer and texture reads
+        // return zero (and writes are dropped), the descriptors' min LOD clamp and the samplers' LOD bias
+        // are applied, NaN coordinates sample as zero, and equal vertex shaders give equal positions.
+        IRCompilerSetCompatibilityFlags(compiler.ptr, static_cast<IRCompatibilityFlags>(
+            IRCompatibilityFlagBoundsCheck | IRCompatibilityFlagTextureMinLODClamp | IRCompatibilityFlagSamplerLODBias
+            | IRCompatibilityFlagSampleNanToZero | IRCompatibilityFlagPositionInvariance));
     }
     return compiler.ptr;
 }

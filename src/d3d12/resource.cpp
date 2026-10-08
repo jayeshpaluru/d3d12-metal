@@ -65,12 +65,33 @@ HRESULT Resource::init_texture()
         td.usage |= MTLB_TEXTURE_USAGE_SHADER_WRITE;
     if (desc_.Flags & (D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET | D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL))
         td.usage |= MTLB_TEXTURE_USAGE_RENDER_TARGET;
+    if (desc_.Flags & D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL)
+        td.usage |= MTLB_TEXTURE_USAGE_DEPTH_STENCIL;
 
     mtlb_result result = mtlb_texture_create(device()->handle(), &td, &texture_, nullptr);
     if (result != MTLB_OK) {
         D3D12M_LOG("texture creation failed: %s", mtlb_last_error());
         return to_hresult(result);
     }
+    return S_OK;
+}
+
+HRESULT Resource::texture_view(const mtlb_texture_view_desc &desc, uint64_t *resource_id)
+{
+    std::array<uint32_t, 8> key;
+    std::memcpy(key.data(), &desc, sizeof(key));
+    std::lock_guard<std::mutex> lock(views_mutex_);
+    auto it = views_.find(key);
+    if (it != views_.end()) {
+        *resource_id = it->second;
+        return S_OK;
+    }
+    const mtlb_result result = mtlb_texture_view(texture_, &desc, resource_id);
+    if (result != MTLB_OK) {
+        D3D12M_LOG("texture view creation failed: %s", mtlb_last_error());
+        return to_hresult(result);
+    }
+    views_.emplace(key, *resource_id);
     return S_OK;
 }
 

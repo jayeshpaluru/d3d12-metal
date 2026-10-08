@@ -261,6 +261,12 @@ mtlb_result mtlb_buffer_view(const mtlb_buffer_view_desc *desc, mtlb_descriptor 
     if (pad_bytes % bytes != 0 || pad_bytes / bytes > 0xff)
         return fail(MTLB_ERROR_INVALID_ARGUMENT, "typed buffer view offset is not element aligned");
     padding = static_cast<uint32_t>(pad_bytes / bytes);
+    if (padding) {
+        // The shader converter reads a typed buffer from the start of the texture buffer and ignores the
+        // padding field, so the view starts at the aligned offset below the requested one.
+        static std::atomic<bool> logged{false};
+        log_once(logged, "a typed buffer view starts at an offset a texture buffer cannot start at; it starts earlier");
+    }
 
     // A texture buffer holds at most max_texture_buffer_width texels. Views above it (the game this
     // layer targets creates 419,430,400-element views) are clamped: elements past the limit read as
@@ -368,7 +374,7 @@ mtlb_result mtlb_sampler_create(mtlb_device handle, const mtlb_sampler_desc *des
             sd.lodMinClamp = desc->min_lod;
             sd.lodMaxClamp = std::min(desc->max_lod, 1000.0f);
             sd.compareFunction = desc->compare_func ? to_compare_function(desc->compare_func) : MTLCompareFunctionNever;
-            sd.supportsArgumentBuffers = YES;
+            sd.supportArgumentBuffers = YES;
             sampler = [device->device newSamplerStateWithDescriptor:sd];
             if (!sampler)
                 return fail(MTLB_ERROR_UNSUPPORTED, "newSamplerStateWithDescriptor failed");

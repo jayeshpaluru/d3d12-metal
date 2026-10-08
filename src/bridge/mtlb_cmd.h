@@ -49,6 +49,10 @@ typedef enum mtlb_cmd_type {
     MTLB_CMD_COPY_TEXTURE_TO_BUFFER,
     MTLB_CMD_COPY_BUFFER_TO_TEXTURE,
     MTLB_CMD_RESET_STATE,
+    MTLB_CMD_SET_DESCRIPTOR_HEAPS,
+    MTLB_CMD_COPY_TEXTURE_TEXTURE,
+    MTLB_CMD_SET_COMPUTE_ROOT_ARGS,
+    MTLB_CMD_DISPATCH,
 } mtlb_cmd_type;
 
 typedef struct mtlb_cmd_header {
@@ -232,7 +236,41 @@ typedef struct mtlb_cmd_copy_texture {
     mtlb_texture_copy_region region;
 } mtlb_cmd_copy_texture;
 
+/* The descriptor heaps shader code may index directly (SM 6.6 ResourceDescriptorHeap and
+ * SamplerDescriptorHeap) and that root descriptor tables point into. Addresses are those of
+ * the heaps' first descriptors; 0 = none. */
+typedef struct mtlb_cmd_set_descriptor_heaps {
+    mtlb_cmd_header header;
+    uint64_t resource_heap;
+    uint64_t sampler_heap;
+} mtlb_cmd_set_descriptor_heaps;
+
+/* Texture to texture copy: a box of one subresource into another, or (whole = 1) every mip
+ * and slice of the source into the destination, which must have the same layout. */
+typedef struct mtlb_cmd_copy_texture_texture {
+    mtlb_cmd_header header;
+    mtlb_texture dst;
+    mtlb_texture src;
+    uint32_t dst_mip, dst_slice, src_mip, src_slice;
+    uint32_t dst_x, dst_y, dst_z;
+    uint32_t src_x, src_y, src_z;
+    uint32_t width, height, depth;
+    uint32_t whole;
+} mtlb_cmd_copy_texture_texture;
+
+/* Compute work. SET_PIPELINE binds a compute pipeline when its handle is one. The compute root
+ * arguments are a snapshot like the graphics ones, with the same record layout
+ * (mtlb_cmd_set_graphics_root_args). */
+typedef struct mtlb_cmd_dispatch {
+    mtlb_cmd_header header;
+    uint32_t x, y, z;
+    uint32_t reserved;
+} mtlb_cmd_dispatch;
+
 MTLB_ASSERT_SIZE(mtlb_cmd_header, 8);
+MTLB_ASSERT_SIZE(mtlb_cmd_dispatch, 24);
+MTLB_ASSERT_SIZE(mtlb_cmd_set_descriptor_heaps, 24);
+MTLB_ASSERT_SIZE(mtlb_cmd_copy_texture_texture, 80);
 MTLB_ASSERT_SIZE(mtlb_render_target, 24);
 MTLB_ASSERT_SIZE(mtlb_cmd_set_render_targets, 16);
 MTLB_ASSERT_OFFSET(mtlb_cmd_set_render_targets, targets, 16);

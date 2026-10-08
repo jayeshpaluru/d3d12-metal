@@ -19,7 +19,11 @@ public:
 
     static HRESULT create(Device *device, const void *blob, size_t size, REFIID riid, void **out);
 
+    // The application's root parameters, by index.
     const std::vector<Slot> &slots() const { return slots_; }
+    // Writes what the layer adds to a fresh argument buffer (the table that stands in for
+    // static samplers, which the shader converter does not support).
+    void init_arguments(uint8_t *arguments) const;
     uint32_t argument_buffer_size() const { return argument_buffer_size_; }
     mtlb_root_signature handle() const { return handle_; }
 
@@ -33,6 +37,11 @@ private:
     ~RootSignature() override;
 
     mtlb_root_signature handle_ = 0;
+    // Static samplers become a descriptor table, appended after the application's parameters, over
+    // a sampler heap of the root signature's own.
+    mtlb_buffer static_samplers_ = 0;
+    uint64_t static_samplers_address_ = 0;
+    uint32_t static_samplers_offset_ = 0;  // of the table's slot in the argument buffer
     std::vector<Slot> slots_;
     uint32_t argument_buffer_size_ = 0;
 };

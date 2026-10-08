@@ -274,7 +274,7 @@ MTLPixelFormat to_view_pixel_format(MTLPixelFormat base, uint32_t view_format)
     if (!e)
         return MTLPixelFormatInvalid;
     const bool base_depth = base == MTLPixelFormatDepth32Float || base == MTLPixelFormatDepth16Unorm
-                            || base == MTLPixelFormatDepth32Float_Stencil8 || base == MTLPixelFormatDepth24Unorm_Stencil8;
+                            || base == MTLPixelFormatDepth32Float_Stencil8;
     if (!base_depth)
         return e->pixel;
     // A view of a depth-stencil texture reads one plane. The depth plane is the texture's own

@@ -5,6 +5,7 @@ d3d12_sources += files(
   'command_list.cpp',
   'command_queue.cpp',
   'descriptor_heap.cpp',
+  'descriptors.cpp',
   'dred.cpp',
   'device.cpp',
   'exports.cpp',

@@ -240,9 +240,9 @@ HRESULT Device::CreateDescriptorHeap(const D3D12_DESCRIPTOR_HEAP_DESC *desc, REF
     return desc ? DescriptorHeap::create(this, *desc, riid, out) : E_INVALIDARG;
 }
 
-UINT Device::GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE)
+UINT Device::GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE type)
 {
-    return kDescriptorSize;
+    return descriptor_size(type);
 }
 
 HRESULT Device::CreateRootSignature(UINT, const void *blob, SIZE_T size, REFIID riid, void **out)
@@ -362,16 +362,18 @@ void Device::CreateRenderTargetView(ID3D12Resource *resource, const D3D12_RENDER
 void Device::CopyDescriptors(UINT num_dest_ranges, const D3D12_CPU_DESCRIPTOR_HANDLE *dest_starts,
                              const UINT *dest_sizes, UINT num_src_ranges,
                              const D3D12_CPU_DESCRIPTOR_HANDLE *src_starts, const UINT *src_sizes,
-                             D3D12_DESCRIPTOR_HEAP_TYPE)
+                             D3D12_DESCRIPTOR_HEAP_TYPE type)
 {
+    const size_t size = descriptor_size(type);
+    if (!size || !dest_starts || !src_starts)
+        return;
     UINT d = 0, s = 0, d_used = 0, s_used = 0;
     while (d < num_dest_ranges && s < num_src_ranges) {
         const UINT dest_size = dest_sizes ? dest_sizes[d] : 1;
         const UINT src_size = src_sizes ? src_sizes[s] : 1;
         const UINT n = std::min(dest_size - d_used, src_size - s_used);
-        std::memcpy(reinterpret_cast<void *>(dest_starts[d].ptr + size_t(d_used) * kDescriptorSize),
-                    reinterpret_cast<const void *>(src_starts[s].ptr + size_t(s_used) * kDescriptorSize),
-                    size_t(n) * kDescriptorSize);
+        std::memcpy(reinterpret_cast<void *>(dest_starts[d].ptr + size_t(d_used) * size),
+                    reinterpret_cast<const void *>(src_starts[s].ptr + size_t(s_used) * size), size_t(n) * size);
         d_used += n;
         s_used += n;
         if (d_used == dest_size) { ++d; d_used = 0; }
@@ -380,10 +382,10 @@ void Device::CopyDescriptors(UINT num_dest_ranges, const D3D12_CPU_DESCRIPTOR_HA
 }
 
 void Device::CopyDescriptorsSimple(UINT count, D3D12_CPU_DESCRIPTOR_HANDLE dest, D3D12_CPU_DESCRIPTOR_HANDLE src,
-                                   D3D12_DESCRIPTOR_HEAP_TYPE)
+                                   D3D12_DESCRIPTOR_HEAP_TYPE type)
 {
     std::memcpy(reinterpret_cast<void *>(dest.ptr), reinterpret_cast<const void *>(src.ptr),
-                size_t(count) * kDescriptorSize);
+                size_t(count) * descriptor_size(type));
 }
 
 // ---- Resources -------------------------------------------------------------

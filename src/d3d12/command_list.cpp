@@ -43,7 +43,8 @@ HRESULT CommandList::create(Device *device, D3D12_COMMAND_LIST_TYPE type, ID3D12
 
 CommandList::~CommandList()
 {
-    safe_release(root_signature_);
+    safe_release(graphics_.signature);
+    safe_release(compute_.signature);
 }
 
 template <typename T>
@@ -60,10 +61,12 @@ T *CommandList::append(mtlb_cmd_type type, size_t extra_bytes)
 void CommandList::reset_state()
 {
     stream_.clear();
-    has_pipeline_ = false;
-    safe_release(root_signature_);
-    root_args_.clear();
-    root_args_dirty_ = false;
+    has_graphics_pipeline_ = has_compute_pipeline_ = false;
+    for (RootState *state : {&graphics_, &compute_}) {
+        safe_release(state->signature);
+        state->args.clear();
+        state->dirty = false;
+    }
     // Replay state must not leak in from the previous list of the same submit.
     append<mtlb_cmd_reset_state>(MTLB_CMD_RESET_STATE);
 }
@@ -72,17 +75,24 @@ void CommandList::reset_state()
 // false (after logging) when the draw cannot be recorded.
 bool CommandList::prepare_draw()
 {
-    if (closed_ || !has_pipeline_ || !root_signature_) {
-        D3D12M_LOG("draw skipped: needs an open list, a pipeline and a root signature");
+    if (closed_ || !has_graphics_pipeline_ || !graphics_.signature) {
+        D3D12M_LOG("draw skipped: needs an open list, a graphics pipeline and a root signature");
         return false;
     }
-    if (root_args_dirty_ && !root_args_.empty()) {
-        auto *cmd = append<mtlb_cmd_set_graphics_root_args>(MTLB_CMD_SET_GRAPHICS_ROOT_ARGS, root_args_.size());
-        cmd->data_size = static_cast<uint32_t>(root_args_.size());
-        std::memcpy(cmd->data, root_args_.data(), root_args_.size());
-    }
-    root_args_dirty_ = false;
+    flush_root_args(graphics_, MTLB_CMD_SET_GRAPHICS_ROOT_ARGS);
     return true;
+}
+
+// Sends the root arguments if they changed since the last draw or dispatch.
+void CommandList::flush_root_args(RootState &state, mtlb_cmd_type type)
+{
+    if (state.dirty && !state.args.empty()) {
+        // Graphics and compute arguments share the record layout.
+        auto *cmd = append<mtlb_cmd_set_graphics_root_args>(type, state.args.size());
+        cmd->data_size = static_cast<uint32_t>(state.args.size());
+        std::memcpy(cmd->data, state.args.data(), state.args.size());
+    }
+    state.dirty = false;
 }
 
 // ---- Lifetime ---------------------------------------------------------------
@@ -116,7 +126,7 @@ void CommandList::SetPipelineState(ID3D12PipelineState *pso)
             D3D12M_LOG("SetPipelineState: the pipeline state is not from this layer");
         return;
     }
-    has_pipeline_ = true;
+    (state->is_compute() ? has_compute_pipeline_ : has_graphics_pipeline_) = true;
     append<mtlb_cmd_set_pipeline>(MTLB_CMD_SET_PIPELINE)->pipeline = state->handle();
 }
 
@@ -228,78 +238,124 @@ void CommandList::ClearRenderTargetView(D3D12_CPU_DESCRIPTOR_HANDLE view, const 
 
 // ---- Root arguments ---------------------------------------------------------
 
-void CommandList::SetGraphicsRootSignature(ID3D12RootSignature *signature)
+void CommandList::set_root_signature(RootState &state, ID3D12RootSignature *signature, const char *what)
 {
     auto *rs = ours<RootSignature>(signature);
     if (signature && !rs) {
-        D3D12M_LOG("SetGraphicsRootSignature: the root signature is not from this layer");
+        D3D12M_LOG("%s: the root signature is not from this layer", what);
         return;
     }
-    if (rs == root_signature_)
+    if (rs == state.signature)
         return;  // the same signature keeps its bindings
     if (rs)
         rs->AddRef();
-    safe_release(root_signature_);
-    root_signature_ = rs;
+    safe_release(state.signature);
+    state.signature = rs;
     // Changing the root signature invalidates all root arguments.
-    root_args_.assign(rs ? rs->argument_buffer_size() : 0, 0);
-    root_args_dirty_ = true;
+    state.args.assign(rs ? rs->argument_buffer_size() : 0, 0);
+    if (rs)
+        rs->init_arguments(state.args.data());
+    state.dirty = true;
 }
 
-const RootSignature::Slot *CommandList::find_slot(UINT index, D3D12_ROOT_PARAMETER_TYPE type)
+void CommandList::SetGraphicsRootSignature(ID3D12RootSignature *signature)
 {
-    if (!root_signature_ || index >= root_signature_->slots().size()
-        || root_signature_->slots()[index].type != type) {
+    set_root_signature(graphics_, signature, "SetGraphicsRootSignature");
+}
+
+void CommandList::SetComputeRootSignature(ID3D12RootSignature *signature)
+{
+    set_root_signature(compute_, signature, "SetComputeRootSignature");
+}
+
+const RootSignature::Slot *CommandList::find_slot(RootState &state, UINT index, D3D12_ROOT_PARAMETER_TYPE type)
+{
+    if (!state.signature || index >= state.signature->slots().size() || state.signature->slots()[index].type != type) {
         D3D12M_LOG("root parameter %u is not set up for this kind of argument", index);
         return nullptr;
     }
-    return &root_signature_->slots()[index];
+    return &state.signature->slots()[index];
 }
 
-void CommandList::set_root_address(UINT index, D3D12_ROOT_PARAMETER_TYPE type, uint64_t address)
+void CommandList::set_root_address(RootState &state, UINT index, D3D12_ROOT_PARAMETER_TYPE type, uint64_t address)
 {
-    if (const RootSignature::Slot *slot = find_slot(index, type)) {
-        std::memcpy(root_args_.data() + slot->offset, &address, sizeof(address));
-        root_args_dirty_ = true;
+    if (const RootSignature::Slot *slot = find_slot(state, index, type)) {
+        std::memcpy(state.args.data() + slot->offset, &address, sizeof(address));
+        state.dirty = true;
     }
 }
 
-void CommandList::SetGraphicsRootDescriptorTable(UINT index, D3D12_GPU_DESCRIPTOR_HANDLE base)
+void CommandList::set_root_constants(RootState &state, UINT index, UINT count, const void *data, UINT dest_offset)
 {
-    set_root_address(index, D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE, base.ptr);
-}
-
-void CommandList::SetGraphicsRootConstantBufferView(UINT index, D3D12_GPU_VIRTUAL_ADDRESS address)
-{
-    set_root_address(index, D3D12_ROOT_PARAMETER_TYPE_CBV, address);
-}
-
-void CommandList::SetGraphicsRootShaderResourceView(UINT index, D3D12_GPU_VIRTUAL_ADDRESS address)
-{
-    set_root_address(index, D3D12_ROOT_PARAMETER_TYPE_SRV, address);
-}
-
-void CommandList::SetGraphicsRootUnorderedAccessView(UINT index, D3D12_GPU_VIRTUAL_ADDRESS address)
-{
-    set_root_address(index, D3D12_ROOT_PARAMETER_TYPE_UAV, address);
-}
-
-void CommandList::SetGraphicsRoot32BitConstant(UINT index, UINT value, UINT dest_offset)
-{
-    SetGraphicsRoot32BitConstants(index, 1, &value, dest_offset);
-}
-
-void CommandList::SetGraphicsRoot32BitConstants(UINT index, UINT count, const void *data, UINT dest_offset)
-{
-    const RootSignature::Slot *slot = find_slot(index, D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS);
+    const RootSignature::Slot *slot = find_slot(state, index, D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS);
     if (!slot || !data)
         return;
     if ((uint64_t(dest_offset) + count) * 4 > slot->size) {
         D3D12M_LOG("root constants for parameter %u exceed its %u bytes", index, slot->size);
         return;
     }
-    std::memcpy(root_args_.data() + slot->offset + dest_offset * 4, data, count * 4);
-    root_args_dirty_ = true;
+    std::memcpy(state.args.data() + slot->offset + dest_offset * 4, data, count * 4);
+    state.dirty = true;
+}
+
+void CommandList::SetGraphicsRootDescriptorTable(UINT index, D3D12_GPU_DESCRIPTOR_HANDLE base)
+{
+    set_root_address(graphics_, index, D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE, base.ptr);
+}
+
+void CommandList::SetGraphicsRootConstantBufferView(UINT index, D3D12_GPU_VIRTUAL_ADDRESS address)
+{
+    set_root_address(graphics_, index, D3D12_ROOT_PARAMETER_TYPE_CBV, address);
+}
+
+void CommandList::SetGraphicsRootShaderResourceView(UINT index, D3D12_GPU_VIRTUAL_ADDRESS address)
+{
+    set_root_address(graphics_, index, D3D12_ROOT_PARAMETER_TYPE_SRV, address);
+}
+
+void CommandList::SetGraphicsRootUnorderedAccessView(UINT index, D3D12_GPU_VIRTUAL_ADDRESS address)
+{
+    set_root_address(graphics_, index, D3D12_ROOT_PARAMETER_TYPE_UAV, address);
+}
+
+void CommandList::SetGraphicsRoot32BitConstant(UINT index, UINT value, UINT dest_offset)
+{
+    set_root_constants(graphics_, index, 1, &value, dest_offset);
+}
+
+void CommandList::SetGraphicsRoot32BitConstants(UINT index, UINT count, const void *data, UINT dest_offset)
+{
+    set_root_constants(graphics_, index, count, data, dest_offset);
+}
+
+void CommandList::SetComputeRootDescriptorTable(UINT index, D3D12_GPU_DESCRIPTOR_HANDLE base)
+{
+    set_root_address(compute_, index, D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE, base.ptr);
+}
+
+void CommandList::SetComputeRootConstantBufferView(UINT index, D3D12_GPU_VIRTUAL_ADDRESS address)
+{
+    set_root_address(compute_, index, D3D12_ROOT_PARAMETER_TYPE_CBV, address);
+}
+
+void CommandList::SetComputeRootShaderResourceView(UINT index, D3D12_GPU_VIRTUAL_ADDRESS address)
+{
+    set_root_address(compute_, index, D3D12_ROOT_PARAMETER_TYPE_SRV, address);
+}
+
+void CommandList::SetComputeRootUnorderedAccessView(UINT index, D3D12_GPU_VIRTUAL_ADDRESS address)
+{
+    set_root_address(compute_, index, D3D12_ROOT_PARAMETER_TYPE_UAV, address);
+}
+
+void CommandList::SetComputeRoot32BitConstant(UINT index, UINT value, UINT dest_offset)
+{
+    set_root_constants(compute_, index, 1, &value, dest_offset);
+}
+
+void CommandList::SetComputeRoot32BitConstants(UINT index, UINT count, const void *data, UINT dest_offset)
+{
+    set_root_constants(compute_, index, count, data, dest_offset);
 }
 
 // Backend resources use hazard tracking, so barriers record nothing yet.
@@ -307,10 +363,24 @@ void CommandList::ResourceBarrier(UINT, const D3D12_RESOURCE_BARRIER *)
 {
 }
 
-// GPU descriptor handles are plain addresses and every allocation is resident,
-// so there is nothing to bind.
-void CommandList::SetDescriptorHeaps(UINT, ID3D12DescriptorHeap *const *)
+// GPU descriptor handles are plain addresses and every allocation is resident, so root
+// descriptor tables need no binding. Shaders that index the heaps directly (SM 6.6
+// ResourceDescriptorHeap) find them at fixed bind points: the backend binds the current pair.
+void CommandList::SetDescriptorHeaps(UINT count, ID3D12DescriptorHeap *const *heaps)
 {
+    uint64_t resource_heap = 0, sampler_heap = 0;
+    for (UINT i = 0; i < count && heaps; ++i) {
+        auto *heap = ours<DescriptorHeap>(heaps[i]);
+        if (!heap)
+            continue;
+        if (heap->type() == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV)
+            resource_heap = heap->gpu_address();
+        else if (heap->type() == D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER)
+            sampler_heap = heap->gpu_address();
+    }
+    auto *cmd = append<mtlb_cmd_set_descriptor_heaps>(MTLB_CMD_SET_DESCRIPTOR_HEAPS);
+    cmd->resource_heap = resource_heap;
+    cmd->sampler_heap = sampler_heap;
 }
 
 // ---- Draws ------------------------------------------------------------------
@@ -339,6 +409,19 @@ void CommandList::DrawIndexedInstanced(UINT index_count, UINT instance_count, UI
     cmd->start_instance = start_instance;
 }
 
+void CommandList::Dispatch(UINT x, UINT y, UINT z)
+{
+    if (closed_ || !has_compute_pipeline_ || !compute_.signature) {
+        D3D12M_LOG("dispatch skipped: needs an open list, a compute pipeline and a compute root signature");
+        return;
+    }
+    flush_root_args(compute_, MTLB_CMD_SET_COMPUTE_ROOT_ARGS);
+    auto *cmd = append<mtlb_cmd_dispatch>(MTLB_CMD_DISPATCH);
+    cmd->x = x;
+    cmd->y = y;
+    cmd->z = z;
+}
+
 // ---- Copies -----------------------------------------------------------------
 
 void CommandList::CopyBufferRegion(ID3D12Resource *dst, UINT64 dst_offset, ID3D12Resource *src, UINT64 src_offset,
@@ -362,15 +445,63 @@ void CommandList::CopyResource(ID3D12Resource *dst, ID3D12Resource *src)
 {
     auto *d = ours<Resource>(dst);
     auto *s = ours<Resource>(src);
-    if (!d || !s || !d->is_buffer() || !s->is_buffer()) {
-        D3D12M_STUB_LOG();  // texture copies are not implemented
+    if (!d || !s || d->is_buffer() != s->is_buffer()) {
+        D3D12M_LOG("CopyResource needs two buffers or two textures of this layer");
         return;
     }
-    CopyBufferRegion(dst, 0, src, 0, std::min(d->desc().Width, s->desc().Width));
+    if (d->is_buffer()) {
+        CopyBufferRegion(dst, 0, src, 0, std::min(d->desc().Width, s->desc().Width));
+        return;
+    }
+    // Every mip and slice, so both textures must have the same shape.
+    const D3D12_RESOURCE_DESC &dd = d->desc(), &sd = s->desc();
+    if (dd.Width != sd.Width || dd.Height != sd.Height || dd.DepthOrArraySize != sd.DepthOrArraySize
+        || dd.MipLevels != sd.MipLevels || dd.SampleDesc.Count != sd.SampleDesc.Count) {
+        D3D12M_LOG("CopyResource: the textures differ in size, mips, slices or samples");
+        return;
+    }
+    auto *cmd = append<mtlb_cmd_copy_texture_texture>(MTLB_CMD_COPY_TEXTURE_TEXTURE);
+    cmd->dst = d->texture();
+    cmd->src = s->texture();
+    cmd->whole = 1;
 }
 
-// Supports the two directions the backend can express: texture subresource to
-// a placed buffer footprint and back.
+void CommandList::copy_texture_to_texture(const D3D12_TEXTURE_COPY_LOCATION &dst, UINT dst_x, UINT dst_y, UINT dst_z,
+                                          const D3D12_TEXTURE_COPY_LOCATION &src, const D3D12_BOX *src_box)
+{
+    auto *d = ours<Resource>(dst.pResource);
+    auto *s = ours<Resource>(src.pResource);
+    if (!d || !s || d->is_buffer() || s->is_buffer()) {
+        D3D12M_LOG("CopyTextureRegion: texture copy locations need textures of this layer");
+        return;
+    }
+    UINT src_mip, src_slice, dst_mip, dst_slice;
+    decompose_subresource(s->desc(), src.SubresourceIndex, &src_mip, &src_slice);
+    decompose_subresource(d->desc(), dst.SubresourceIndex, &dst_mip, &dst_slice);
+    const Extent extent = subresource_extent(s->desc(), src_mip);
+    D3D12_BOX box = {0, 0, 0, extent.width, extent.height, extent.depth};
+    if (src_box)
+        box = *src_box;
+    auto *cmd = append<mtlb_cmd_copy_texture_texture>(MTLB_CMD_COPY_TEXTURE_TEXTURE);
+    cmd->dst = d->texture();
+    cmd->src = s->texture();
+    cmd->dst_mip = dst_mip;
+    cmd->dst_slice = dst_slice;
+    cmd->src_mip = src_mip;
+    cmd->src_slice = src_slice;
+    cmd->dst_x = dst_x;
+    cmd->dst_y = dst_y;
+    cmd->dst_z = dst_z;
+    cmd->src_x = box.left;
+    cmd->src_y = box.top;
+    cmd->src_z = box.front;
+    cmd->width = box.right - box.left;
+    cmd->height = box.bottom - box.top;
+    cmd->depth = box.back - box.front;
+}
+
+// Copies between a texture subresource and a placed buffer footprint (either way), or between
+// two texture subresources.
 void CommandList::CopyTextureRegion(const D3D12_TEXTURE_COPY_LOCATION *dst, UINT dst_x, UINT dst_y, UINT dst_z,
                                     const D3D12_TEXTURE_COPY_LOCATION *src, const D3D12_BOX *src_box)
 {
@@ -380,8 +511,12 @@ void CommandList::CopyTextureRegion(const D3D12_TEXTURE_COPY_LOCATION *dst, UINT
                            && src->Type == D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
     const bool to_texture = dst->Type == D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX
                             && src->Type == D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+    if (dst->Type == D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX && src->Type == D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX) {
+        copy_texture_to_texture(*dst, dst_x, dst_y, dst_z, *src, src_box);
+        return;
+    }
     if (!to_buffer && !to_texture) {
-        D3D12M_STUB_LOG();  // texture-to-texture copies are not implemented
+        D3D12M_LOG("CopyTextureRegion: unsupported combination of copy locations");
         return;
     }
 

@@ -1,6 +1,10 @@
 // ID3D12Resource: committed buffers and textures.
 #pragma once
 
+#include <array>
+#include <map>
+#include <mutex>
+
 #include "bridge/mtlb.h"
 #include "d3d12/object.h"
 
@@ -15,6 +19,11 @@ public:
     mtlb_buffer buffer() const { return buffer_; }
     mtlb_texture texture() const { return texture_; }
     const D3D12_RESOURCE_DESC &desc() const { return desc_; }
+
+    // The resource id of a view of this texture for descriptors (see mtlb_texture_view). Applications
+    // recreate the same descriptors every frame, so the answers are cached here and the bridge is
+    // called once per distinct view.
+    HRESULT texture_view(const mtlb_texture_view_desc &desc, uint64_t *resource_id);
 
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **out) override
     {
@@ -53,6 +62,9 @@ private:
     mtlb_texture texture_ = 0;
     uint8_t *cpu_ptr_ = nullptr;
     uint64_t gpu_address_ = 0;
+
+    std::mutex views_mutex_;
+    std::map<std::array<uint32_t, 8>, uint64_t> views_;
 };
 
 } // namespace d3d12m

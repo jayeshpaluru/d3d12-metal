@@ -155,7 +155,7 @@ mtlb_result mtlb_buffer_create(mtlb_device handle, uint64_t size, mtlb_storage s
     if (!mtl_buffer)
         return fail(MTLB_ERROR_OUT_OF_MEMORY, "newBufferWithLength failed");
 
-    auto *buffer = new Buffer{device, mtl_buffer, mtl_buffer.gpuAddress, size};
+    auto *buffer = new Buffer(device, mtl_buffer, mtl_buffer.gpuAddress, size);
     {
         std::lock_guard<std::shared_mutex> lock(device->buffers_mutex);
         auto at = std::lower_bound(device->buffers.begin(), device->buffers.end(), buffer->gpu_address,
@@ -246,7 +246,7 @@ mtlb_result mtlb_texture_create(mtlb_device handle, const mtlb_texture_desc *des
 
     if (info)
         info->resource_id = mtl_texture.gpuResourceID._impl;
-    *out = to_handle(new Texture{device, mtl_texture, static_cast<mtlb_format>(desc->format), {}, {}});
+    *out = to_handle(new Texture(device, mtl_texture, static_cast<mtlb_format>(desc->format)));
     return MTLB_OK;
 }
 

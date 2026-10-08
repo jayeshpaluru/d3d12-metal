@@ -10,7 +10,7 @@ endif
 
 # Shader name -> [vs header, ps header], from shaders/<name>.hlsl.
 shader_headers = {}
-foreach shader : ['color', 'vertex_input']
+foreach shader : ['color', 'vertex_input', 'hello_texture', 'const_buffers']
   headers = []
   foreach stage : [['vs', 'vs_6_0', 'VSMain'], ['ps', 'ps_6_0', 'PSMain']]
     headers += custom_target(
@@ -25,7 +25,7 @@ endforeach
 
 # Compute shaders: shaders/<name>.hlsl -> g_<name>_cs.
 compute_headers = {}
-foreach shader : ['noop']
+foreach shader : ['noop', 'probe']
   compute_headers += {shader: custom_target(
     shader + '_cs',
     input: 'shaders/' + shader + '.hlsl',

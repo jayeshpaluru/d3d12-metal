@@ -90,6 +90,9 @@ struct Device {
 };
 
 struct Buffer {
+    Buffer(Device *d, id<MTLBuffer> b, uint64_t address, uint64_t length)
+        : device(d), buffer(b), gpu_address(address), size(length) {}
+
     Device *device;
     id<MTLBuffer> buffer;
     uint64_t gpu_address;
@@ -102,6 +105,8 @@ struct Buffer {
 };
 
 struct Texture {
+    Texture(Device *d, id<MTLTexture> t, mtlb_format f) : device(d), texture(t), format(f) {}
+
     Device *device;
     id<MTLTexture> texture;
     mtlb_format format;
@@ -146,6 +151,12 @@ struct Queue {
     std::mutex mutex;
     id<MTLCommandBuffer> open = nil;
     std::atomic<uint64_t> render_passes{0};
+
+    // Orders encoders on this queue: resources are reached through GPU addresses and descriptor
+    // tables, which Metal's automatic hazard tracking does not see, so every encoder updates
+    // the fence when it ends and the next one waits for it (queue.mm).
+    id<MTLFence> fence = nil;
+    bool fence_pending = false;  // an encoder updated the fence and no later encoder has waited yet
 };
 
 // A CAMetalLayer attached to an application window, and what it takes to put a
@@ -208,7 +219,7 @@ struct Drawable {
 Drawable acquire_drawable(Swapchain *swapchain, uint32_t sync_interval);
 
 // Encodes drawing `texture` onto the drawable and presenting it into `command_buffer`.
-void encode_present(id<MTLCommandBuffer> command_buffer, Swapchain *swapchain, Texture *texture,
+void encode_present(Queue *queue, id<MTLCommandBuffer> command_buffer, Swapchain *swapchain, Texture *texture,
                     const Drawable &drawable);
 
 // Format mapping (formats.mm). Return MTLPixelFormatInvalid / MTLVertexFormatInvalid

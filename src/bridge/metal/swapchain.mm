@@ -123,16 +123,23 @@ void configure_layer(CAMetalLayer *layer, MTLPixelFormat pixel_format, uint32_t 
 
 // Draws `source` over all of `target` with the present pipeline.
 void draw_present_pass(id<MTLCommandBuffer> command_buffer, id<MTLTexture> target,
-                       id<MTLRenderPipelineState> pipeline, id<MTLTexture> source)
+                       id<MTLRenderPipelineState> pipeline, id<MTLTexture> source, Queue *queue)
 {
     MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
     pass.colorAttachments[0].texture = target;
     pass.colorAttachments[0].loadAction = MTLLoadActionDontCare;
     pass.colorAttachments[0].storeAction = MTLStoreActionStore;
     id<MTLRenderCommandEncoder> encoder = [command_buffer renderCommandEncoderWithDescriptor:pass];
+    // The back buffer was written by the queue's earlier encoders.
+    if (queue->fence_pending) {
+        [encoder waitForFence:queue->fence beforeStages:MTLRenderStageVertex];
+        queue->fence_pending = false;
+    }
     [encoder setRenderPipelineState:pipeline];
     [encoder setFragmentTexture:source atIndex:0];
     [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+    [encoder updateFence:queue->fence afterStages:MTLRenderStageFragment];
+    queue->fence_pending = true;
     [encoder endEncoding];
 }
 
@@ -192,10 +199,10 @@ Drawable acquire_drawable(Swapchain *swapchain, uint32_t sync_interval)
     return result;
 }
 
-void encode_present(id<MTLCommandBuffer> command_buffer, Swapchain *swapchain, Texture *texture,
+void encode_present(Queue *queue, id<MTLCommandBuffer> command_buffer, Swapchain *swapchain, Texture *texture,
                     const Drawable &drawable)
 {
-    draw_present_pass(command_buffer, drawable.drawable.texture, drawable.pipeline, texture->texture);
+    draw_present_pass(command_buffer, drawable.drawable.texture, drawable.pipeline, texture->texture, queue);
 
     const uint64_t present = ++swapchain->presents;
     if (!swapchain->dump_path.empty() && present == swapchain->dump_frame) {
@@ -208,7 +215,7 @@ void encode_present(id<MTLCommandBuffer> command_buffer, Swapchain *swapchain, T
         td.usage = MTLTextureUsageRenderTarget;
         td.storageMode = MTLStorageModeShared;
         id<MTLTexture> capture = [swapchain->device->device newTextureWithDescriptor:td];
-        draw_present_pass(command_buffer, capture, drawable.pipeline, texture->texture);
+        draw_present_pass(command_buffer, capture, drawable.pipeline, texture->texture, queue);
         const std::string path = swapchain->dump_path;
         [command_buffer addCompletedHandler:^(id<MTLCommandBuffer>) { write_png(capture, path); }];
     }

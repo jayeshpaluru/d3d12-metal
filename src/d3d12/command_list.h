@@ -41,7 +41,7 @@ public:
     void STDMETHODCALLTYPE ClearState(ID3D12PipelineState *) override { D3D12M_STUB_LOG(); }
     void STDMETHODCALLTYPE DrawInstanced(UINT VertexCountPerInstance, UINT InstanceCount, UINT StartVertexLocation, UINT StartInstanceLocation) override;
     void STDMETHODCALLTYPE DrawIndexedInstanced(UINT IndexCountPerInstance, UINT InstanceCount, UINT StartIndexLocation, INT BaseVertexLocation, UINT StartInstanceLocation) override;
-    void STDMETHODCALLTYPE Dispatch(UINT, UINT, UINT) override { D3D12M_STUB_LOG(); }
+    void STDMETHODCALLTYPE Dispatch(UINT ThreadGroupCountX, UINT ThreadGroupCountY, UINT ThreadGroupCountZ) override;
     void STDMETHODCALLTYPE CopyBufferRegion(ID3D12Resource *pDstBuffer, UINT64 DstOffset, ID3D12Resource *pSrcBuffer, UINT64 SrcOffset, UINT64 NumBytes) override;
     void STDMETHODCALLTYPE CopyTextureRegion(const D3D12_TEXTURE_COPY_LOCATION *pDst, UINT DstX, UINT DstY, UINT DstZ, const D3D12_TEXTURE_COPY_LOCATION *pSrc, const D3D12_BOX *pSrcBox) override;
     void STDMETHODCALLTYPE CopyResource(ID3D12Resource *pDstResource, ID3D12Resource *pSrcResource) override;
@@ -56,19 +56,19 @@ public:
     void STDMETHODCALLTYPE ResourceBarrier(UINT NumBarriers, const D3D12_RESOURCE_BARRIER *pBarriers) override;
     void STDMETHODCALLTYPE ExecuteBundle(ID3D12GraphicsCommandList *) override { D3D12M_STUB_LOG(); }
     void STDMETHODCALLTYPE SetDescriptorHeaps(UINT NumDescriptorHeaps, ID3D12DescriptorHeap *const *ppDescriptorHeaps) override;
-    void STDMETHODCALLTYPE SetComputeRootSignature(ID3D12RootSignature *) override { D3D12M_STUB_LOG(); }
+    void STDMETHODCALLTYPE SetComputeRootSignature(ID3D12RootSignature *pRootSignature) override;
     void STDMETHODCALLTYPE SetGraphicsRootSignature(ID3D12RootSignature *pRootSignature) override;
-    void STDMETHODCALLTYPE SetComputeRootDescriptorTable(UINT, D3D12_GPU_DESCRIPTOR_HANDLE) override { D3D12M_STUB_LOG(); }
+    void STDMETHODCALLTYPE SetComputeRootDescriptorTable(UINT RootParameterIndex, D3D12_GPU_DESCRIPTOR_HANDLE BaseDescriptor) override;
     void STDMETHODCALLTYPE SetGraphicsRootDescriptorTable(UINT RootParameterIndex, D3D12_GPU_DESCRIPTOR_HANDLE BaseDescriptor) override;
-    void STDMETHODCALLTYPE SetComputeRoot32BitConstant(UINT, UINT, UINT) override { D3D12M_STUB_LOG(); }
+    void STDMETHODCALLTYPE SetComputeRoot32BitConstant(UINT RootParameterIndex, UINT SrcData, UINT DestOffsetIn32BitValues) override;
     void STDMETHODCALLTYPE SetGraphicsRoot32BitConstant(UINT RootParameterIndex, UINT SrcData, UINT DestOffsetIn32BitValues) override;
-    void STDMETHODCALLTYPE SetComputeRoot32BitConstants(UINT, UINT, const void *, UINT) override { D3D12M_STUB_LOG(); }
+    void STDMETHODCALLTYPE SetComputeRoot32BitConstants(UINT RootParameterIndex, UINT Num32BitValuesToSet, const void *pSrcData, UINT DestOffsetIn32BitValues) override;
     void STDMETHODCALLTYPE SetGraphicsRoot32BitConstants(UINT RootParameterIndex, UINT Num32BitValuesToSet, const void *pSrcData, UINT DestOffsetIn32BitValues) override;
-    void STDMETHODCALLTYPE SetComputeRootConstantBufferView(UINT, D3D12_GPU_VIRTUAL_ADDRESS) override { D3D12M_STUB_LOG(); }
+    void STDMETHODCALLTYPE SetComputeRootConstantBufferView(UINT RootParameterIndex, D3D12_GPU_VIRTUAL_ADDRESS BufferLocation) override;
     void STDMETHODCALLTYPE SetGraphicsRootConstantBufferView(UINT RootParameterIndex, D3D12_GPU_VIRTUAL_ADDRESS BufferLocation) override;
-    void STDMETHODCALLTYPE SetComputeRootShaderResourceView(UINT, D3D12_GPU_VIRTUAL_ADDRESS) override { D3D12M_STUB_LOG(); }
+    void STDMETHODCALLTYPE SetComputeRootShaderResourceView(UINT RootParameterIndex, D3D12_GPU_VIRTUAL_ADDRESS BufferLocation) override;
     void STDMETHODCALLTYPE SetGraphicsRootShaderResourceView(UINT RootParameterIndex, D3D12_GPU_VIRTUAL_ADDRESS BufferLocation) override;
-    void STDMETHODCALLTYPE SetComputeRootUnorderedAccessView(UINT, D3D12_GPU_VIRTUAL_ADDRESS) override { D3D12M_STUB_LOG(); }
+    void STDMETHODCALLTYPE SetComputeRootUnorderedAccessView(UINT RootParameterIndex, D3D12_GPU_VIRTUAL_ADDRESS BufferLocation) override;
     void STDMETHODCALLTYPE SetGraphicsRootUnorderedAccessView(UINT RootParameterIndex, D3D12_GPU_VIRTUAL_ADDRESS BufferLocation) override;
     void STDMETHODCALLTYPE IASetIndexBuffer(const D3D12_INDEX_BUFFER_VIEW *pView) override;
     void STDMETHODCALLTYPE IASetVertexBuffers(UINT StartSlot, UINT NumViews, const D3D12_VERTEX_BUFFER_VIEW *pViews) override;
@@ -120,21 +120,34 @@ private:
     CommandList(Device *device, D3D12_COMMAND_LIST_TYPE type) : ChildImpl(device), type_(type) {}
     ~CommandList() override;
 
+    // The root signature and root arguments of one pipeline type. The arguments are the shader
+    // converter's top-level argument buffer, kept as bytes and sent whole before the next draw or dispatch.
+    struct RootState {
+        RootSignature *signature = nullptr;  // owned reference
+        std::vector<uint8_t> args;
+        bool dirty = false;
+    };
+
     void reset_state();
     template <typename T>
     T *append(mtlb_cmd_type type, size_t extra_bytes = 0);
     bool prepare_draw();
-    const RootSignature::Slot *find_slot(UINT index, D3D12_ROOT_PARAMETER_TYPE type);
-    void set_root_address(UINT index, D3D12_ROOT_PARAMETER_TYPE type, uint64_t address);
+    void set_root_signature(RootState &state, ID3D12RootSignature *signature, const char *what);
+    const RootSignature::Slot *find_slot(RootState &state, UINT index, D3D12_ROOT_PARAMETER_TYPE type);
+    void set_root_address(RootState &state, UINT index, D3D12_ROOT_PARAMETER_TYPE type, uint64_t address);
+    void set_root_constants(RootState &state, UINT index, UINT count, const void *data, UINT dest_offset);
+    void flush_root_args(RootState &state, mtlb_cmd_type type);
+    void copy_texture_to_texture(const D3D12_TEXTURE_COPY_LOCATION &dst, UINT dst_x, UINT dst_y, UINT dst_z,
+                                 const D3D12_TEXTURE_COPY_LOCATION &src, const D3D12_BOX *src_box);
 
     D3D12_COMMAND_LIST_TYPE type_;
     bool closed_ = false;
     std::vector<uint8_t> stream_;
 
-    bool has_pipeline_ = false;
-    RootSignature *root_signature_ = nullptr;  // owned reference
-    std::vector<uint8_t> root_args_;
-    bool root_args_dirty_ = false;
+    bool has_graphics_pipeline_ = false;
+    bool has_compute_pipeline_ = false;
+    RootState graphics_;
+    RootState compute_;
 };
 
 } // namespace d3d12m

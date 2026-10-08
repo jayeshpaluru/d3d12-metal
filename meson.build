@@ -29,6 +29,8 @@ cxx = meson.get_compiler('cpp')
 # The source is tests/portable/p_<name>.cpp; see tests/portable/t12.h.
 portable_tests = [
   ['interfaces', ['color'], ['noop']],
+  ['textures', [], ['probe']],
+  ['hello_texture', ['hello_texture', 'const_buffers'], []],
 ]
 
 bridge_sources = []

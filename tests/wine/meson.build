@@ -17,7 +17,9 @@ if not dxc.found()
 else
   wine_shader_headers = {}
   foreach shader : [['color', '../shaders/color.hlsl'], ['triangle', 'shaders/triangle.hlsl'],
-                    ['vertex_input', '../shaders/vertex_input.hlsl']]
+                    ['vertex_input', '../shaders/vertex_input.hlsl'],
+                    ['hello_texture', '../shaders/hello_texture.hlsl'],
+                    ['const_buffers', '../shaders/const_buffers.hlsl']]
     headers = []
     foreach stage : [['vs', 'vs_6_0', 'VSMain'], ['ps', 'ps_6_0', 'PSMain']]
       headers += custom_target(
@@ -46,7 +48,7 @@ else
 
   # Compute shaders shared with the native tests.
   wine_compute_headers = {}
-  foreach shader : ['noop']
+  foreach shader : ['noop', 'probe']
     wine_compute_headers += {shader: custom_target(
       shader + '_cs',
       input: '../shaders/' + shader + '.hlsl',

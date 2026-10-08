@@ -82,6 +82,10 @@ struct DrawState {
     uint32_t root_args_size = 0;
     float blend_factor[4] = {1, 1, 1, 1};
     uint32_t stencil_ref = 0;
+    Pipeline *compute_pipeline = nullptr;
+    const uint8_t *compute_root_args = nullptr;
+    uint32_t compute_root_args_size = 0;
+    uint64_t resource_heap = 0, sampler_heap = 0;  // GPU addresses of the bound descriptor heaps
 };
 
 // Replays one command stream into a command buffer, opening and closing
@@ -98,12 +102,7 @@ public:
     void note_span_error() { note_error(fail(MTLB_ERROR_INVALID_ARGUMENT, "span without data")); }
     mtlb_result error() const { return error_; }
     const std::string &error_message() const { return error_message_; }
-    void finish()
-    {
-        end_blit();
-        end_render();
-        flush_clears(false);
-    }
+    void finish() { end_encoders(); }
 
 private:
     enum Dirty : uint32_t {
@@ -114,7 +113,8 @@ private:
         kBlendFactor = 1u << 4,
         kStencilRef = 1u << 5,
         kVertexBuffers = 1u << 6,
-        kAll = (kVertexBuffers << 1) - 1,
+        kHeaps = 1u << 7,
+        kAll = (kHeaps << 1) - 1,
     };
 
     // A CLEAR_RTV waiting for the next pass that binds its view (or a clear-only pass).
@@ -144,6 +144,11 @@ private:
     mtlb_result set_stencil_ref(const mtlb_cmd_set_stencil_ref &cmd);
     mtlb_result draw(const mtlb_cmd_draw &cmd);
     mtlb_result draw_indexed(const mtlb_cmd_draw_indexed &cmd);
+    mtlb_result set_compute_root_args(const mtlb_cmd_set_graphics_root_args &cmd);
+    mtlb_result set_descriptor_heaps(const mtlb_cmd_set_descriptor_heaps &cmd);
+    mtlb_result dispatch_compute(const mtlb_cmd_dispatch &cmd);
+    mtlb_result copy_texture_texture(const mtlb_cmd_copy_texture_texture &cmd);
+    void bind_heaps(uint32_t stage_mask);
     mtlb_result copy_buffer(const mtlb_cmd_copy_buffer &cmd);
     mtlb_result copy_texture_to_buffer(const mtlb_cmd_copy_texture &cmd);
     mtlb_result copy_buffer_to_texture(const mtlb_cmd_copy_texture &cmd);
@@ -157,18 +162,48 @@ private:
     mtlb_result apply_state();
     mtlb_result copy_texture(const mtlb_texture_copy_region &r, bool to_buffer);
     id<MTLBlitCommandEncoder> blit();
+    id<MTLComputeCommandEncoder> compute();
     id<MTLRenderCommandEncoder> new_render_encoder(MTLRenderPassDescriptor *pass);
 
+    // Every encoder ends by updating the queue's fence and every encoder starts by waiting for the
+    // one before (see Queue::fence).
     void end_blit()
     {
+        if (!blit_)
+            return;
+        [blit_ updateFence:queue_->fence];
+        queue_->fence_pending = true;
         [blit_ endEncoding];
         blit_ = nil;
     }
 
     void end_render()
     {
+        if (!render_)
+            return;
+        [render_ updateFence:queue_->fence afterStages:MTLRenderStageFragment];
+        queue_->fence_pending = true;
         [render_ endEncoding];
         render_ = nil;
+    }
+
+    void end_compute()
+    {
+        if (!compute_)
+            return;
+        [compute_ updateFence:queue_->fence];
+        queue_->fence_pending = true;
+        [compute_ endEncoding];
+        compute_ = nil;
+    }
+
+    // Ends whatever encoder is open and runs the clears waiting for a pass.
+    void end_encoders()
+    {
+        end_blit();
+        end_compute();
+        end_render();
+        flush_clears(false);
     }
 
     void note_error(mtlb_result result);
@@ -180,11 +215,13 @@ private:
     bool abort_stream_ = false;  // set by structural errors
     id<MTLRenderCommandEncoder> render_ = nil;
     id<MTLBlitCommandEncoder> blit_ = nil;
+    id<MTLComputeCommandEncoder> compute_ = nil;
 
     DrawState state_;
     std::vector<PendingClear> clears_;  // waiting for a pass that binds their view
     bool warned_no_targets_ = false;
-    uint32_t dirty_ = kAll;  // state_ pieces the current encoder has not seen
+    uint32_t dirty_ = kAll;  // state_ pieces the current render encoder has not seen
+    uint32_t dirty_compute_ = kAll;  // the same for the compute encoder
     NSUInteger target_width_ = 0, target_height_ = 0;
 };
 
@@ -225,18 +262,46 @@ void Replay::run(const uint8_t *stream, size_t length)
 id<MTLBlitCommandEncoder> Replay::blit()
 {
     if (!blit_) {
+        end_compute();
         end_render();
         flush_clears(false);
         blit_ = [cb_ blitCommandEncoder];
+        if (queue_->fence_pending) {
+            [blit_ waitForFence:queue_->fence];
+            queue_->fence_pending = false;
+        }
     }
     return blit_;
+}
+
+// The compute encoder, opened on demand like the blit encoder.
+id<MTLComputeCommandEncoder> Replay::compute()
+{
+    if (!compute_) {
+        end_blit();
+        end_render();
+        flush_clears(false);
+        compute_ = [cb_ computeCommandEncoder];
+        if (queue_->fence_pending) {
+            [compute_ waitForFence:queue_->fence];
+            queue_->fence_pending = false;
+        }
+        dirty_compute_ = kAll;
+    }
+    return compute_;
 }
 
 id<MTLRenderCommandEncoder> Replay::new_render_encoder(MTLRenderPassDescriptor *pass)
 {
     end_blit();
+    end_compute();
     queue_->render_passes.fetch_add(1, std::memory_order_relaxed);
-    return [cb_ renderCommandEncoderWithDescriptor:pass];
+    id<MTLRenderCommandEncoder> encoder = [cb_ renderCommandEncoderWithDescriptor:pass];
+    if (queue_->fence_pending) {
+        [encoder waitForFence:queue_->fence beforeStages:MTLRenderStageVertex];
+        queue_->fence_pending = false;
+    }
+    return encoder;
 }
 
 mtlb_result Replay::resolve_target(const mtlb_render_target &t, Target *out)
@@ -340,7 +405,8 @@ mtlb_result Replay::clear_only_pass(const PendingClear &clear)
     ca.loadAction = MTLLoadActionClear;
     ca.storeAction = MTLStoreActionStore;
     ca.clearColor = MTLClearColorMake(clear.color[0], clear.color[1], clear.color[2], clear.color[3]);
-    [new_render_encoder(pass) endEncoding];
+    render_ = new_render_encoder(pass);
+    end_render();
     return MTLB_OK;
 }
 
@@ -430,6 +496,8 @@ mtlb_result Replay::apply_state()
         [render_ setStencilReferenceValue:state_.stencil_ref];
     if (dirty_ & kVertexBuffers)
         [render_ setVertexBytes:state_.vertex_buffers length:sizeof(state_.vertex_buffers) atIndex:kIRVertexBufferBindPoint];
+    if (dirty_ & kHeaps)
+        bind_heaps(0);
     dirty_ = 0;
     return MTLB_OK;
 }
@@ -523,6 +591,7 @@ mtlb_result Replay::reset_state(const mtlb_cmd_reset_state &)
         return result;
     state_ = DrawState{};
     mark_all_dirty();
+    dirty_compute_ = kAll;
     return MTLB_OK;
 }
 
@@ -531,6 +600,12 @@ mtlb_result Replay::set_pipeline(const mtlb_cmd_set_pipeline &cmd)
     auto *pipeline = from_handle<Pipeline>(cmd.pipeline);
     if (!pipeline)
         return fail(MTLB_ERROR_INVALID_ARGUMENT, "invalid pipeline handle");
+    if (pipeline->compute) {
+        if (pipeline != state_.compute_pipeline)
+            dirty_compute_ |= kPipeline;
+        state_.compute_pipeline = pipeline;
+        return MTLB_OK;
+    }
     if (pipeline != state_.pipeline)
         dirty_ |= kPipeline;
     state_.pipeline = pipeline;
@@ -610,6 +685,100 @@ mtlb_result Replay::set_stencil_ref(const mtlb_cmd_set_stencil_ref &cmd)
     return MTLB_OK;
 }
 
+mtlb_result Replay::set_compute_root_args(const mtlb_cmd_set_graphics_root_args &cmd)
+{
+    if (!array_fits<uint8_t>(cmd, cmd.data_size))
+        return fail(MTLB_ERROR_INVALID_ARGUMENT, "root argument size exceeds the record");
+    state_.compute_root_args = cmd.data;
+    state_.compute_root_args_size = cmd.data_size;
+    dirty_compute_ |= kRootArgs;
+    return MTLB_OK;
+}
+
+mtlb_result Replay::set_descriptor_heaps(const mtlb_cmd_set_descriptor_heaps &cmd)
+{
+    state_.resource_heap = cmd.resource_heap;
+    state_.sampler_heap = cmd.sampler_heap;
+    dirty_ |= kHeaps;
+    dirty_compute_ |= kHeaps;
+    return MTLB_OK;
+}
+
+// Binds the descriptor heaps at their fixed bind points on the open encoder (render when
+// `compute_stage` is 0, else compute).
+void Replay::bind_heaps(uint32_t compute_stage)
+{
+    const uint64_t addresses[2] = {state_.resource_heap, state_.sampler_heap};
+    const uint64_t points[2] = {kIRDescriptorHeapBindPoint, kIRSamplerHeapBindPoint};
+    for (int i = 0; i < 2; ++i) {
+        uint64_t offset = 0;
+        Buffer *heap = addresses[i] ? find_buffer(queue_->device, addresses[i], &offset) : nullptr;
+        if (!heap)
+            continue;
+        if (compute_stage) {
+            [compute_ setBuffer:heap->buffer offset:offset atIndex:points[i]];
+        } else {
+            [render_ setVertexBuffer:heap->buffer offset:offset atIndex:points[i]];
+            [render_ setFragmentBuffer:heap->buffer offset:offset atIndex:points[i]];
+        }
+    }
+}
+
+mtlb_result Replay::dispatch_compute(const mtlb_cmd_dispatch &cmd)
+{
+    Pipeline *pipeline = state_.compute_pipeline;
+    if (!pipeline)
+        return fail(MTLB_ERROR_INVALID_ARGUMENT, "dispatch without a compute pipeline");
+    id<MTLComputeCommandEncoder> enc = compute();
+    if (!enc)
+        return fail(MTLB_ERROR_DEVICE, "computeCommandEncoder failed");
+    if (dirty_compute_ & kPipeline)
+        [enc setComputePipelineState:pipeline->compute];
+    if ((dirty_compute_ & kRootArgs) && state_.compute_root_args_size)
+        [enc setBytes:state_.compute_root_args length:state_.compute_root_args_size atIndex:kIRArgumentBufferBindPoint];
+    if (dirty_compute_ & kHeaps)
+        bind_heaps(1);
+    dirty_compute_ = 0;
+    [enc dispatchThreadgroups:MTLSizeMake(cmd.x, cmd.y, cmd.z) threadsPerThreadgroup:pipeline->threadgroup_size];
+    return MTLB_OK;
+}
+
+// A texture viewed in another pixel format (a copy between formats of one typeless family).
+static id<MTLTexture> reinterpreted(Texture *texture, MTLPixelFormat format)
+{
+    if (texture->texture.pixelFormat == format)
+        return texture->texture;
+    std::lock_guard<std::mutex> lock(texture->views_mutex);
+    // Pixel formats occupy keys of their own, apart from the render target views' mtlb formats.
+    auto &view = texture->views[0x80000000u | static_cast<uint32_t>(format)];
+    if (!view)
+        view = [texture->texture newTextureViewWithPixelFormat:format];
+    return view;
+}
+
+mtlb_result Replay::copy_texture_texture(const mtlb_cmd_copy_texture_texture &cmd)
+{
+    Texture *dst = from_handle<Texture>(cmd.dst), *src = from_handle<Texture>(cmd.src);
+    if (!dst || !src)
+        return fail(MTLB_ERROR_INVALID_ARGUMENT, "invalid texture copy");
+    id<MTLBlitCommandEncoder> enc = blit();
+    id<MTLTexture> source = reinterpreted(src, dst->texture.pixelFormat);
+    if (!source)
+        return fail(MTLB_ERROR_UNSUPPORTED, "texture copy between incompatible formats");
+    if (cmd.whole) {
+        const NSUInteger slices = std::max<NSUInteger>(dst->texture.arrayLength, 1);
+        [enc copyFromTexture:source sourceSlice:0 sourceLevel:0 toTexture:dst->texture destinationSlice:0
+            destinationLevel:0 sliceCount:slices levelCount:dst->texture.mipmapLevelCount];
+        return MTLB_OK;
+    }
+    [enc copyFromTexture:source sourceSlice:cmd.src_slice sourceLevel:cmd.src_mip
+            sourceOrigin:MTLOriginMake(cmd.src_x, cmd.src_y, cmd.src_z)
+              sourceSize:MTLSizeMake(cmd.width, cmd.height, cmd.depth)
+               toTexture:dst->texture destinationSlice:cmd.dst_slice destinationLevel:cmd.dst_mip
+       destinationOrigin:MTLOriginMake(cmd.dst_x, cmd.dst_y, cmd.dst_z)];
+    return MTLB_OK;
+}
+
 mtlb_result Replay::copy_buffer(const mtlb_cmd_copy_buffer &cmd)
 {
     Buffer *dst = from_handle<Buffer>(cmd.dst), *src = from_handle<Buffer>(cmd.src);
@@ -645,6 +814,10 @@ mtlb_result Replay::execute(const mtlb_cmd_header *header)
     case MTLB_CMD_SET_GRAPHICS_ROOT_ARGS: return dispatch(header, &Replay::set_root_args);
     case MTLB_CMD_SET_BLEND_FACTOR: return dispatch(header, &Replay::set_blend_factor);
     case MTLB_CMD_SET_STENCIL_REF: return dispatch(header, &Replay::set_stencil_ref);
+    case MTLB_CMD_SET_COMPUTE_ROOT_ARGS: return dispatch(header, &Replay::set_compute_root_args);
+    case MTLB_CMD_SET_DESCRIPTOR_HEAPS: return dispatch(header, &Replay::set_descriptor_heaps);
+    case MTLB_CMD_DISPATCH: return dispatch(header, &Replay::dispatch_compute);
+    case MTLB_CMD_COPY_TEXTURE_TEXTURE: return dispatch(header, &Replay::copy_texture_texture);
     case MTLB_CMD_DRAW: return dispatch(header, &Replay::draw);
     case MTLB_CMD_DRAW_INDEXED: return dispatch(header, &Replay::draw_indexed);
     case MTLB_CMD_COPY_BUFFER: return dispatch(header, &Replay::copy_buffer);
@@ -700,6 +873,7 @@ mtlb_result mtlb_queue_create(mtlb_device handle, mtlb_queue *out)
     auto *queue = new Queue();
     queue->device = device;
     queue->queue = mtl_queue;
+    queue->fence = [device->device newFence];
     *out = to_handle(queue);
     return MTLB_OK;
 }
@@ -754,7 +928,7 @@ mtlb_result mtlb_queue_present(mtlb_queue handle, mtlb_swapchain swapchain_handl
     const Drawable drawable = acquire_drawable(swapchain, sync_interval);
     std::lock_guard<std::mutex> lock(queue->mutex);
     if (drawable.drawable)
-        encode_present(open_command_buffer(queue), swapchain, texture, drawable);
+        encode_present(queue, open_command_buffer(queue), swapchain, texture, drawable);
     commit_open(queue);
     return MTLB_OK;
 }
