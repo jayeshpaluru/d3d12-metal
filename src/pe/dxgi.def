@@ -1,7 +1,7 @@
 LIBRARY dxgi
 EXPORTS
-    CreateDXGIFactory = dxgi_CreateDXGIFactory
-    CreateDXGIFactory1 = dxgi_CreateDXGIFactory1
-    CreateDXGIFactory2 = dxgi_CreateDXGIFactory2
+    CreateDXGIFactory = dxgi_CreateDXGIFactory @10
+    CreateDXGIFactory1 = dxgi_CreateDXGIFactory1 @11
+    CreateDXGIFactory2 = dxgi_CreateDXGIFactory2 @23
     DXGIGetDebugInterface1 = dxgi_DXGIGetDebugInterface1
     DXGIDeclareAdapterRemovalSupport = dxgi_DXGIDeclareAdapterRemovalSupport

@@ -4,6 +4,8 @@
 #include "d3d12/device.h"
 #include "d3d12/dred.h"
 
+#include <mutex>
+
 using namespace d3d12m;
 
 D3D12M_EXPORT HRESULT D3D12CreateDevice(IUnknown *adapter, D3D_FEATURE_LEVEL minimum_feature_level, REFIID riid, void **device)
@@ -46,4 +48,38 @@ D3D12M_EXPORT HRESULT D3D12EnableExperimentalFeatures(UINT num_features, const I
         D3D12M_LOG("D3D12EnableExperimentalFeatures: no experimental features are available");
     return num_features == 0 ? S_OK : E_NOINTERFACE;
     D3D12M_TRACED_END(num_features)
+}
+
+// Layered-device entry points of the Windows runtime (ordinals 100, 103 to 105). Only the OS and the Agility SDK
+// call them; nothing here has layers to offer, so each answers "not implemented" and says so once.
+D3D12M_EXPORT HRESULT GetBehaviorValue(UINT, UINT *value)
+{
+    static std::once_flag logged;
+    std::call_once(logged, [] { D3D12M_LOG("GetBehaviorValue: not implemented"); });
+    if (value)
+        *value = 0;
+    return E_NOTIMPL;
+}
+
+D3D12M_EXPORT HRESULT D3D12CoreCreateLayeredDevice(const void *, UINT, const void *, REFIID, void **device)
+{
+    static std::once_flag logged;
+    std::call_once(logged, [] { D3D12M_LOG("D3D12CoreCreateLayeredDevice: not implemented"); });
+    if (device)
+        *device = nullptr;
+    return E_NOTIMPL;
+}
+
+D3D12M_EXPORT SIZE_T D3D12CoreGetLayeredDeviceSize(const void *, UINT)
+{
+    static std::once_flag logged;
+    std::call_once(logged, [] { D3D12M_LOG("D3D12CoreGetLayeredDeviceSize: not implemented"); });
+    return 0;
+}
+
+D3D12M_EXPORT HRESULT D3D12CoreRegisterLayers(const void *, UINT)
+{
+    static std::once_flag logged;
+    std::call_once(logged, [] { D3D12M_LOG("D3D12CoreRegisterLayers: not implemented"); });
+    return E_NOTIMPL;
 }

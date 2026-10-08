@@ -1,13 +1,18 @@
 LIBRARY d3d12
 EXPORTS
-    D3D12CreateDevice
-    D3D12GetDebugInterface
-    D3D12SerializeRootSignature
-    D3D12SerializeVersionedRootSignature
-    D3D12CreateRootSignatureDeserializer
-    D3D12CreateVersionedRootSignatureDeserializer
-    D3D12EnableExperimentalFeatures
-    D3D12GetInterface
+    ; Ordinals 100 to 110 are those of the Windows runtime: games link d3d12.dll by ordinal (101 = D3D12CreateDevice).
+    GetBehaviorValue @100
+    D3D12CreateDevice @101
+    D3D12GetDebugInterface @102
+    D3D12CoreCreateLayeredDevice @103
+    D3D12CoreGetLayeredDeviceSize @104
+    D3D12CoreRegisterLayers @105
+    D3D12CreateRootSignatureDeserializer @106
+    D3D12CreateVersionedRootSignatureDeserializer @107
+    D3D12EnableExperimentalFeatures @108
+    D3D12SerializeRootSignature @109
+    D3D12SerializeVersionedRootSignature @110
+    D3D12GetInterface @111
     CreateDXGIFactory
     CreateDXGIFactory1
     CreateDXGIFactory2

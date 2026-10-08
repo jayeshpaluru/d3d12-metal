@@ -57,6 +57,23 @@ int main()
     void *create = check_exports("dxgi.dll", "CreateDXGIFactory2");
     CHECK(create);
 
+    // Games import d3d12.dll and dxgi.dll by the ordinals of the Windows runtime.
+    const HMODULE d3d12 = GetModuleHandleA("d3d12.dll"), dxgi = GetModuleHandleA("dxgi.dll");
+    const struct { HMODULE module; WORD ordinal; const char *name; } by_ordinal[] = {
+        {d3d12, 100, "GetBehaviorValue"}, {d3d12, 101, "D3D12CreateDevice"}, {d3d12, 102, "D3D12GetDebugInterface"},
+        {d3d12, 103, "D3D12CoreCreateLayeredDevice"}, {d3d12, 104, "D3D12CoreGetLayeredDeviceSize"},
+        {d3d12, 105, "D3D12CoreRegisterLayers"}, {d3d12, 106, "D3D12CreateRootSignatureDeserializer"},
+        {d3d12, 107, "D3D12CreateVersionedRootSignatureDeserializer"}, {d3d12, 108, "D3D12EnableExperimentalFeatures"},
+        {d3d12, 109, "D3D12SerializeRootSignature"}, {d3d12, 110, "D3D12SerializeVersionedRootSignature"},
+        {dxgi, 10, "CreateDXGIFactory"}, {dxgi, 11, "CreateDXGIFactory1"}, {dxgi, 23, "CreateDXGIFactory2"},
+    };
+    for (const auto &e : by_ordinal) {
+        FARPROC byname = GetProcAddress(e.module, e.name), byord = GetProcAddress(e.module, MAKEINTRESOURCEA(e.ordinal));
+        std::printf("exports_test: %s ordinal %u\n", e.name, e.ordinal);
+        CHECK(byname);
+        CHECK(byname == byord);
+    }
+
     ComPtr<IDXGIFactory4> factory;
     CHECK_HR(reinterpret_cast<CreateDXGIFactory2Fn>(create)(0, IID_PPV_ARGS(&factory)));
     ComPtr<IDXGIAdapter1> adapter;
