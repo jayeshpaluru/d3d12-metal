@@ -13,4 +13,4 @@ if [ "${1:-}" = "--restart" ]; then
     "$WINE_ROOT/bin/wineserver" -k || true
     "$WINE_ROOT/bin/wineserver" -w || true
 fi
-exec "$WINE_ROOT/bin/wine" 'C:\Program Files (x86)\Steam\steam.exe' -no-cef-sandbox -cef-disable-gpu -cef-disable-gpu-compositing -cef-in-process-gpu -no-dwrite -noverifyfiles "$@"
+exec "$WINE_ROOT/bin/wine" 'C:\Program Files (x86)\Steam\steam.exe' -no-cef-sandbox -noverifyfiles ${STEAM_CEF_FLAGS:-} "$@"
