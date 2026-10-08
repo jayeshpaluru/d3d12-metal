@@ -2,6 +2,7 @@
 # Runs the Win32 tests under Wine (build them first with tools/build-wine.sh):
 #   wine_basic.exe                  device, copies, offscreen triangle, fence events
 #   p_*.exe                         the portable tests (tests/portable), also run natively
+#   hello_samples.exe texture|constbuffers   D3D12HelloTexture / HelloConstBuffers in a window
 #   swapchain_test.exe              swap chain on a window: latency object, resize, formats, outputs
 #   hello_triangle.exe --selftest   renders in a window, reads the back buffer, checks pixels
 #   hello_triangle.exe --frames 300 on screen; the presented frame is checked, and so is a
@@ -22,7 +23,7 @@ WINE_ROOT="${WINE_ROOT:-/Users/jsp/code/deps/wine/Wine Devel.app/Contents/Resour
 export WINEPREFIX="${WINEPREFIX:-/Users/jsp/code/deps/wineprefix}"
 
 for path in "$out/d3d12.dll" "$out/dxgi.dll" "$out/x86_64-unix/d3d12metal.so" "$out/wine_basic.exe" \
-            "$out/swapchain_test.exe" "$out/hello_triangle.exe" "$WINE_ROOT/bin/wine"; do
+            "$out/swapchain_test.exe" "$out/hello_triangle.exe" "$out/hello_samples.exe" "$WINE_ROOT/bin/wine"; do
     [ -e "$path" ] || { echo "missing $path (run tools/build-wine.sh first)" >&2; exit 2; }
 done
 mkdir -p "$screens" "$logs"
@@ -90,6 +91,19 @@ for exe in "$out"/p_*.exe; do
     else
         fail "$name" "see $logs/$name.log"
         tail -20 "$logs/$name.log"
+    fi
+    cleanup
+done
+
+# --- hello_samples: D3D12HelloTexture and D3D12HelloConstBuffers in a window ------------------
+for sample in texture constbuffers; do
+    echo "== hello_samples $sample"
+    if run_limited 180 "$logs/hello_$sample.log" wine hello_samples.exe "$sample" --frames 120 \
+       && grep -q "hello_samples $sample: PASS" "$logs/hello_$sample.log"; then
+        pass "hello_samples $sample ($(grep -E "^hello_samples $sample:.*(checked|offset)" "$logs/hello_$sample.log" | head -1))"
+    else
+        fail "hello_samples $sample" "see $logs/hello_$sample.log"
+        tail -10 "$logs/hello_$sample.log"
     fi
     cleanup
 done

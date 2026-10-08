@@ -46,9 +46,16 @@ else
     link_args: wine_test_link_args,
   )
 
+  executable(
+    'hello_samples',
+    'hello_samples.cpp', wine_shader_headers['hello_texture'], wine_shader_headers['const_buffers'],
+    cpp_args: wine_test_args,
+    link_args: wine_test_link_args,
+  )
+
   # Compute shaders shared with the native tests.
   wine_compute_headers = {}
-  foreach shader : ['noop', 'probe']
+  foreach shader : ['noop', 'probe', 'fill']
     wine_compute_headers += {shader: custom_target(
       shader + '_cs',
       input: '../shaders/' + shader + '.hlsl',
