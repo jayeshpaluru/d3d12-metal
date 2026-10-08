@@ -1,9 +1,20 @@
 #!/bin/bash
 # Launch the Windows Steam client in its own Wine prefix (kept separate from the
 # test prefix, whose wineserver the test scripts kill).
-#   WINE_ROOT          directory with bin/wine [the Gcenx Wine Devel app in deps]
-#   STEAM_WINEPREFIX   prefix with Steam installed [deps/wineprefix-steam]
+#   WINE_ROOT             directory with bin/wine [the Gcenx Wine Devel app in deps]
+#   STEAM_WINEPREFIX      prefix with Steam installed [deps/wineprefix-steam]
+#   STEAM_DESKTOP         run inside a Wine virtual desktop of this size, e.g. 1280x800
+#   STEAM_CEF_FLAGS       extra steam.exe flags ["-cef-disable-gpu"]
+#   STEAMWEBHELPER_EXTRA  Chromium switches the webhelper shim appends ["--in-process-gpu"]
 # Pass --restart to stop everything running in that prefix first.
+#
+# Steam's UI windows stay black under winemac because Chromium's GPU process
+# draws into HWNDs owned by the browser process, and Wine's mac driver can't
+# present into another process's window. Steam doesn't forward
+# --in-process-gpu, so steamwebhelper.exe is replaced by a tiny shim that runs
+# the real binary (steamwebhelper_real.exe) with that switch added. The shim is
+# built with mingw on first use and reinstalled whenever a Steam update
+# restores the real steamwebhelper.exe.
 set -euo pipefail
 WINE_ROOT="${WINE_ROOT:-/Users/jsp/code/deps/wine/Wine Devel.app/Contents/Resources/wine}"
 export WINEPREFIX="${STEAM_WINEPREFIX:-/Users/jsp/code/deps/wineprefix-steam}"
@@ -13,4 +24,44 @@ if [ "${1:-}" = "--restart" ]; then
     "$WINE_ROOT/bin/wineserver" -k || true
     "$WINE_ROOT/bin/wineserver" -w || true
 fi
-exec "$WINE_ROOT/bin/wine" 'C:\Program Files (x86)\Steam\steam.exe' -no-cef-sandbox -noverifyfiles ${STEAM_CEF_FLAGS:-} "$@"
+
+shim="$WINEPREFIX/steamwebhelper-shim.exe"
+cef="$WINEPREFIX/drive_c/Program Files (x86)/Steam/bin/cef/cef.win64"
+if [ ! -f "$shim" ]; then
+    x86_64-w64-mingw32-gcc -O2 -municode -mwindows -x c -o "$shim" - <<'EOF'
+#include <windows.h>
+#include <wchar.h>
+
+int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, LPWSTR unused, int show)
+{
+    static wchar_t exe[MAX_PATH], extra[1024], cmd[32768];
+    const wchar_t *args = GetCommandLineW();
+    STARTUPINFOW si = { sizeof(si) };
+    PROCESS_INFORMATION pi;
+    DWORD code = 1;
+
+    GetModuleFileNameW(NULL, exe, MAX_PATH);
+    wcscpy(wcsrchr(exe, L'\\') + 1, L"steamwebhelper_real.exe");
+    if (!GetEnvironmentVariableW(L"STEAMWEBHELPER_EXTRA", extra, 1024))
+        wcscpy(extra, L"--in-process-gpu");
+    if (*args == L'"') { args++; while (*args && *args != L'"') args++; if (*args) args++; }
+    else while (*args && *args != L' ' && *args != L'\t') args++;
+    _snwprintf(cmd, 32767, L"\"%ls\"%ls %ls", exe, args, extra);
+    GetStartupInfoW(&si);
+    if (!CreateProcessW(exe, cmd, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) return 1;
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    GetExitCodeProcess(pi.hProcess, &code);
+    return code;
+}
+EOF
+fi
+if ! cmp -s "$shim" "$cef/steamwebhelper.exe"; then
+    cp "$cef/steamwebhelper.exe" "$cef/steamwebhelper_real.exe"
+    cp "$shim" "$cef/steamwebhelper.exe"
+fi
+
+desktop=()
+if [ -n "${STEAM_DESKTOP:-}" ]; then
+    desktop=(explorer "/desktop=steam,$STEAM_DESKTOP")
+fi
+exec "$WINE_ROOT/bin/wine" ${desktop[@]+"${desktop[@]}"} 'C:\Program Files (x86)\Steam\steam.exe' -no-cef-sandbox -noverifyfiles ${STEAM_CEF_FLAGS--cef-disable-gpu} "$@"
