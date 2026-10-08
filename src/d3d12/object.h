@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstring>
 
+#include "bridge/mtlb.h"
 #include "common/com.h"
 #include "common/log.h"
 #include "common/private_data.h"
@@ -26,6 +27,18 @@ public:
                                  name ? static_cast<UINT>((length + 1) * sizeof(WCHAR)) : 0, name);
     }
 };
+
+// The HRESULT for a failed bridge call.
+inline HRESULT to_hresult(mtlb_result result)
+{
+    switch (result) {
+    case MTLB_OK: return S_OK;
+    case MTLB_ERROR_OUT_OF_MEMORY: return E_OUTOFMEMORY;
+    case MTLB_ERROR_INVALID_ARGUMENT: return E_INVALIDARG;
+    case MTLB_ERROR_UNSUPPORTED: return E_NOTIMPL;
+    default: return E_FAIL;
+    }
+}
 
 // The command list types this layer can create allocators, lists and queues for.
 inline bool supported_list_type(D3D12_COMMAND_LIST_TYPE type)

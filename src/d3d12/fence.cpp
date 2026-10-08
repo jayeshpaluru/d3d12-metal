@@ -12,9 +12,10 @@ HRESULT Fence::create(Device *device, UINT64 initial_value, REFIID riid, void **
     if (!out)
         return E_POINTER;
     auto *fence = new Fence(device);
-    if (mtlb_event_create(device->handle(), initial_value, &fence->event_) != MTLB_OK) {
+    mtlb_result result = mtlb_event_create(device->handle(), initial_value, &fence->event_);
+    if (result != MTLB_OK) {
         fence->Release();
-        return E_FAIL;
+        return to_hresult(result);
     }
     return hand_out(fence, riid, out);
 }
@@ -34,7 +35,7 @@ UINT64 Fence::GetCompletedValue()
 HRESULT Fence::SetEventOnCompletion(UINT64 value, HANDLE event)
 {
     if (!event)
-        return mtlb_event_wait_cpu(event_, value, UINT64_MAX) == MTLB_OK ? S_OK : E_FAIL;
+        return to_hresult(mtlb_event_wait_cpu(event_, value, UINT64_MAX));
     if (GetCompletedValue() >= value) {
         platform_set_event(event);
         return S_OK;
@@ -55,14 +56,14 @@ HRESULT FenceWaiter::add(Fence *fence, UINT64 value, HANDLE event)
 {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!queue_) {
-        if (mtlb_notify_create(&queue_) != MTLB_OK)
-            return E_FAIL;
+        if (mtlb_result result = mtlb_notify_create(&queue_); result != MTLB_OK)
+            return to_hresult(result);
         thread_ = std::thread([this] { run(); });
     }
     waits_[fence].emplace(value, event);
     // Registered under the lock so the entry exists before the notification can
     // arrive; the bridge fires at once if the value was reached meanwhile.
-    return mtlb_event_notify(fence->event(), value, queue_, reinterpret_cast<uint64_t>(fence)) == MTLB_OK ? S_OK : E_FAIL;
+    return to_hresult(mtlb_event_notify(fence->event(), value, queue_, reinterpret_cast<uint64_t>(fence)));
 }
 
 void FenceWaiter::forget(Fence *fence)

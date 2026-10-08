@@ -16,10 +16,11 @@ HRESULT CommandQueue::create(Device *device, const D3D12_COMMAND_QUEUE_DESC &des
         return E_INVALIDARG;
     auto *queue = new CommandQueue(device);
     queue->desc_ = desc;
-    if (mtlb_queue_create(device->handle(), &queue->queue_) != MTLB_OK) {
+    mtlb_result result = mtlb_queue_create(device->handle(), &queue->queue_);
+    if (result != MTLB_OK) {
         D3D12M_LOG("queue creation failed: %s", mtlb_last_error());
         queue->Release();
-        return E_FAIL;
+        return to_hresult(result);
     }
     return hand_out(queue, riid, out);
 }
@@ -51,14 +52,14 @@ HRESULT CommandQueue::Signal(ID3D12Fence *fence, UINT64 value)
 {
     if (!fence)
         return E_INVALIDARG;
-    return mtlb_queue_signal(queue_, static_cast<Fence *>(fence)->event(), value) == MTLB_OK ? S_OK : E_FAIL;
+    return to_hresult(mtlb_queue_signal(queue_, static_cast<Fence *>(fence)->event(), value));
 }
 
 HRESULT CommandQueue::Wait(ID3D12Fence *fence, UINT64 value)
 {
     if (!fence)
         return E_INVALIDARG;
-    return mtlb_queue_wait(queue_, static_cast<Fence *>(fence)->event(), value) == MTLB_OK ? S_OK : E_FAIL;
+    return to_hresult(mtlb_queue_wait(queue_, static_cast<Fence *>(fence)->event(), value));
 }
 
 HRESULT CommandQueue::GetTimestampFrequency(UINT64 *frequency)

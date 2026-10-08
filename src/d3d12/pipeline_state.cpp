@@ -117,7 +117,7 @@ HRESULT PipelineState::create_graphics(Device *device, const D3D12_GRAPHICS_PIPE
     if (result != MTLB_OK) {
         D3D12M_LOG("pipeline creation failed: %s", mtlb_last_error());
         pso->Release();
-        return result == MTLB_ERROR_UNSUPPORTED ? E_NOTIMPL : E_FAIL;
+        return to_hresult(result);
     }
     pso->root_signature_ = root_signature;
     root_signature->AddRef();

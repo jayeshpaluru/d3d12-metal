@@ -30,7 +30,7 @@ HRESULT Resource::init_buffer()
     mtlb_result result = mtlb_buffer_create(device()->handle(), desc_.Width, MTLB_STORAGE_SHARED, &buffer_, &info);
     if (result != MTLB_OK) {
         D3D12M_LOG("buffer creation failed: %s", mtlb_last_error());
-        return result == MTLB_ERROR_OUT_OF_MEMORY ? E_OUTOFMEMORY : E_FAIL;
+        return to_hresult(result);
     }
     cpu_ptr_ = static_cast<uint8_t *>(info.cpu_ptr);
     gpu_address_ = info.gpu_address;
@@ -69,7 +69,7 @@ HRESULT Resource::init_texture()
     mtlb_result result = mtlb_texture_create(device()->handle(), &td, &texture_, nullptr);
     if (result != MTLB_OK) {
         D3D12M_LOG("texture creation failed: %s", mtlb_last_error());
-        return result == MTLB_ERROR_OUT_OF_MEMORY ? E_OUTOFMEMORY : E_FAIL;
+        return to_hresult(result);
     }
     return S_OK;
 }

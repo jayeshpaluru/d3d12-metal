@@ -18,9 +18,10 @@ HRESULT DescriptorHeap::create(Device *device, const D3D12_DESCRIPTOR_HEAP_DESC 
     heap->desc_ = desc;
     if (shader_visible) {
         mtlb_buffer_info info;
-        if (mtlb_descriptor_heap_create(device->handle(), desc.NumDescriptors, &heap->buffer_, &info) != MTLB_OK) {
+        mtlb_result result = mtlb_descriptor_heap_create(device->handle(), desc.NumDescriptors, &heap->buffer_, &info);
+        if (result != MTLB_OK) {
             heap->Release();
-            return E_OUTOFMEMORY;
+            return to_hresult(result);
         }
         heap->storage_ = static_cast<uint8_t *>(info.cpu_ptr);
         heap->gpu_address_ = info.gpu_address;

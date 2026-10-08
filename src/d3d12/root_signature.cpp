@@ -18,11 +18,13 @@ HRESULT RootSignature::create(Device *device, const void *blob, size_t size, REF
 
     auto *rs = new RootSignature(device);
     mtlb_root_signature_layout layout;
-    if (mtlb_root_signature_create(device->handle(), blob, size, &rs->handle_, &layout) != MTLB_OK
-        || layout.num_parameters != parsed.desc11.NumParameters) {
+    mtlb_result result = mtlb_root_signature_create(device->handle(), blob, size, &rs->handle_, &layout);
+    if (result == MTLB_OK && layout.num_parameters != parsed.desc11.NumParameters)
+        result = MTLB_ERROR_COMPILE_FAILED;
+    if (result != MTLB_OK) {
         D3D12M_LOG("root signature creation failed: %s", mtlb_last_error());
         rs->Release();
-        return E_FAIL;
+        return to_hresult(result);
     }
     for (UINT i = 0; i < layout.num_parameters; ++i)
         rs->slots_.push_back({parsed.desc11.pParameters[i].ParameterType, layout.parameters[i].offset,
