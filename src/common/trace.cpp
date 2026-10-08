@@ -15,6 +15,7 @@
 namespace d3d12m {
 
 bool g_trace_enabled = config_flag("TRACE");
+bool g_profile_enabled = config_flag("PROFILE");
 
 namespace {
 
@@ -252,6 +253,54 @@ void trace_stub(const char *function)
         return;
     TraceLine none;
     trace_emit(*site, count, none, nullptr);
+}
+
+uint64_t profile_now()
+{
+    return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                     std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+
+namespace {
+std::mutex &g_profile_mutex = *new std::mutex;  // never destroyed: methods can be called during shutdown
+std::vector<TraceSite *> &g_profile_sites = *new std::vector<TraceSite *>;
+} // namespace
+
+void profile_end(TraceSite &site, uint64_t start)
+{
+    const uint64_t elapsed = profile_now() - start;
+    if (site.calls.fetch_add(1, std::memory_order_relaxed) == 0) {
+        std::lock_guard<std::mutex> lock(g_profile_mutex);
+        g_profile_sites.push_back(&site);
+    }
+    site.nanos.fetch_add(elapsed, std::memory_order_relaxed);
+}
+
+void profile_report(unsigned frames)
+{
+    if (!g_profile_enabled)
+        return;
+    struct Row {
+        std::string name;
+        double calls, nanos;
+    };
+    static std::vector<std::pair<uint64_t, uint64_t>> last;  // per site: calls, nanos at the previous report
+    std::vector<Row> rows;
+    std::lock_guard<std::mutex> lock(g_profile_mutex);
+    last.resize(g_profile_sites.size(), {0, 0});
+    double total = 0;
+    for (size_t i = 0; i < g_profile_sites.size(); ++i) {
+        TraceSite &site = *g_profile_sites[i];
+        const uint64_t calls = site.calls.load(), nanos = site.nanos.load();
+        rows.push_back({method_name(site.function), double(calls - last[i].first) / frames, double(nanos - last[i].second) / frames});
+        last[i] = {calls, nanos};
+        total += rows.back().nanos;
+    }
+    std::sort(rows.begin(), rows.end(), [](const Row &a, const Row &b) { return a.nanos > b.nanos; });
+    log_printf("d3d12-metal api profile (per frame): %.2f ms in %zu methods (nested calls counted in each)", total / 1e6, rows.size());
+    for (size_t i = 0; i < std::min<size_t>(rows.size(), 14); ++i)
+        log_printf("d3d12-metal   %7.3f ms  %9.1f calls  %6.0f ns each  %s", rows[i].nanos / 1e6, rows[i].calls,
+                   rows[i].calls > 0 ? rows[i].nanos / rows[i].calls : 0.0, rows[i].name.c_str());
 }
 
 void trace_frame()

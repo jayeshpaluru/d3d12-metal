@@ -73,6 +73,7 @@ void stats_frame()
         last_front[i] = front[i];
     last_back = back;
     last_calls = calls;
+    profile_report(kFramesPerReport);
 }
 
 } // namespace d3d12m

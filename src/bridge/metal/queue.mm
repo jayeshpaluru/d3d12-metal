@@ -226,8 +226,8 @@ void report_pass_profile(const PassProfile &profile, id<MTLCounterSampleBuffer> 
         uint32_t count = 0;
         uint64_t work = 0;
     };
-    static std::mutex mutex;
-    static std::unordered_map<std::string, Total> totals;
+    static std::mutex &mutex = *new std::mutex;  // never destroyed: handlers can run during shutdown
+    static auto &totals = *new std::unordered_map<std::string, Total>;
     static std::chrono::steady_clock::time_point last = std::chrono::steady_clock::now();
     NSData *data = [samples resolveCounterRange:NSMakeRange(0, used * 2)];
     if (data.length < uint64_t(used) * 16)
@@ -2065,12 +2065,14 @@ mtlb_result Replay::execute(const mtlb_cmd_header *header)
 // and the part of it past the latest end seen so far (the union, when buffers finish in order).
 void note_gpu_time(double start, double end)
 {
-    static std::mutex mutex;
-    static double latest_end = 0;
-    std::lock_guard<std::mutex> lock(mutex);
-    g_stats[kStatGpuNanos].fetch_add(static_cast<uint64_t>((end - start) * 1e9), std::memory_order_relaxed);
-    g_stats[kStatGpuBusyNanos].fetch_add(static_cast<uint64_t>((end - std::max(start, latest_end)) * 1e9), std::memory_order_relaxed);
-    latest_end = std::max(latest_end, end);
+    // Lock-free: completion handlers may still run while the process shuts down.
+    static std::atomic<uint64_t> latest_end_ns{0};
+    const uint64_t start_ns = static_cast<uint64_t>(start * 1e9), end_ns = static_cast<uint64_t>(end * 1e9);
+    g_stats[kStatGpuNanos].fetch_add(end_ns - start_ns, std::memory_order_relaxed);
+    uint64_t latest = latest_end_ns.load(std::memory_order_relaxed);
+    while (end_ns > latest && !latest_end_ns.compare_exchange_weak(latest, end_ns, std::memory_order_relaxed)) {
+    }
+    g_stats[kStatGpuBusyNanos].fetch_add(end_ns - std::max(start_ns, std::min(latest, end_ns)), std::memory_order_relaxed);
 }
 
 id<MTLCommandBuffer> open_command_buffer(Queue *queue)

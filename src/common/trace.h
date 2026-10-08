@@ -34,6 +34,9 @@
 namespace d3d12m {
 
 extern bool g_trace_enabled;
+// D3D12METAL_PROFILE=1 (with D3D12METAL_STATS=1): every traced method is timed, and the stats report lists the
+// methods that took the most time per frame (the timing itself costs about a clock read per call).
+extern bool g_profile_enabled;
 
 constexpr uint64_t kTraceFirst = 50;
 constexpr uint64_t kTraceEvery = 1000;
@@ -41,6 +44,26 @@ constexpr uint64_t kTraceEvery = 1000;
 struct TraceSite {
     const char *function;  // __PRETTY_FUNCTION__ of the traced method
     std::atomic<uint64_t> count{0};
+    std::atomic<uint64_t> calls{0}, nanos{0};  // profiling only
+};
+
+uint64_t profile_now();
+void profile_end(TraceSite &site, uint64_t start);
+// Logs the methods with the most time per frame since the last report.
+void profile_report(unsigned frames);
+
+// Times the method it is declared in (a no-op unless profiling is on).
+struct ProfileScope {
+    explicit ProfileScope(TraceSite &s) : site(s), start(g_profile_enabled ? profile_now() : 0) {}
+    ~ProfileScope()
+    {
+        if (start)
+            profile_end(site, start);
+    }
+    ProfileScope(const ProfileScope &) = delete;
+    ProfileScope &operator=(const ProfileScope &) = delete;
+    TraceSite &site;
+    uint64_t start;
 };
 
 // A line being built.
@@ -189,22 +212,20 @@ void trace_call_result(TraceSite &site, HRESULT result, const char *names, const
 
 // First line of a method that returns nothing or a plain value.
 #define D3D12M_TRACE(...)                                                               \
-    do {                                                                                \
-        if (D3D12M_TRACE_UNLIKELY(::d3d12m::g_trace_enabled)) {                         \
-            static ::d3d12m::TraceSite d3d12m_site{__PRETTY_FUNCTION__};                \
-            ::d3d12m::trace_call(d3d12m_site, #__VA_ARGS__ __VA_OPT__(,) __VA_ARGS__);             \
-        }                                                                               \
-    } while (0)
+    static ::d3d12m::TraceSite d3d12m_site{__PRETTY_FUNCTION__};                        \
+    const ::d3d12m::ProfileScope d3d12m_profile(d3d12m_site);                           \
+    if (D3D12M_TRACE_UNLIKELY(::d3d12m::g_trace_enabled))                               \
+        ::d3d12m::trace_call(d3d12m_site, #__VA_ARGS__ __VA_OPT__(,) __VA_ARGS__)
 
 // Around the body of a method that returns HRESULT: every path of the body must return (it is a lambda).
-#define D3D12M_TRACED_BEGIN const auto d3d12m_body = [&]() -> HRESULT {
+#define D3D12M_TRACED_BEGIN                                                             \
+    static ::d3d12m::TraceSite d3d12m_site{__PRETTY_FUNCTION__};                        \
+    const ::d3d12m::ProfileScope d3d12m_profile(d3d12m_site);                           \
+    const auto d3d12m_body = [&]() -> HRESULT {
 #define D3D12M_TRACED_END(...)                                                          \
     };                                                                                  \
     if (!D3D12M_TRACE_UNLIKELY(::d3d12m::g_trace_enabled))                              \
         return d3d12m_body();                                                           \
     const HRESULT d3d12m_result = d3d12m_body();                                        \
-    {                                                                                   \
-        static ::d3d12m::TraceSite d3d12m_site{__PRETTY_FUNCTION__};                    \
-        ::d3d12m::trace_call_result(d3d12m_site, d3d12m_result, #__VA_ARGS__ __VA_OPT__(,) __VA_ARGS__); \
-    }                                                                                   \
+    ::d3d12m::trace_call_result(d3d12m_site, d3d12m_result, #__VA_ARGS__ __VA_OPT__(,) __VA_ARGS__); \
     return d3d12m_result;
