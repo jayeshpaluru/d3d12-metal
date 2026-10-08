@@ -626,8 +626,14 @@ MTLB_EXPORT uint64_t mtlb_queue_render_pass_count(mtlb_queue queue);
 MTLB_EXPORT mtlb_result mtlb_queue_signal(mtlb_queue queue, mtlb_event event, uint64_t value);
 MTLB_EXPORT mtlb_result mtlb_queue_wait(mtlb_queue queue, mtlb_event event, uint64_t value);
 
-/* `mirror` receives the address of a 64-bit value the backend keeps equal to the event's completed value: updated
- * (atomically, monotonically for GPU signals) when a queue signal completes and by mtlb_event_signal_cpu. Read it with
+/* Test hook: the next `count` queue signals are not encoded, as if their command buffers had failed before reaching them.
+ * The event must still reach the value (and the mirror follow) when the buffer completes. */
+MTLB_EXPORT mtlb_result mtlb_queue_test_drop_signals(mtlb_queue queue, uint32_t count);
+
+/* `mirror` receives the address of a 64-bit value the backend keeps equal to the event's current value: updated
+ * (atomically) when a queue signal's command buffer completes, whatever its status, and by mtlb_event_signal_cpu.
+ * Metal's events never go down: signalling a lower value than the event has (from the queue or the CPU) changes
+ * nothing, and the mirror, like every wait, sees the higher value. Read it with
  * an atomic load from the same address space instead of calling mtlb_event_completed_value, which is a bridge
  * call. It may lag the event slightly; it is valid until mtlb_event_destroy. */
 MTLB_EXPORT mtlb_result mtlb_event_create(mtlb_device device, uint64_t initial_value, mtlb_event *out,

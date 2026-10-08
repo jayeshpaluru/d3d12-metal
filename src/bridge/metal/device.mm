@@ -259,7 +259,7 @@ void mtlb_event_signal_cpu(mtlb_event handle, uint64_t value)
 {
     Event *event = from_handle<Event>(handle);
     event->event.signaledValue = value;
-    event->mirror->store(value, std::memory_order_release);
+    sync_mirror(*event->mirror, event->event);
 }
 
 mtlb_result mtlb_event_wait_cpu(mtlb_event handle, uint64_t value, uint64_t timeout_ms)

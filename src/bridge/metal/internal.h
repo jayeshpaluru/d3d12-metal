@@ -297,6 +297,7 @@ struct Queue {
     id<MTLSharedEvent> resolve_event = nil;  // signalled by the completion handler that copies timestamps
     uint64_t resolve_value = 0, resolve_wait = 0;
     bool fence_pending = false;  // an encoder updated the fence and no later encoder has waited yet
+    uint32_t test_drop_signals = 0;  // mtlb_queue_test_drop_signals
 };
 
 // A CAMetalLayer attached to an application window, and what it takes to put a
@@ -329,11 +330,16 @@ struct Event {
     std::shared_ptr<std::atomic<uint64_t>> mirror = std::make_shared<std::atomic<uint64_t>>(0);
 };
 
-// Raises `mirror` to at least `value`.
-inline void raise_mirror(std::atomic<uint64_t> &mirror, uint64_t value)
+// Makes `mirror` equal to the event's current value, whatever it is (Metal's events never go down: a signal with a lower
+// value than the event has changes nothing, and the mirror has to say so). The value is read again after the store: a signal that landed in between would otherwise be overwritten by the
+// older one for good.
+inline void sync_mirror(std::atomic<uint64_t> &mirror, id<MTLSharedEvent> event)
 {
-    uint64_t seen = mirror.load(std::memory_order_relaxed);
-    while (seen < value && !mirror.compare_exchange_weak(seen, value, std::memory_order_release, std::memory_order_relaxed)) {
+    for (;;) {
+        const uint64_t value = event.signaledValue;
+        mirror.store(value, std::memory_order_release);
+        if (event.signaledValue == value)
+            return;
     }
 }
 

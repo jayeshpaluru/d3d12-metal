@@ -40,11 +40,14 @@ UINT64 Fence::GetCompletedValue()
 
 UINT64 Fence::refresh()
 {
-    const UINT64 value = mtlb_event_completed_value(event_);
-    UINT64 seen = mirror_->load(std::memory_order_relaxed);
-    while (seen < value && !mirror_->compare_exchange_weak(seen, value, std::memory_order_release)) {
+    // The mirror takes the event's value as it is (a signal may have lowered it), read again after the store so that a
+    // signal landing in between is not overwritten by the older value.
+    for (;;) {
+        const UINT64 value = mtlb_event_completed_value(event_);
+        mirror_->store(value, std::memory_order_release);
+        if (mtlb_event_completed_value(event_) == value)
+            return value;
     }
-    return value;
 }
 
 HRESULT Fence::SetEventOnCompletion(UINT64 value, HANDLE event)

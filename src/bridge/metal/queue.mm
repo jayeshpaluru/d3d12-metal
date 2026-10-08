@@ -2321,14 +2321,32 @@ mtlb_result mtlb_queue_signal(mtlb_queue handle, mtlb_event event_handle, uint64
         return MTLB_ERROR_INVALID_ARGUMENT;
     std::lock_guard<std::mutex> lock(queue->mutex);
     const std::shared_ptr<std::atomic<uint64_t>> mirror = event->mirror;
+    id<MTLSharedEvent> shared_event = event->event;
     id<MTLCommandBuffer> cb = open_command_buffer(queue);
-    [cb encodeSignalEvent:event->event value:value];
-    // The signal has happened once the buffer completes; the front-end reads the mirror instead of asking Metal.
+    // A test can have the signal left out, as if the command buffer had failed before reaching it.
+    const bool dropped = queue->test_drop_signals > 0;
+    if (dropped)
+        --queue->test_drop_signals;
+    else
+        [cb encodeSignalEvent:shared_event value:value];
+    // The front-end reads the mirror instead of asking Metal. A buffer that did not complete never signals: the event is
+    // set here, so that nothing waiting for it (a spin on GetCompletedValue, a wait) hangs after a GPU error.
     [cb addCompletedHandler:^(id<MTLCommandBuffer> done) {
-        if (done.status == MTLCommandBufferStatusCompleted)
-            raise_mirror(*mirror, value);
+        if ((dropped || done.status != MTLCommandBufferStatusCompleted) && shared_event.signaledValue < value)
+            shared_event.signaledValue = value;
+        sync_mirror(*mirror, shared_event);
     }];
     commit_open(queue);
+    return MTLB_OK;
+}
+
+mtlb_result mtlb_queue_test_drop_signals(mtlb_queue handle, uint32_t count)
+{
+    Queue *queue = from_handle<Queue>(handle);
+    if (!queue)
+        return MTLB_ERROR_INVALID_ARGUMENT;
+    std::lock_guard<std::mutex> lock(queue->mutex);
+    queue->test_drop_signals = count;
     return MTLB_OK;
 }
 
