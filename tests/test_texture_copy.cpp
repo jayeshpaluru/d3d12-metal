@@ -211,6 +211,78 @@ void check_small_mip_block_copy(TestContext &ctx)
     readback->Unmap(0, nullptr);
 }
 
+// Many copies between block sizes in one list, with nothing between them: each goes through staging of its own, and
+// the write of the first half is ordered before the read of the second. Run for several lists in a row, which reuses
+// the pooled staging buffers.
+void check_many_block_copies(TestContext &ctx)
+{
+    constexpr UINT kCopies = 96;
+    const CD3DX12_HEAP_PROPERTIES heap(D3D12_HEAP_TYPE_DEFAULT);
+    D3D12_RESOURCE_DESC blocks_desc = texture_desc(4, DXGI_FORMAT_R16G16B16A16_UINT, 1);
+    D3D12_RESOURCE_DESC bc1_desc = texture_desc(16, DXGI_FORMAT_BC1_UNORM, 1);
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT blocks_layout = {}, bc1_layout = {};
+    UINT64 blocks_total = 0, bc1_total = 0;
+    ctx.device->GetCopyableFootprints(&blocks_desc, 0, 1, 0, &blocks_layout, nullptr, nullptr, &blocks_total);
+    ctx.device->GetCopyableFootprints(&bc1_desc, 0, 1, 0, &bc1_layout, nullptr, nullptr, &bc1_total);
+
+    for (UINT round = 0; round < 3; ++round) {
+        std::vector<ComPtr<ID3D12Resource>> blocks(kCopies), bc1(kCopies), readbacks(kCopies), uploads(kCopies);
+        std::vector<std::vector<uint8_t>> data(kCopies);
+        // Fill the source textures first (one list, then barriers to copy source).
+        ComPtr<ID3D12GraphicsCommandList> fill = ctx.create_list();
+        std::vector<D3D12_RESOURCE_BARRIER> barriers;
+        for (UINT i = 0; i < kCopies; ++i) {
+            CHECK_HR(ctx.device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &blocks_desc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+                                                         IID_PPV_ARGS(blocks[i].GetAddressOf())));
+            CHECK_HR(ctx.device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &bc1_desc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+                                                         IID_PPV_ARGS(bc1[i].GetAddressOf())));
+            data[i].assign(blocks_total, 0);
+            for (UINT y = 0; y < 4; ++y)
+                for (UINT x = 0; x < 4; ++x)
+                    for (UINT b = 0; b < 8; ++b)
+                        data[i][y * blocks_layout.Footprint.RowPitch + x * 8 + b] = static_cast<uint8_t>(i * 37 + round * 11 + y * 64 + x * 8 + b + 1);
+            uploads[i] = ctx.create_upload_buffer(data[i].data(), blocks_total);
+            readbacks[i] = ctx.create_buffer(D3D12_HEAP_TYPE_READBACK, bc1_total);
+            const CD3DX12_TEXTURE_COPY_LOCATION dst(blocks[i].Get(), 0), src(uploads[i].Get(), blocks_layout);
+            fill->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+            barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(blocks[i].Get(), D3D12_RESOURCE_STATE_COPY_DEST,
+                                                                    D3D12_RESOURCE_STATE_COPY_SOURCE));
+        }
+        fill->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
+        CHECK_HR(fill->Close());
+        ctx.execute_and_wait(fill.Get());
+
+        ComPtr<ID3D12GraphicsCommandList> list = ctx.create_list();
+        for (UINT i = 0; i < kCopies; ++i) {
+            const CD3DX12_TEXTURE_COPY_LOCATION dst(bc1[i].Get(), 0), src(blocks[i].Get(), 0);
+            list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+        }
+        barriers.clear();
+        for (UINT i = 0; i < kCopies; ++i)
+            barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(bc1[i].Get(), D3D12_RESOURCE_STATE_COPY_DEST,
+                                                                    D3D12_RESOURCE_STATE_COPY_SOURCE));
+        list->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
+        for (UINT i = 0; i < kCopies; ++i) {
+            const CD3DX12_TEXTURE_COPY_LOCATION dst(readbacks[i].Get(), bc1_layout), src(bc1[i].Get(), 0);
+            list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+        }
+        CHECK_HR(list->Close());
+        ctx.execute_and_wait(list.Get());
+
+        for (UINT i = 0; i < kCopies; ++i) {
+            void *mapped = nullptr;
+            CHECK_HR(readbacks[i]->Map(0, nullptr, &mapped));
+            for (UINT y = 0; y < 4; ++y) {
+                for (UINT x = 0; x < 4; ++x) {
+                    const uint8_t *got = static_cast<uint8_t *>(mapped) + y * bc1_layout.Footprint.RowPitch + x * 8;
+                    CHECK(std::memcmp(got, data[i].data() + y * blocks_layout.Footprint.RowPitch + x * 8, 8) == 0);
+                }
+            }
+            readbacks[i]->Unmap(0, nullptr);
+        }
+    }
+}
+
 } // namespace
 
 int main()
@@ -220,6 +292,7 @@ int main()
     check_bc1_small_mips(ctx);
     check_block_copy(ctx);
     check_small_mip_block_copy(ctx);
+    check_many_block_copies(ctx);
 
     const CD3DX12_HEAP_PROPERTIES default_heap(D3D12_HEAP_TYPE_DEFAULT);
     D3D12_RESOURCE_DESC desc = texture_desc(kSize, DXGI_FORMAT_R8G8B8A8_UNORM, 1);

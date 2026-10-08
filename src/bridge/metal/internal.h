@@ -247,6 +247,32 @@ struct Pipeline {
     id<MTLRenderPipelineState> state_for(MTLPixelFormat depth, MTLPixelFormat stencil);
 };
 
+// Private buffers waiting for reuse, the smallest that fits first.
+struct BufferPool {
+    std::mutex mutex;
+    std::vector<id<MTLBuffer>> free;
+
+    id<MTLBuffer> take(uint64_t size)
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        auto best = free.end();
+        for (auto it = free.begin(); it != free.end(); ++it) {
+            if ([*it length] >= size && (best == free.end() || [*it length] < [*best length]))
+                best = it;
+        }
+        if (best == free.end())
+            return nil;
+        id<MTLBuffer> found = *best;
+        free.erase(best);
+        return found;
+    }
+    void give(const std::vector<id<MTLBuffer>> &buffers)
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        free.insert(free.end(), buffers.begin(), buffers.end());
+    }
+};
+
 struct Queue {
     Device *device = nullptr;
     id<MTLCommandQueue> queue;
@@ -263,9 +289,10 @@ struct Queue {
     int debug_depth = 0;  // debug groups opened on the open command buffer by mtlb_queue_marker
 
     id<MTLFence> fence = nil;
-    // Private scratch buffers of ExecuteIndirect that command buffers have finished with.
-    std::mutex scratch_mutex;
-    std::vector<id<MTLBuffer>> scratch_free;
+    // Private buffers that command buffers have finished with: ExecuteIndirect scratch (untracked) and the staging of
+    // copies between block sizes (tracked). Completion handlers hold the pools, so they outlive the queue.
+    std::shared_ptr<BufferPool> scratch_pool = std::make_shared<BufferPool>();
+    std::shared_ptr<BufferPool> staging_pool = std::make_shared<BufferPool>();
 
     id<MTLSharedEvent> resolve_event = nil;  // signalled by the completion handler that copies timestamps
     uint64_t resolve_value = 0, resolve_wait = 0;

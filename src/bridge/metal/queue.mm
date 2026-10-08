@@ -337,6 +337,14 @@ public:
         }
         for (; debug_depth_ > 0; --debug_depth_)
             [cb_ popDebugGroup];
+        // Pooled buffers go back once the command buffer has run.
+        if (!scratch_used_.empty() || !staging_used_.empty()) {
+            auto scratch_pool = queue_->scratch_pool, staging_pool = queue_->staging_pool;
+            [cb_ addCompletedHandler:^(id<MTLCommandBuffer>) {
+                scratch_pool->give(scratch_used_);
+                staging_pool->give(staging_used_);
+            }];
+        }
     }
 
 private:
@@ -515,29 +523,48 @@ private:
         flush_clears(false);
     }
 
-    // A private buffer of at least `size` bytes from the queue's pool (the smallest that fits), or a new one.
+    // A private buffer of at least `size` bytes from the queue's scratch pool, or a new one; it goes back to the pool when
+    // the command buffer completes.
     id<MTLBuffer> take_scratch(uint64_t size)
     {
-        {
-            std::lock_guard<std::mutex> lock(queue_->scratch_mutex);
-            auto &free = queue_->scratch_free;
-            auto best = free.end();
-            for (auto it = free.begin(); it != free.end(); ++it) {
-                if ([*it length] >= size && (best == free.end() || [*it length] < [*best length]))
-                    best = it;
-            }
-            if (best != free.end()) {
-                id<MTLBuffer> found = *best;
-                free.erase(best);
-                return found;
-            }
+        id<MTLBuffer> buffer = queue_->scratch_pool->take(size);
+        if (!buffer) {
+            // Rounded up so that the next call with a slightly larger count can reuse it.
+            uint64_t rounded = 64 * 1024;
+            while (rounded < size)
+                rounded <<= 1;
+            buffer = [queue_->device->device newBufferWithLength:rounded
+                                                         options:MTLResourceStorageModePrivate | MTLResourceHazardTrackingModeUntracked];
         }
-        // Rounded up so that the next call with a slightly larger count can reuse it.
-        uint64_t rounded = 64 * 1024;
-        while (rounded < size)
-            rounded <<= 1;
-        return [queue_->device->device newBufferWithLength:rounded
-                                                   options:MTLResourceStorageModePrivate | MTLResourceHazardTrackingModeUntracked];
+        if (buffer)
+            scratch_used_.push_back(buffer);
+        return buffer;
+    }
+
+    // `size` bytes of staging for a copy through a buffer, 256-aligned, from a pooled buffer shared by the copies of this
+    // submission (each gets a range of its own, so none overwrites another's). The buffers are hazard tracked: the write
+    // of a copy's first half is ordered before the read of its second even inside one blit encoder.
+    bool take_staging(uint64_t size, id<MTLBuffer> *buffer, uint64_t *offset)
+    {
+        constexpr uint64_t kChunk = 4 * 1024 * 1024;
+        size = (size + 255) & ~uint64_t(255);
+        if (!staging_ || staging_offset_ + size > [staging_ length]) {
+            staging_ = queue_->staging_pool->take(size);
+            if (!staging_) {
+                uint64_t length = kChunk;
+                while (length < size)
+                    length <<= 1;
+                staging_ = [queue_->device->device newBufferWithLength:length options:MTLResourceStorageModePrivate];
+            }
+            if (!staging_)
+                return false;
+            staging_used_.push_back(staging_);
+            staging_offset_ = 0;
+        }
+        *buffer = staging_;
+        *offset = staging_offset_;
+        staging_offset_ += size;
+        return true;
     }
 
     // The result slot of the active occlusion query for the render pass being set up.
@@ -553,6 +580,10 @@ private:
 
     Queue *queue_;
     id<MTLCommandBuffer> cb_;
+    std::vector<id<MTLBuffer>> scratch_used_;  // pool buffers this submission took, returned when it completes
+    std::vector<id<MTLBuffer>> staging_used_;
+    id<MTLBuffer> staging_ = nil;
+    uint64_t staging_offset_ = 0;
     mtlb_result error_ = MTLB_OK;
     std::string error_message_;
     bool abort_stream_ = false;  // set by structural errors
@@ -1772,13 +1803,6 @@ mtlb_result Replay::execute_indirect(const mtlb_cmd_execute_indirect &cmd)
         scratch = take_scratch(uint64_t(record_size) * max_count);
         if (!scratch)
             return fail(MTLB_ERROR_OUT_OF_MEMORY, "indirect scratch buffer");
-        // The scratch buffer goes back to the queue's pool once the command buffer has run.
-        Queue *queue = queue_;
-        [cb_ addCompletedHandler:^(id<MTLCommandBuffer>) {
-            std::lock_guard<std::mutex> lock(queue->scratch_mutex);
-            queue->scratch_free.push_back(scratch);
-        }];
-
         id<MTLComputePipelineState> kernel = internal_kernel(queue_->device, @"translate_indirect");
         if (!kernel)
             return MTLB_ERROR_COMPILE_FAILED;
@@ -2009,15 +2033,15 @@ mtlb_result Replay::copy_texture_texture(const mtlb_cmd_copy_texture_texture &cm
         if (!src_w || !src_h || !src_d || !dst_w || !dst_h || !dst_d)
             return MTLB_OK;
         const uint64_t row = uint64_t(blocks_w) * src_info.bytes_per_block, image = row * blocks_h;
-        id<MTLBuffer> temp = [queue_->device->device newBufferWithLength:image * cmd.depth
-                                                                 options:MTLResourceStorageModePrivate | MTLResourceHazardTrackingModeUntracked];
-        if (!temp)
+        id<MTLBuffer> temp = nil;
+        uint64_t temp_offset = 0;
+        if (!take_staging(image * cmd.depth, &temp, &temp_offset))
             return fail(MTLB_ERROR_OUT_OF_MEMORY, "no memory for a texture copy between block sizes");
         id<MTLBlitCommandEncoder> enc = blit();
         [enc copyFromTexture:src->texture sourceSlice:cmd.src_slice sourceLevel:cmd.src_mip
                 sourceOrigin:MTLOriginMake(cmd.src_x, cmd.src_y, cmd.src_z) sourceSize:MTLSizeMake(src_w, src_h, src_d)
-                    toBuffer:temp destinationOffset:0 destinationBytesPerRow:row destinationBytesPerImage:image];
-        [enc copyFromBuffer:temp sourceOffset:0 sourceBytesPerRow:row sourceBytesPerImage:image
+                    toBuffer:temp destinationOffset:temp_offset destinationBytesPerRow:row destinationBytesPerImage:image];
+        [enc copyFromBuffer:temp sourceOffset:temp_offset sourceBytesPerRow:row sourceBytesPerImage:image
                  sourceSize:MTLSizeMake(dst_w, dst_h, dst_d) toTexture:dst->texture
            destinationSlice:cmd.dst_slice destinationLevel:cmd.dst_mip
           destinationOrigin:MTLOriginMake(cmd.dst_x, cmd.dst_y, cmd.dst_z)];
