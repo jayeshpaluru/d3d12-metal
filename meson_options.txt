@@ -1,4 +1,4 @@
-option('dxc', type: 'string', value: '/Users/jsp/code/deps/dxc-build/bin/dxc',
-       description: 'Path to the DXC compiler used to build the test shaders')
+option('dxc', type: 'string', value: '',
+       description: 'Path to the DXC compiler used to build the test shaders (default: dxc from PATH)')
 option('directx_headers_prefix', type: 'string', value: '/opt/homebrew',
        description: 'Prefix of the DirectX-Headers install, used when pkg-config cannot find it')

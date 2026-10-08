@@ -32,13 +32,13 @@ The layer ships replacement `d3d12.dll` / `dxgi.dll` that implement the D3D12/DX
 - macOS on Apple Silicon (arm64) with the Xcode Command Line Tools
 - [Metal Shader Converter](https://developer.apple.com/metal/shader-converter/) (headers in `/usr/local/include`, `libmetalirconverter.dylib` in `/usr/local/lib`)
 - `brew install meson ninja directx-headers` (DirectX-Headers provides `d3d12.h`)
-- A DXC build (HLSL to DXIL) for the test shaders; point meson at it with `-Ddxc=/path/to/dxc` (default `/Users/jsp/code/deps/dxc-build/bin/dxc`)
+- A DXC build (HLSL to DXIL) for the test shaders; found on `PATH`, or pass it explicitly, e.g. `meson setup build -Ddxc=/Users/jsp/code/deps/dxc-build/bin/dxc`
 - For the later Wine milestones: `brew install --cask wine-stable` and `brew install mingw-w64`
 
 ## Building and testing
 
 ```sh
-meson setup build
+meson setup build -Ddxc=/Users/jsp/code/deps/dxc-build/bin/dxc   # omit if dxc is on PATH
 meson compile -C build
 meson test -C build
 ```

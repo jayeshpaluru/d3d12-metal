@@ -12,7 +12,11 @@ foreach name : ['test_device', 'test_copy', 'test_rootsig']
 endforeach
 
 # HLSL -> DXIL header arrays, one per shader stage.
-dxc = get_option('dxc')
+dxc_option = get_option('dxc')
+dxc = find_program(dxc_option != '' ? dxc_option : 'dxc', required: false)
+if not dxc.found()
+  error('DXC not found: put dxc on PATH or pass -Ddxc=/path/to/dxc')
+endif
 shader_headers = []
 foreach stage : [['vs', 'vs_6_0', 'VSMain'], ['ps', 'ps_6_0', 'PSMain']]
   shader_headers += custom_target(
