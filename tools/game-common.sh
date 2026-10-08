@@ -4,11 +4,10 @@
 # Environment (defaults in brackets):
 #   WINE_ROOT          directory with bin/wine [the Gcenx Wine Devel app in deps]
 #   STEAM_WINEPREFIX   the prefix Steam and the game live in [deps/wineprefix-steam]
+#   GAME_WINEPREFIX    act on this prefix instead (stand-in games in the test prefix)
 #   GAME_DIR           the folder holding the game's exe [steamapps/common/*/Spider-Man.exe in the Steam prefix]
 #   GAME_EXE           the exe's name [Spider-Man.exe]
 #   GAME_APPID         Steam app id [1817070]
-# The scripts take the Steam prefix by default; run-game.sh --direct uses WINEPREFIX (the test prefix) instead,
-# and then STEAM_WINEPREFIX is only a fallback for the other scripts.
 
 game_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WINE_ROOT="${WINE_ROOT:-/Users/jsp/code/deps/wine/Wine Devel.app/Contents/Resources/wine}"
@@ -26,17 +25,16 @@ dry_run=0
 # run <command...>: runs it, or only prints it under --dry-run.
 run() {
     if [ "$dry_run" = 1 ]; then
-        printf 'dry-run:'
-        printf ' %q' "$@"
-        printf '\n'
+        { printf 'dry-run:'; printf ' %q' "$@"; printf '\n'; } >&2
     else
         "$@"
     fi
 }
 
-# The prefix the scripts act on: WINEPREFIX if the caller set one (run-game.sh --direct), else the Steam prefix.
+# The prefix the scripts act on: GAME_WINEPREFIX if set (run-game.sh --direct sets it), else the Steam prefix. The
+# ambient WINEPREFIX is ignored on purpose, so a shell left pointing at the test prefix cannot redirect a Steam install.
 game_prefix() {
-    echo "${WINEPREFIX:-${STEAM_WINEPREFIX:-/Users/jsp/code/deps/wineprefix-steam}}"
+    echo "${GAME_WINEPREFIX:-${STEAM_WINEPREFIX:-/Users/jsp/code/deps/wineprefix-steam}}"
 }
 
 # Sets game_dir: GAME_DIR if given, else the first steamapps/common/*/<exe> of the prefix's Steam. Returns 1 if none.

@@ -5,7 +5,7 @@
 #
 # Usage: tools/run-game.sh [options] [-- game arguments]
 #   --direct            run the exe straight under wine instead of through Steam (stand-in games, tests); uses
-#                       WINEPREFIX (default: the test prefix) and needs GAME_DIR
+#                       GAME_WINEPREFIX (default: the test prefix) and needs GAME_DIR
 #   --kill              stop just the game process (pkill by exe name, never wineserver) and exit
 #   --no-install        do not run tools/install-game.sh first
 #   --timeout SECONDS   stop watching after this long [1800]; Steam mode leaves the game running
@@ -34,9 +34,10 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-# PIDs of the game (the exe name appears in the command line of Wine's processes), not ours.
+# PIDs of the game: Wine names its processes after the exe (matched exactly, so a shell whose command line merely
+# mentions the exe is not mistaken for it).
 game_pids() {
-    pgrep -f "$GAME_EXE" 2>/dev/null | grep -v -x -e "$$" -e "$PPID" || true
+    pgrep -x "$GAME_EXE" 2>/dev/null || true
 }
 
 if [ "$kill_only" = 1 ]; then
@@ -57,7 +58,7 @@ if [ "$kill_only" = 1 ]; then
 fi
 
 if [ "$direct" = 1 ]; then
-    export WINEPREFIX="${WINEPREFIX:-/Users/jsp/code/deps/wineprefix}"
+    export GAME_WINEPREFIX="${GAME_WINEPREFIX:-/Users/jsp/code/deps/wineprefix}"
     # The point of --direct is to prove the registry overrides and the conf file work without a shell environment.
     unset WINEDLLOVERRIDES WINEDLLPATH
     : "${start_timeout:=60}"
@@ -101,6 +102,8 @@ shots=0 shot_warned=0
 capture() {
     [ -n "$lister" ] || return
     local line id name w h size file
+    # A sleeping display cannot be captured: this wakes it (and says the user is active) for a moment.
+    caffeinate -u -t 2 2>/dev/null
     # id | owner | title | WxH | onscreen: true | layer: 0
     while IFS= read -r line; do
         id="${line%% |*}"
@@ -167,14 +170,13 @@ watch_file "$layer_log" layer
 launcher_log="$game_logs/launch.log"
 if [ "$direct" = 1 ]; then
     echo "launching $game_dir/$GAME_EXE directly (prefix $prefix) ${extra[*]:-}"
-    ( cd "$game_dir" && exec "$WINE_ROOT/bin/wine" "$GAME_EXE" ${extra[@]+"${extra[@]}"} ) >"$launcher_log" 2>&1 &
+    ( cd "$game_dir" && exec env WINEPREFIX="$prefix" WINEDEBUG="${WINEDEBUG:--all}" "$WINE_ROOT/bin/wine" "$GAME_EXE" ${extra[@]+"${extra[@]}"} ) >"$launcher_log" 2>&1 &
 else
     echo "launching app $GAME_APPID through Steam ${extra[*]:-}"
     WINEPREFIX="$prefix" WINEDEBUG="${WINEDEBUG:--all}" "$WINE_ROOT/bin/wine" 'C:\Program Files (x86)\Steam\steam.exe' \
         -applaunch "$GAME_APPID" -nolauncher ${extra[@]+"${extra[@]}"} >"$launcher_log" 2>&1 &
 fi
 launcher=$!
-watch_file "$launcher_log" launch
 
 start=$SECONDS
 seen=0 last_shot=-999 last_discover=0 status=timeout
@@ -215,7 +217,9 @@ drain_files
 echo
 echo "== $status after $((SECONDS - start))s"
 case "$status" in
-    never-started) echo "$GAME_EXE did not start within ${start_timeout}s; see $launcher_log (and Steam's window)" ;;
+    never-started)
+        echo "$GAME_EXE did not start within ${start_timeout}s; see $launcher_log (and Steam's window). Its last lines:"
+        tail -n 15 "$launcher_log" | sed 's/^/    /' ;;
     timeout)
         if [ "$direct" = 1 ]; then
             echo "stopping the game (timeout)"
@@ -228,6 +232,8 @@ echo "layer log:     $layer_log ($(wc -l < "$layer_log" | tr -d ' ') lines)"
 [ -f "$layer_log.methods" ] && echo "method list:   $layer_log.methods ($(($(wc -l < "$layer_log.methods") - 1)) distinct methods)"
 echo "screenshots:   $shots in $game_screens"
 for f in ${tail_files[@]+"${tail_files[@]}"}; do
-    case "$f" in "$layer_log"|"$launcher_log") ;; *) echo "game file:     $f ($(stat -f %z "$f") bytes)" ;; esac
+    case "$f" in "$layer_log") ;; *) echo "game file:     $f ($(stat -f %z "$f") bytes)" ;; esac
 done
-grep -E "not implemented|failed|error" "$layer_log" 2>/dev/null | sort | uniq -c | sort -rn | head -8 | sed 's/^/problem:       /'
+grep -v ' trace t[0-9]' "$layer_log" 2>/dev/null | grep -iE "not implemented|failed|skipped|invalid" | sort | uniq -c | sort -rn | head -8 | sed 's/^/problem:       /'
+
+exit 0
