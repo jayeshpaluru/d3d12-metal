@@ -1172,6 +1172,8 @@ mtlb_result Replay::execute_indirect(const mtlb_cmd_execute_indirect &cmd)
     Buffer *count = cmd.count_address ? find_buffer(queue_->device, cmd.count_address, &count_offset) : nullptr;
     if (!arguments || (cmd.count_address && !count))
         return fail(MTLB_ERROR_INVALID_ARGUMENT, "indirect argument or count buffer not found");
+    if (count && (count_offset % 4 || count_offset + 4 > count->size))
+        return fail(MTLB_ERROR_INVALID_ARGUMENT, "indirect count outside its buffer or unaligned");
     // The commands must lie inside the argument buffer, and so must what the translation writes into the records.
     const uint32_t action_bytes = cmd.action == MTLB_INDIRECT_DRAW_INDEXED ? 20 : cmd.action == MTLB_INDIRECT_DRAW ? 16 : 12;
     const uint64_t first_end = arg_offset + cmd.action_src_offset + action_bytes;

@@ -122,6 +122,40 @@ int main()
         }
     }
 
+    // ---- A count outside its buffer or unaligned skips the call; a max count beyond the arguments is clamped ------------
+    {
+        auto sig = f.command_signature({argument(D3D12_INDIRECT_ARGUMENT_TYPE_DRAW)}, 16);
+        std::vector<D3D12_DRAW_ARGUMENTS> commands;
+        for (UINT q = 0; q < 4; ++q)
+            commands.push_back({3, 1, q * 3, 0});
+        ComPtr<ID3D12Resource> arguments = gpu.upload_buffer(commands.data(), commands.size() * 16);
+        const UINT counts[2] = {4, 4};
+        ComPtr<ID3D12Resource> count_buffer = gpu.upload_buffer(counts, sizeof(counts));
+        for (UINT64 bad_offset : {UINT64(2), UINT64(8), UINT64(1) << 40}) {
+            const Image image = f.render([&](ID3D12GraphicsCommandList *list) {
+                list->ExecuteIndirect(sig.Get(), 4, arguments.Get(), 0, count_buffer.Get(), bad_offset);
+            });
+            for (UINT q = 0; q < 4; ++q)
+                expect_pixel("count outside its buffer", image.pixel(kQuadrantCentre[q].first, kQuadrantCentre[q].second), kBlack);
+        }
+        const Image good = f.render([&](ID3D12GraphicsCommandList *list) {
+            list->ExecuteIndirect(sig.Get(), 4, arguments.Get(), 0, count_buffer.Get(), 4);
+        });
+        expect_pixel("count at a valid offset", good.pixel(48, 48), kWhite);
+
+        // No count buffer and a max count of 1000: only the four commands in the buffer exist.
+        const Image clamped = f.render([&](ID3D12GraphicsCommandList *list) {
+            list->ExecuteIndirect(sig.Get(), 1000, arguments.Get(), 0, nullptr, 0);
+        });
+        for (UINT q = 0; q < 4; ++q)
+            expect_pixel("max count clamped to the buffer", clamped.pixel(kQuadrantCentre[q].first, kQuadrantCentre[q].second), kWhite);
+        // An argument offset past the buffer draws nothing.
+        const Image past = f.render([&](ID3D12GraphicsCommandList *list) {
+            list->ExecuteIndirect(sig.Get(), 4, arguments.Get(), 4096, nullptr, 0);
+        });
+        expect_pixel("arguments past the buffer", past.pixel(16, 16), kBlack);
+    }
+
     // ---- DRAW without a count, a stride larger than the command, and a nonzero buffer offset ----------------------------
     {
         auto sig = f.command_signature({argument(D3D12_INDIRECT_ARGUMENT_TYPE_DRAW)}, 32);
