@@ -22,7 +22,7 @@ pid=$(pgrep -f "$GAME_EXE" | head -1)
 echo "standing still for ${stand}s (game pid $pid)"
 
 # Per-thread CPU seconds (user + system) of the game, one number per thread in thread order.
-thread_times() { ps -M -p "$pid" -o utime,stime | awk 'NR > 2 { split($1, a, ":"); split($2, b, ":"); print a[1] * 60 + a[2] + b[1] * 60 + b[2] }'; }
+thread_times() { ps -M -p "$pid" | awk 'NR > 2 { split($5, a, ":"); split($6, b, ":"); print a[1] * 60 + a[2] + b[1] * 60 + b[2] }'; }
 mark=$(grep -c "stats (per frame" "$log")
 t1=""; cpu_samples=()
 for i in $(seq $((stand / 10))); do

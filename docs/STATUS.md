@@ -268,7 +268,16 @@ Performance findings (Spider-Man, gameplay scene, `tools/game/measure.sh`):
   Such views stay clamped (`p_large_buffers`).
 - XeSS `mtlb_queue_signal` access violation: not reproduced; hardened (the fence is held during Signal/Wait, the queue's destruction waits for in-flight
   submits, pooled buffers return through shared pools instead of a queue pointer in completion handlers).
-- Open: the `to-gameplay.sh` flow sometimes lands in New Game's difficulty menu instead of CONTINUE (timing); check the screenshot before trusting numbers.
-  Gameplay numbers this session: 52-62 fps, ~105 passes, ~300 barriers, game CPU 500%+ (a different scene than milestone 6's notes); no clean same-scene baseline
-  could be obtained for the old build. Asynchronous submission (a worker thread for `ExecuteCommandLists`) would take ~3 ms off the submitting thread but needs
+- Deterministic gameplay entry: `tools/game/to-gameplay.sh` looks at the screen before every key (`tools/game/state.sh`: a capture of the game window
+  compared with reference captures in `build-wine/ref/`, made locally with `build-wine/classify --save <png> build-wine/ref/<state>.png` from your own
+  screenshots, never committed; states `profile1`, `profile2`, `main-continue`, `gameplay`, else `unknown`). It picks the profile row, confirms only
+  CONTINUE, answers a screen that is not the main menu after a profile with Escape (New Game's difficulty menu is never confirmed), and returns when the
+  world was seen twice. `measure.sh` aborts unless the world is on screen before and after the sample, takes the CPU from `top` intervals (the old
+  `ps %cpu` is a lifetime average and understates), per-thread CPU from `ps -M` time deltas, and leaves the profilers off unless asked.
+  The save starts crouched on a roof; a click ends that (Spider-Man walks off), so the click is opt-in (`GAMEPLAY_CLICK=1`).
+- **A/B, milestone 6 vs milestone 7, same scene** (profile 2, crouched on the roof, no input, 60 s, no profilers, `GAME_OUT=<build> tools/install-game.sh`):
+  m6 460 / 460 / 453 % game CPU (top), 57.4 / 57.9 / 57.2 fps; current 455 / 458 / 454 %, 56.1 / 56.6 / 56.7 fps; GPU busy 7.5-9 ms on both; render passes 92 (m6)
+  vs 81-89 (current), barriers ~254 on both. No regression: the 500%+ and the old ~300% are the same load measured differently (lifetime-average `ps`) and
+  in different scenes. The CPU is spread over ~35 game threads at 5-20 % each (the game's job system), the layer's submit thread is about 3 ms per frame on both.
+  Asynchronous submission (a worker thread for `ExecuteCommandLists`) would take ~3 ms off the submitting thread but needs
   object lifetimes held across it.
