@@ -5,6 +5,7 @@
 #include <mutex>
 #include <thread>
 #include <tuple>
+#include <new>
 #include <vector>
 
 #include "common/com.h"
@@ -179,11 +180,24 @@ public:
     // IDXGIOutput1
     HRESULT STDMETHODCALLTYPE GetDisplayModeList1(DXGI_FORMAT format, UINT flags, UINT *count, DXGI_MODE_DESC1 *modes) override
     {
+        if (!count)
+            return DXGI_ERROR_INVALID_CALL;
         if (!modes)
             return GetDisplayModeList(format, flags, count, nullptr);
-        std::vector<DXGI_MODE_DESC> plain(*count);
-        HRESULT hr = GetDisplayModeList(format, flags, count, plain.data());
-        for (UINT i = 0; i < std::min<UINT>(*count, static_cast<UINT>(plain.size())); ++i) {
+        // Convert only as many modes as exist: *count is application-controlled.
+        UINT available = 0;
+        GetDisplayModeList(format, flags, &available, nullptr);
+        const UINT capacity = *count;
+        std::vector<DXGI_MODE_DESC> plain;
+        try {
+            plain.resize(std::min(capacity, available));
+        } catch (const std::bad_alloc &) {
+            return E_OUTOFMEMORY;
+        }
+        UINT n = static_cast<UINT>(plain.size());
+        HRESULT hr = GetDisplayModeList(format, flags, &n, plain.data());
+        *count = n;
+        for (size_t i = 0; i < plain.size(); ++i) {
             modes[i] = {plain[i].Width, plain[i].Height, plain[i].RefreshRate, plain[i].Format,
                         plain[i].ScanlineOrdering, plain[i].Scaling, FALSE};
         }

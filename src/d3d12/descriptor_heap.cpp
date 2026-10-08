@@ -1,5 +1,7 @@
 #include "d3d12/descriptor_heap.h"
 
+#include <new>
+
 #include "d3d12/device.h"
 
 namespace d3d12m {
@@ -26,7 +28,12 @@ HRESULT DescriptorHeap::create(Device *device, const D3D12_DESCRIPTOR_HEAP_DESC 
         heap->storage_ = static_cast<uint8_t *>(info.cpu_ptr);
         heap->gpu_address_ = info.gpu_address;
     } else {
-        heap->host_storage_.assign(size_t(desc.NumDescriptors) * kDescriptorSize, 0);
+        try {
+            heap->host_storage_.assign(size_t(desc.NumDescriptors) * kDescriptorSize, 0);
+        } catch (const std::bad_alloc &) {
+            heap->Release();
+            return E_OUTOFMEMORY;
+        }
         heap->storage_ = heap->host_storage_.data();
     }
     return hand_out(heap, riid, out);
