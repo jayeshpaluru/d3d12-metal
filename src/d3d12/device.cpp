@@ -380,16 +380,26 @@ void Device::unregister_heap(DescriptorHeap *heap)
 DescriptorHeap *Device::validate_cpu_range(D3D12_CPU_DESCRIPTOR_HANDLE handle, UINT count, D3D12_DESCRIPTOR_HEAP_TYPE type,
                                            size_t *index)
 {
-    stat_add(Stat::DescriptorWrites, count);  // every descriptor write and copy passes here
-    struct Cache {
-        const Device *device;
-        uint64_t generation;
-        uintptr_t begin, end;
-        DescriptorHeap *heap;
+    // Two entries: copies alternate between a destination and a source heap.
+    struct Entry {
+        const Device *device = nullptr;
+        uint64_t generation = 0;
+        uintptr_t begin = 0, end = 0;
+        DescriptorHeap *heap = nullptr;
     };
-    thread_local Cache cache = {};
+    thread_local Entry cache[2];
+    thread_local unsigned last_hit = 0;
     const uint64_t generation = heap_generation_.load(std::memory_order_acquire);
-    if (cache.device != this || cache.generation != generation || handle.ptr < cache.begin || handle.ptr >= cache.end) {
+    const Entry *entry = nullptr;
+    for (unsigned i = 0; i < 2; ++i) {
+        const Entry &e = cache[i];
+        if (e.device == this && e.generation == generation && handle.ptr >= e.begin && handle.ptr < e.end) {
+            entry = &e;
+            last_hit = i;
+            break;
+        }
+    }
+    if (!entry) {
         std::shared_lock lock(heaps_mutex_);
         auto it = heaps_.upper_bound(handle.ptr);
         if (it == heaps_.begin())
@@ -399,12 +409,14 @@ DescriptorHeap *Device::validate_cpu_range(D3D12_CPU_DESCRIPTOR_HANDLE handle, U
         const uintptr_t end = it->first + size_t(heap->count()) * kDescriptorSize;
         if (handle.ptr >= end)
             return nullptr;
-        cache = {this, generation, it->first, end, heap};
+        last_hit ^= 1;  // replace the entry that was not used last
+        cache[last_hit] = {this, generation, it->first, end, heap};
+        entry = &cache[last_hit];
     }
-    DescriptorHeap *heap = cache.heap;
-    const size_t offset = handle.ptr - cache.begin;
+    DescriptorHeap *heap = entry->heap;
+    const size_t offset = handle.ptr - entry->begin;
     if (heap->type() != type || offset % kDescriptorSize != 0
-        || size_t(count) * kDescriptorSize > cache.end - handle.ptr)
+        || size_t(count) * kDescriptorSize > entry->end - handle.ptr)
         return nullptr;
     if (index)
         *index = offset / kDescriptorSize;
@@ -455,21 +467,14 @@ ViewInfo *Device::view_info(D3D12_CPU_DESCRIPTOR_HANDLE handle)
     return heap ? heap->shadow(static_cast<uint32_t>(index)) : nullptr;
 }
 
-// Both ranges are located once; the descriptors in between are consecutive in their heaps.
-void Device::copy_view_info(D3D12_CPU_DESCRIPTOR_HANDLE dest, D3D12_CPU_DESCRIPTOR_HANDLE src, UINT count)
+// Copies the shadow info of `count` descriptors between heaps that were already located; overlapping ranges of one
+// heap behave like memmove.
+void Device::copy_view_info(DescriptorHeap *to_heap, size_t to_index, DescriptorHeap *from_heap, size_t from_index, UINT count)
 {
-    std::shared_lock lock(heaps_mutex_);
-    size_t to_index, from_index;
-    DescriptorHeap *to_heap = locate_view_heap(dest, &to_index);
-    if (!to_heap)
-        return;
-    DescriptorHeap *from_heap = locate_view_heap(src, &from_index);
-    for (UINT i = 0; i < count; ++i) {
-        ViewInfo *to = to_heap->shadow(static_cast<uint32_t>(to_index + i));
-        ViewInfo *from = from_heap ? from_heap->shadow(static_cast<uint32_t>(from_index + i)) : nullptr;
-        if (to)
-            *to = from ? *from : ViewInfo{};
-    }
+    ViewInfo *to = to_heap->shadow(static_cast<uint32_t>(to_index));
+    ViewInfo *from = from_heap->shadow(static_cast<uint32_t>(from_index));
+    if (to && from)
+        std::memmove(static_cast<void *>(to), static_cast<const void *>(from), size_t(count) * sizeof(ViewInfo));
 }
 
 // ---- Forced initial state of placed render targets and depth-stencils ---------
@@ -553,6 +558,7 @@ void Device::CreateConstantBufferView(const D3D12_CONSTANT_BUFFER_VIEW_DESC *des
 {
     if (!validate_cpu_range(dest, 1, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV))
         return log_bad_handle("CreateConstantBufferView");
+    stat_add(Stat::DescriptorWrites);
     auto *entry = reinterpret_cast<mtlb_descriptor *>(dest.ptr);
     if (desc)
         mtlb_descriptor_set_buffer(entry, desc->BufferLocation, desc->SizeInBytes);
@@ -586,6 +592,7 @@ void Device::CreateRenderTargetView(ID3D12Resource *resource, const D3D12_RENDER
 {
     if (!validate_cpu_range(dest, 1, D3D12_DESCRIPTOR_HEAP_TYPE_RTV))
         return log_bad_handle("CreateRenderTargetView");
+    stat_add(Stat::DescriptorWrites);
     auto *slot = reinterpret_cast<RenderTargetDescriptor *>(dest.ptr);
     // One mip level and one slice (a layered view renders to its first slice).
     UINT mip = 0, slice = 0;
@@ -619,6 +626,7 @@ void Device::CreateDepthStencilView(ID3D12Resource *resource, const D3D12_DEPTH_
 {
     if (!validate_cpu_range(dest, 1, D3D12_DESCRIPTOR_HEAP_TYPE_DSV))
         return log_bad_handle("CreateDepthStencilView");
+    stat_add(Stat::DescriptorWrites);
     auto *slot = reinterpret_cast<RenderTargetDescriptor *>(dest.ptr);
     UINT mip = 0, slice = 0;
     DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
@@ -666,10 +674,14 @@ void Device::CopyDescriptors(UINT num_dest_ranges, const D3D12_CPU_DESCRIPTOR_HA
         const UINT n = std::min(dest_size - d_used, src_size - s_used);
         const D3D12_CPU_DESCRIPTOR_HANDLE to = {dest_starts[d].ptr + size_t(d_used) * size};
         const D3D12_CPU_DESCRIPTOR_HANDLE from = {src_starts[s].ptr + size_t(s_used) * size};
-        if (n && validate_cpu_range(to, n, type) && validate_cpu_range(from, n, type)) {
+        size_t to_index = 0, from_index = 0;
+        DescriptorHeap *to_heap = n ? validate_cpu_range(to, n, type, &to_index) : nullptr;
+        DescriptorHeap *from_heap = to_heap ? validate_cpu_range(from, n, type, &from_index) : nullptr;
+        if (from_heap) {
             std::memmove(reinterpret_cast<void *>(to.ptr), reinterpret_cast<const void *>(from.ptr), size_t(n) * size);
             if (type == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV)
-                copy_view_info(to, from, n);
+                copy_view_info(to_heap, to_index, from_heap, from_index, n);
+            stat_add(Stat::DescriptorWrites, n);
         } else if (n) {
             log_bad_handle("CopyDescriptors");
         }
@@ -686,11 +698,15 @@ void Device::CopyDescriptorsSimple(UINT count, D3D12_CPU_DESCRIPTOR_HANDLE dest,
     const size_t size = descriptor_size(type);
     if (!size || !count)
         return;
-    if (!validate_cpu_range(dest, count, type) || !validate_cpu_range(src, count, type))
+    size_t to_index = 0, from_index = 0;
+    DescriptorHeap *to_heap = validate_cpu_range(dest, count, type, &to_index);
+    DescriptorHeap *from_heap = to_heap ? validate_cpu_range(src, count, type, &from_index) : nullptr;
+    if (!from_heap)
         return log_bad_handle("CopyDescriptorsSimple");
     std::memmove(reinterpret_cast<void *>(dest.ptr), reinterpret_cast<const void *>(src.ptr), size_t(count) * size);
     if (type == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV)
-        copy_view_info(dest, src, count);
+        copy_view_info(to_heap, to_index, from_heap, from_index, count);
+    stat_add(Stat::DescriptorWrites, count);
 }
 
 // ---- Resources -------------------------------------------------------------

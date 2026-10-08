@@ -226,6 +226,64 @@ int main()
         ctx.execute_and_wait(list.Get());
     }
 
+    // ---- overlapping descriptor copies behave like memmove, shadow view info included ---------------------------------
+    {
+        const CD3DX12_HEAP_PROPERTIES default_props(D3D12_HEAP_TYPE_DEFAULT);
+        const CD3DX12_RESOURCE_DESC uav_desc = CD3DX12_RESOURCE_DESC::Buffer(64, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+        ComPtr<ID3D12Resource> uav_buffer;
+        CHECK_HR(device->CreateCommittedResource(&default_props, D3D12_HEAP_FLAG_NONE, &uav_desc, D3D12_RESOURCE_STATE_COMMON,
+                                                 nullptr, IID_PPV_ARGS(uav_buffer.GetAddressOf())));
+        ComPtr<ID3D12DescriptorHeap> heap = make_heap(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 5, true);
+        {
+            D3D12_UNORDERED_ACCESS_VIEW_DESC all = {};  // slot 4 views the whole buffer: it zeroes it between checks
+            all.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+            all.Buffer.NumElements = 16;
+            all.Buffer.StructureByteStride = 4;
+            device->CreateUnorderedAccessView(uav_buffer.Get(), nullptr, &all, at(heap.Get(), 4, view_inc));
+        }
+        // Slot i views i + 1 dwords, so a clear through a slot reveals which view the slot holds.
+        for (UINT i = 0; i < 3; ++i) {
+            D3D12_UNORDERED_ACCESS_VIEW_DESC d = {};
+            d.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+            d.Buffer.NumElements = i + 1;
+            d.Buffer.StructureByteStride = 4;
+            device->CreateUnorderedAccessView(uav_buffer.Get(), nullptr, &d, at(heap.Get(), i, view_inc));
+        }
+        // Shift up by one inside the heap: 0,1,2 -> 1,2,3 (the destination overlaps the source).
+        device->CopyDescriptorsSimple(3, at(heap.Get(), 1, view_inc), at(heap.Get(), 0, view_inc), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        auto cleared_dwords = [&](UINT slot) {
+            ComPtr<ID3D12Resource> readback = ctx.create_buffer(D3D12_HEAP_TYPE_READBACK, 64);
+            ComPtr<ID3D12GraphicsCommandList> list = ctx.create_list();
+            const CD3DX12_RESOURCE_BARRIER uav_barrier = CD3DX12_RESOURCE_BARRIER::UAV(uav_buffer.Get());
+            const UINT zeros[4] = {0, 0, 0, 0}, ones[4] = {0xAB, 0xAB, 0xAB, 0xAB};
+            D3D12_GPU_DESCRIPTOR_HANDLE all_gpu = heap->GetGPUDescriptorHandleForHeapStart();
+            all_gpu.ptr += size_t(4) * view_inc;
+            list->ClearUnorderedAccessViewUint(all_gpu, at(heap.Get(), 4, view_inc), uav_buffer.Get(), zeros, 0, nullptr);
+            list->ResourceBarrier(1, &uav_barrier);
+            D3D12_GPU_DESCRIPTOR_HANDLE gpu = heap->GetGPUDescriptorHandleForHeapStart();
+            gpu.ptr += size_t(slot) * view_inc;
+            list->ClearUnorderedAccessViewUint(gpu, at(heap.Get(), slot, view_inc), uav_buffer.Get(), ones, 0, nullptr);
+            list->ResourceBarrier(1, &uav_barrier);
+            list->CopyResource(readback.Get(), uav_buffer.Get());
+            CHECK_HR(list->Close());
+            ctx.execute_and_wait(list.Get());
+            void *mapped = nullptr;
+            CHECK_HR(readback->Map(0, nullptr, &mapped));
+            UINT count = 0;
+            for (UINT i = 0; i < 16; ++i)
+                count += static_cast<const uint32_t *>(mapped)[i] == 0xAB ? 1 : 0;
+            readback->Unmap(0, nullptr);
+            return count;
+        };
+        CHECK(cleared_dwords(1) == 1u);  // old slot 0
+        CHECK(cleared_dwords(2) == 2u);  // old slot 1
+        CHECK(cleared_dwords(3) == 3u);  // old slot 2 (a forward copy would have given slot 3 the first view)
+        // And back down: 1,2,3 -> 0,1,2.
+        device->CopyDescriptorsSimple(3, at(heap.Get(), 0, view_inc), at(heap.Get(), 1, view_inc), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        CHECK(cleared_dwords(0) == 1u);
+        CHECK(cleared_dwords(2) == 3u);
+    }
+
     std::printf("test_hardening: OK\n");
     return 0;
 }

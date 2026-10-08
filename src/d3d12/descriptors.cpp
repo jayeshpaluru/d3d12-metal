@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstring>
 
+#include "common/stats.h"
 #include "d3d12/descriptor_heap.h"
 #include "d3d12/device.h"
 #include "d3d12/formats.h"
@@ -181,6 +182,7 @@ void Device::CreateShaderResourceView(ID3D12Resource *resource_ptr, const D3D12_
 {
     if (!validate_cpu_range(dest, 1, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV))
         return log_bad_handle("CreateShaderResourceView");
+    stat_add(Stat::DescriptorWrites);
     mtlb_descriptor *slot = slot_of(dest);
     auto *resource = ours<Resource>(resource_ptr);
     if (!resource) {
@@ -325,6 +327,7 @@ void Device::CreateUnorderedAccessView(ID3D12Resource *resource_ptr, ID3D12Resou
     DescriptorHeap *heap = validate_cpu_range(dest, 1, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, &index);
     if (!heap)
         return log_bad_handle("CreateUnorderedAccessView");
+    stat_add(Stat::DescriptorWrites);
     mtlb_descriptor *slot = slot_of(dest);
     // The shadow view info is stored on every way out (a failed or null view leaves "none").
     ViewInfo info;
@@ -455,6 +458,7 @@ void Device::CreateSampler(const D3D12_SAMPLER_DESC *desc, D3D12_CPU_DESCRIPTOR_
 {
     if (!validate_cpu_range(dest, 1, D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER))
         return log_bad_handle("CreateSampler");
+    stat_add(Stat::DescriptorWrites);
     mtlb_descriptor *slot = slot_of(dest);
     if (!desc) {
         *slot = {};
