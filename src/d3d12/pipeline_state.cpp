@@ -22,9 +22,9 @@ mtlb_render_target_blend convert(const D3D12_RENDER_TARGET_BLEND_DESC &rt)
             rt.SrcBlendAlpha, rt.DestBlendAlpha, rt.BlendOpAlpha, rt.RenderTargetWriteMask};
 }
 
-static_assert(MTLB_TOPOLOGY_TYPE_POINT == D3D12_PRIMITIVE_TOPOLOGY_TYPE_POINT
-                  && MTLB_TOPOLOGY_TYPE_LINE == D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE
-                  && MTLB_TOPOLOGY_TYPE_TRIANGLE == D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
+static_assert(int(MTLB_TOPOLOGY_TYPE_POINT) == int(D3D12_PRIMITIVE_TOPOLOGY_TYPE_POINT)
+                  && int(MTLB_TOPOLOGY_TYPE_LINE) == int(D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE)
+                  && int(MTLB_TOPOLOGY_TYPE_TRIANGLE) == int(D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE),
               "mtlb topology types mirror the D3D12 enum");
 
 } // namespace
