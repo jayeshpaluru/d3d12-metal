@@ -58,6 +58,7 @@ typedef enum mtlb_cmd_type {
     MTLB_CMD_CLEAR_DSV,
     MTLB_CMD_BARRIER,
     MTLB_CMD_EXECUTE_INDIRECT,
+    MTLB_CMD_RESOLVE,
 } mtlb_cmd_type;
 
 typedef struct mtlb_cmd_header {
@@ -378,7 +379,19 @@ typedef struct mtlb_cmd_execute_indirect {
     mtlb_indirect_arg args[];
 } mtlb_cmd_execute_indirect;
 
+/* Resolves one subresource of a multisampled texture into a single-sampled one of the same size, as
+ * `format` (a mtlb_format; 0 = the textures' own). */
+typedef struct mtlb_cmd_resolve {
+    mtlb_cmd_header header;
+    mtlb_texture dst;
+    mtlb_texture src;
+    uint32_t dst_mip, dst_slice, src_mip, src_slice;
+    uint32_t format;
+    uint32_t reserved;
+} mtlb_cmd_resolve;
+
 MTLB_ASSERT_SIZE(mtlb_cmd_header, 8);
+MTLB_ASSERT_SIZE(mtlb_cmd_resolve, 48);
 MTLB_ASSERT_SIZE(mtlb_indirect_arg, 16);
 MTLB_ASSERT_SIZE(mtlb_cmd_execute_indirect, 48);
 MTLB_ASSERT_OFFSET(mtlb_cmd_execute_indirect, args, 48);

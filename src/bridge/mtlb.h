@@ -199,6 +199,7 @@ typedef struct mtlb_device_caps {
     uint32_t has_unified_memory;
     uint32_t sample_counts;    /* bit n set: textures with n samples are supported */
     uint64_t max_texture_buffer_width;  /* texels of a typed buffer view (texture buffer) */
+    uint64_t current_allocated_size;    /* bytes of resources the process has allocated on the device */
 } mtlb_device_caps;
 
 /* Opens the Metal device with the given registry id (mtlb_device_caps::registry_id),
@@ -643,7 +644,7 @@ MTLB_ASSERT_SIZE(mtlb_notification, 16);
 MTLB_ASSERT_SIZE(mtlb_span, 16);
 MTLB_ASSERT_OFFSET(mtlb_span, size, 8);
 MTLB_ASSERT_SIZE(mtlb_format_info, 16);
-MTLB_ASSERT_SIZE(mtlb_device_caps, 296);
+MTLB_ASSERT_SIZE(mtlb_device_caps, 304);
 MTLB_ASSERT_SIZE(mtlb_buffer_info, 24);
 MTLB_ASSERT_OFFSET(mtlb_buffer_info, gpu_address, 8);
 MTLB_ASSERT_SIZE(mtlb_descriptor, 24);

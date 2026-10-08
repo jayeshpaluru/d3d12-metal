@@ -48,6 +48,7 @@ public:
         desc_.DedicatedVideoMemory = caps.recommended_max_working_set_size;
         desc_.SharedSystemMemory = caps.recommended_max_working_set_size;
         desc_.AdapterLuid = luid_from_registry_id(caps.registry_id);
+        registry_id_ = caps.registry_id;
     }
 
     ~Adapter() override { parent_->Release(); }
@@ -121,36 +122,49 @@ public:
         D3D12M_STUB_LOG();
     }
 
-    HRESULT STDMETHODCALLTYPE QueryVideoMemoryInfo(UINT node, DXGI_MEMORY_SEGMENT_GROUP,
+    // Applications such as the target game run their own residency management on this: the budget of the
+    // local segment is most of what Metal recommends a process keep resident (the memory is unified), the
+    // non-local one a small share, and the usage is what the process has allocated on the device.
+    HRESULT STDMETHODCALLTYPE QueryVideoMemoryInfo(UINT node, DXGI_MEMORY_SEGMENT_GROUP group,
                                                    DXGI_QUERY_VIDEO_MEMORY_INFO *info) override
     {
-        if (node != 0 || !info)
+        if (node != 0 || !info || (group != DXGI_MEMORY_SEGMENT_GROUP_LOCAL && group != DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL))
             return E_INVALIDARG;
-        info->Budget = desc_.DedicatedVideoMemory;
-        info->CurrentUsage = 0;
-        info->AvailableForReservation = desc_.DedicatedVideoMemory / 2;
-        info->CurrentReservation = 0;
+        const bool local = group == DXGI_MEMORY_SEGMENT_GROUP_LOCAL;
+        mtlb_device_caps caps;
+        const UINT64 used = mtlb_query_caps(registry_id_, &caps) == MTLB_OK ? caps.current_allocated_size : 0;
+        info->Budget = local ? desc_.DedicatedVideoMemory / 10 * 9 : 256ull * 1024 * 1024;
+        info->CurrentUsage = local ? used : 0;
+        info->AvailableForReservation = info->Budget / 2;
+        info->CurrentReservation = reservation_[local ? 0 : 1];
         return S_OK;
     }
 
-    HRESULT STDMETHODCALLTYPE SetVideoMemoryReservation(UINT node, DXGI_MEMORY_SEGMENT_GROUP, UINT64) override
+    HRESULT STDMETHODCALLTYPE SetVideoMemoryReservation(UINT node, DXGI_MEMORY_SEGMENT_GROUP group, UINT64 reservation) override
     {
-        return node == 0 ? S_OK : E_INVALIDARG;
+        if (node != 0 || (group != DXGI_MEMORY_SEGMENT_GROUP_LOCAL && group != DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL))
+            return E_INVALIDARG;
+        reservation_[group == DXGI_MEMORY_SEGMENT_GROUP_LOCAL ? 0 : 1] = reservation;
+        return S_OK;
     }
 
-    HRESULT STDMETHODCALLTYPE RegisterVideoMemoryBudgetChangeNotificationEvent(HANDLE, DWORD *) override
+    // The budget never changes, so the event is never signalled; the cookie only identifies the registration.
+    HRESULT STDMETHODCALLTYPE RegisterVideoMemoryBudgetChangeNotificationEvent(HANDLE event, DWORD *cookie) override
     {
-        D3D12M_STUB_HR();
+        if (!event || !cookie)
+            return E_INVALIDARG;
+        *cookie = next_cookie_++;
+        return S_OK;
     }
 
-    void STDMETHODCALLTYPE UnregisterVideoMemoryBudgetChangeNotification(DWORD) override
-    {
-        D3D12M_STUB_LOG();
-    }
+    void STDMETHODCALLTYPE UnregisterVideoMemoryBudgetChangeNotification(DWORD) override {}
 
 private:
     IDXGIFactory *parent_;
     DXGI_ADAPTER_DESC2 desc_{}; // GetDesc/GetDesc1 are prefixes of this
+    uint64_t registry_id_ = 0;
+    std::atomic<UINT64> reservation_[2] = {};
+    std::atomic<DWORD> next_cookie_{1};
 };
 
 } // namespace

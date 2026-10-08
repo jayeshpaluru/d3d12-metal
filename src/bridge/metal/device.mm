@@ -72,6 +72,7 @@ static void fill_caps(id<MTLDevice> device, mtlb_device_caps *out)
     // Metal has no property for it; texture descriptor validation states 2^28 texels
     // (measured on Apple GPUs: 268435456 passes, one more asserts).
     out->max_texture_buffer_width = 1ull << 28;
+    out->current_allocated_size = device.currentAllocatedSize;
 }
 
 } // namespace mtlb

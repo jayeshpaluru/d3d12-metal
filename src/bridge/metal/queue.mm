@@ -157,6 +157,7 @@ private:
     mtlb_result set_descriptor_heaps(const mtlb_cmd_set_descriptor_heaps &cmd);
     mtlb_result dispatch_compute(const mtlb_cmd_dispatch &cmd);
     mtlb_result barrier(const mtlb_cmd_barrier &cmd);
+    mtlb_result resolve(const mtlb_cmd_resolve &cmd);
     mtlb_result execute_indirect(const mtlb_cmd_execute_indirect &cmd);
     mtlb_result clear_buffer(const mtlb_cmd_clear_buffer &cmd);
     mtlb_result clear_texture_uav(const mtlb_cmd_clear_texture_uav &cmd);
@@ -878,6 +879,37 @@ void Replay::bind_heaps(uint32_t compute_stage)
     }
 }
 
+// A resolve is a render pass with no draws: the multisampled texture is loaded and stored with a resolve.
+mtlb_result Replay::resolve(const mtlb_cmd_resolve &cmd)
+{
+    Texture *dst = from_handle<Texture>(cmd.dst), *src = from_handle<Texture>(cmd.src);
+    if (!dst || !src || src->texture.sampleCount < 2 || dst->texture.sampleCount != 1)
+        return fail(MTLB_ERROR_INVALID_ARGUMENT, "resolve needs a multisampled source and a single-sampled destination");
+    // Earlier clears and draws land first.
+    end_blit();
+    end_compute();
+    mtlb_result result = flush_clears(false);
+    if (result != MTLB_OK)
+        return result;
+    id<MTLTexture> source = attachment_texture(src, cmd.format == static_cast<uint32_t>(src->format) ? 0 : cmd.format);
+    id<MTLTexture> destination = attachment_texture(dst, cmd.format == static_cast<uint32_t>(dst->format) ? 0 : cmd.format);
+    if (!source || !destination)
+        return fail(MTLB_ERROR_UNSUPPORTED, "unsupported resolve format");
+    MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
+    MTLRenderPassColorAttachmentDescriptor *ca = pass.colorAttachments[0];
+    ca.texture = source;
+    ca.level = cmd.src_mip;
+    ca.slice = cmd.src_slice;
+    ca.resolveTexture = destination;
+    ca.resolveLevel = cmd.dst_mip;
+    ca.resolveSlice = cmd.dst_slice;
+    ca.loadAction = MTLLoadActionLoad;
+    ca.storeAction = MTLStoreActionStoreAndMultisampleResolve;
+    render_ = new_render_encoder(pass);
+    end_render();
+    return MTLB_OK;
+}
+
 // The compute encoder with the application's compute pipeline, root arguments and descriptor heaps bound.
 id<MTLComputeCommandEncoder> Replay::prepare_dispatch()
 {
@@ -1188,6 +1220,7 @@ mtlb_result Replay::execute(const mtlb_cmd_header *header)
     case MTLB_CMD_SET_DESCRIPTOR_HEAPS: return dispatch(header, &Replay::set_descriptor_heaps);
     case MTLB_CMD_DISPATCH: return dispatch(header, &Replay::dispatch_compute);
     case MTLB_CMD_BARRIER: return dispatch(header, &Replay::barrier);
+    case MTLB_CMD_RESOLVE: return dispatch(header, &Replay::resolve);
     case MTLB_CMD_EXECUTE_INDIRECT: return dispatch(header, &Replay::execute_indirect);
     case MTLB_CMD_CLEAR_BUFFER: return dispatch(header, &Replay::clear_buffer);
     case MTLB_CMD_CLEAR_TEXTURE_UAV: return dispatch(header, &Replay::clear_texture_uav);

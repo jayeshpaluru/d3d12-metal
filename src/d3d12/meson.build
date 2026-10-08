@@ -18,6 +18,7 @@ d3d12_sources += files(
   'pipeline_stream.cpp',
   'resource.cpp',
   'root_signature.cpp',
+  'sdk_config.cpp',
   'root_signature_blob.cpp',
   'root_signature_deserializer.cpp',
   'root_signature_exports.cpp',

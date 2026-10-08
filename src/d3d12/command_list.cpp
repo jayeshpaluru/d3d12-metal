@@ -604,6 +604,40 @@ void CommandList::clear_uav(D3D12_CPU_DESCRIPTOR_HANDLE view_handle, ID3D12Resou
     }
 }
 
+void CommandList::ResolveSubresource(ID3D12Resource *dst_ptr, UINT dst_subresource, ID3D12Resource *src_ptr,
+                                     UINT src_subresource, DXGI_FORMAT format)
+{
+    auto *dst = ours<Resource>(dst_ptr);
+    auto *src = ours<Resource>(src_ptr);
+    if (closed_ || !dst || !src || dst->is_buffer() || src->is_buffer()) {
+        D3D12M_LOG("ResolveSubresource needs two textures of this layer");
+        return;
+    }
+    UINT dst_mip, dst_slice, src_mip, src_slice;
+    decompose_subresource(dst->desc(), dst_subresource, &dst_mip, &dst_slice);
+    decompose_subresource(src->desc(), src_subresource, &src_mip, &src_slice);
+    auto *cmd = append<mtlb_cmd_resolve>(MTLB_CMD_RESOLVE);
+    cmd->dst = dst->texture();
+    cmd->src = src->texture();
+    cmd->dst_mip = dst_mip;
+    cmd->dst_slice = dst_slice;
+    cmd->src_mip = src_mip;
+    cmd->src_slice = src_slice;
+    cmd->format = to_mtlb_format(format);
+}
+
+// Metal resolves whole subresources by averaging: other modes and partial regions are approximated.
+void CommandList::ResolveSubresourceRegion(ID3D12Resource *dst, UINT dst_subresource, UINT dst_x, UINT dst_y,
+                                           ID3D12Resource *src, UINT src_subresource, D3D12_RECT *src_rect,
+                                           DXGI_FORMAT format, D3D12_RESOLVE_MODE mode)
+{
+    if (mode != D3D12_RESOLVE_MODE_AVERAGE && mode != D3D12_RESOLVE_MODE_DECOMPRESS)
+        D3D12M_LOG("ResolveSubresourceRegion: resolve mode %d is approximated by averaging", static_cast<int>(mode));
+    if (dst_x || dst_y || src_rect)
+        D3D12M_LOG("ResolveSubresourceRegion: a partial region resolves the whole subresource");
+    ResolveSubresource(dst, dst_subresource, src, src_subresource, format);
+}
+
 // ExecuteIndirect: the signature's arguments become a description for the backend, with the root parameters
 // they change resolved to offsets in the root argument buffer of the current root signature.
 void CommandList::ExecuteIndirect(ID3D12CommandSignature *signature_ptr, UINT max_count, ID3D12Resource *argument_buffer,

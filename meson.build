@@ -37,6 +37,8 @@ portable_tests = [
   ['barriers', ['color'], ['probe', 'fill']],
   ['queues', [], ['fill']],
   ['large_buffers', [], ['probe']],
+  ['indirect', ['color'], ['fill']],
+  ['msaa', ['color'], ['msaa_read']],
 ]
 
 bridge_sources = []
