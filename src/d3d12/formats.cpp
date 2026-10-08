@@ -1,21 +1,55 @@
 #include "d3d12/formats.h"
 
 #include <algorithm>
+#include <atomic>
+#include <mutex>
 #include <climits>
 #include <cstring>
 
 namespace d3d12m {
 
+namespace {
+
+// The format table lives in the backend (a bridge call, a unix call under Wine); every descriptor write
+// asks about formats, so the answers are cached here, one slot per DXGI_FORMAT value.
+constexpr size_t kCachedFormats = 256;
+enum : uint8_t { kUnknown = 0, kSupported, kUnsupported };
+std::atomic<uint8_t> g_format_state[kCachedFormats];
+mtlb_format_info g_format_info[kCachedFormats];
+std::mutex g_format_mutex;
+
+bool lookup_format(DXGI_FORMAT format, mtlb_format_info *info)
+{
+    const auto index = static_cast<size_t>(format);
+    if (index >= kCachedFormats)
+        return mtlb_format_get_info(static_cast<mtlb_format>(format), info) == MTLB_OK;
+    uint8_t state = g_format_state[index].load(std::memory_order_acquire);
+    if (state == kUnknown) {
+        std::lock_guard<std::mutex> lock(g_format_mutex);
+        state = g_format_state[index].load(std::memory_order_relaxed);
+        if (state == kUnknown) {
+            state = mtlb_format_get_info(static_cast<mtlb_format>(format), &g_format_info[index]) == MTLB_OK ? kSupported
+                                                                                                          : kUnsupported;
+            g_format_state[index].store(state, std::memory_order_release);
+        }
+    }
+    if (state != kSupported)
+        return false;
+    *info = g_format_info[index];
+    return true;
+}
+
+} // namespace
+
 mtlb_format to_mtlb_format(DXGI_FORMAT format)
 {
     mtlb_format_info info;
-    auto candidate = static_cast<mtlb_format>(format);
-    return mtlb_format_get_info(candidate, &info) == MTLB_OK ? candidate : MTLB_FORMAT_UNKNOWN;
+    return lookup_format(format, &info) ? static_cast<mtlb_format>(format) : MTLB_FORMAT_UNKNOWN;
 }
 
 bool get_format_info(DXGI_FORMAT format, mtlb_format_info *info)
 {
-    return mtlb_format_get_info(static_cast<mtlb_format>(format), info) == MTLB_OK;
+    return lookup_format(format, info);
 }
 
 UINT resolve_mip_levels(const D3D12_RESOURCE_DESC &desc)

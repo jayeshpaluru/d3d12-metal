@@ -40,8 +40,10 @@ shot="$screens/godot-$method.png"
 log="$logs/godot-$method.log"
 rm -f "$shot"
 
-# Godot loads d3d12.dll/dxgi.dll from its own directory; copy ours next to it.
+# Godot loads d3d12.dll/dxgi.dll from its own directory; copy ours (and the unix half, found next to d3d12.dll) there.
+mkdir -p "$godot_dir/x86_64-unix"
 cp "$out/d3d12.dll" "$out/dxgi.dll" "$godot_dir/"
+cp "$out/x86_64-unix/d3d12metal.so" "$godot_dir/x86_64-unix/"
 export WINEDLLPATH="$out"
 export WINEDLLOVERRIDES="d3d12,d3d12core,dxgi=n"
 export WINEDEBUG="${WINEDEBUG:--all}"

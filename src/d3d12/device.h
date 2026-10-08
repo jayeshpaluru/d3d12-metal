@@ -6,6 +6,7 @@
 #include <map>
 #include <mutex>
 #include <shared_mutex>
+#include <unordered_map>
 
 #include "bridge/mtlb.h"
 #include "d3d12/descriptor_heap.h"
@@ -26,6 +27,8 @@ public:
     const mtlb_device_caps &caps() const { return caps_; }
     // The descriptor a null view of mtlb_null_kind `kind` gets (cached after the first request).
     mtlb_descriptor null_descriptor(uint32_t kind);
+    // The descriptor of a sampler: equal samplers are answered from a cache without a bridge call.
+    HRESULT sampler_descriptor(const mtlb_sampler_desc &desc, mtlb_descriptor *out);
 
     // Placed render targets and depth-stencils start in a defined state: they are cleared to zero before
     // the first submission after their creation. Resources register at creation (and unregister when
@@ -193,6 +196,11 @@ private:
     bool resource_size_align(const D3D12_RESOURCE_DESC &desc, mtlb_size_align *out) const;
     std::shared_mutex heaps_mutex_;
     std::map<uintptr_t, DescriptorHeap *> heaps_;
+    std::mutex sampler_mutex_;
+    struct SamplerKeyHash {
+        size_t operator()(const std::array<uint32_t, 16> &k) const;
+    };
+    std::unordered_map<std::array<uint32_t, 16>, mtlb_descriptor, SamplerKeyHash> samplers_;  // key: an mtlb_sampler_desc
     std::mutex null_mutex_;
     std::array<mtlb_descriptor, 16> null_descriptors_{};
     std::array<bool, 16> null_ready_{};

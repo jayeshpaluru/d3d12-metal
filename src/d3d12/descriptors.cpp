@@ -87,6 +87,14 @@ struct BufferViewParams {
     UINT64 counter_offset = 0;
 };
 
+// The metadata word of a buffer descriptor without texture buffer padding (IRDescriptorTableGetBufferMetadata):
+// the byte size, saturated to 32 bits, in the low word. The backend's mtlb_buffer_view builds the same value for
+// every other kind (tests/test_descriptors.cpp compares them).
+uint64_t buffer_metadata(uint64_t size_bytes)
+{
+    return std::min<uint64_t>(size_bytes, 0xffffffffull);
+}
+
 HRESULT make_buffer_descriptor(Resource &resource, const BufferViewParams &p, mtlb_descriptor *slot)
 {
     mtlb_buffer_view_desc view{};
@@ -117,12 +125,13 @@ HRESULT make_buffer_descriptor(Resource &resource, const BufferViewParams &p, mt
         view.counter_buffer = p.counter->buffer();
         view.counter_offset = p.counter_offset;
     }
-    const mtlb_result result = mtlb_buffer_view(&view, slot);
-    if (result != MTLB_OK) {
-        D3D12M_LOG("buffer view creation failed: %s", mtlb_last_error());
-        return to_hresult(result);
+    if (view.format == 0 && !p.counter) {
+        // Raw and structured views are an address and a size: no bridge call.
+        const uint64_t available = resource.desc().Width - view.offset;
+        *slot = {resource.GetGPUVirtualAddress() + view.offset, 0, buffer_metadata(std::min(view.size, available))};
+        return S_OK;
     }
-    return S_OK;
+    return resource.buffer_view(view, slot);
 }
 
 // UAVs and SRVs of a null resource: the bridge's descriptor that reads zero.
@@ -406,6 +415,37 @@ void Device::CreateUnorderedAccessView(ID3D12Resource *resource_ptr, ID3D12Resou
     info.slice_count = p.type == MTLB_VIEW_3D ? mip_extent(rd.DepthOrArraySize, p.range.first_mip) : p.range.slice_count;
 }
 
+size_t Device::SamplerKeyHash::operator()(const std::array<uint32_t, 16> &k) const
+{
+    uint64_t hash = 14695981039346656037ull;
+    for (uint32_t word : k)
+        hash = (hash ^ word) * 1099511628211ull;
+    return static_cast<size_t>(hash);
+}
+
+HRESULT Device::sampler_descriptor(const mtlb_sampler_desc &desc, mtlb_descriptor *out)
+{
+    static_assert(sizeof(mtlb_sampler_desc) == 16 * sizeof(uint32_t), "the sampler cache key is the description's words");
+    std::array<uint32_t, 16> key;
+    std::memcpy(key.data(), &desc, sizeof(key));
+    // Metal limits a device to a thousand or so samplers; applications use a handful of distinct ones.
+    constexpr size_t kMaxCached = 4096;
+    std::lock_guard<std::mutex> lock(sampler_mutex_);
+    auto it = samplers_.find(key);
+    if (it != samplers_.end()) {
+        *out = it->second;
+        return S_OK;
+    }
+    const mtlb_result result = mtlb_sampler_create(device_, &desc, out);
+    if (result != MTLB_OK) {
+        D3D12M_LOG("sampler creation failed: %s", mtlb_last_error());
+        return to_hresult(result);
+    }
+    if (samplers_.size() < kMaxCached)
+        samplers_.emplace(key, *out);
+    return S_OK;
+}
+
 void Device::CreateSampler(const D3D12_SAMPLER_DESC *desc, D3D12_CPU_DESCRIPTOR_HANDLE dest)
 {
     mtlb_descriptor *slot = slot_of(dest);
@@ -414,10 +454,8 @@ void Device::CreateSampler(const D3D12_SAMPLER_DESC *desc, D3D12_CPU_DESCRIPTOR_
         return;
     }
     const mtlb_sampler_desc sampler = to_sampler_desc(*desc);
-    if (mtlb_sampler_create(device_, &sampler, slot) != MTLB_OK) {
-        D3D12M_LOG("sampler creation failed: %s", mtlb_last_error());
+    if (FAILED(sampler_descriptor(sampler, slot)))
         *slot = {};
-    }
 }
 
 } // namespace d3d12m

@@ -155,6 +155,30 @@ HRESULT Resource::texture_view(const mtlb_texture_view_desc &desc, uint64_t *res
     return S_OK;
 }
 
+HRESULT Resource::buffer_view(const mtlb_buffer_view_desc &desc, mtlb_descriptor *out)
+{
+    const bool cacheable = desc.counter_buffer == 0;
+    const std::array<uint64_t, 4> key{desc.offset, desc.size, desc.format, desc.num_elements};
+    if (cacheable) {
+        std::lock_guard<std::mutex> lock(views_mutex_);
+        auto it = buffer_views_.find(key);
+        if (it != buffer_views_.end()) {
+            *out = it->second;
+            return S_OK;
+        }
+    }
+    const mtlb_result result = mtlb_buffer_view(&desc, out);
+    if (result != MTLB_OK) {
+        D3D12M_LOG("buffer view creation failed: %s", mtlb_last_error());
+        return to_hresult(result);
+    }
+    if (cacheable) {
+        std::lock_guard<std::mutex> lock(views_mutex_);
+        buffer_views_.emplace(key, *out);
+    }
+    return S_OK;
+}
+
 Resource::~Resource()
 {
     if (needs_init_)

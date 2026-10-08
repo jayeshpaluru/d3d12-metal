@@ -2,11 +2,30 @@
 #pragma once
 
 #include <algorithm>
+#include <cmath>
 
 #include "bridge/mtlb.h"
 #include "d3d12/object.h"
 
 namespace d3d12m {
+
+// Out-of-range values are what the debug layer rejects and a driver tolerates: clamp them to the nearest legal
+// value so Metal only ever sees a valid sampler (and a hostile description cannot be turned into a bad Metal call).
+inline void sanitize(mtlb_sampler_desc &s)
+{
+    auto finite = [](float v, float fallback) { return std::isfinite(v) ? v : fallback; };
+    for (uint32_t *mode : {&s.address_u, &s.address_v, &s.address_w})
+        if (*mode < 1 || *mode > 5)
+            *mode = 1;
+    s.max_anisotropy = std::clamp<uint32_t>(s.max_anisotropy, 1, 16);
+    if (s.compare_func > 8)
+        s.compare_func = 8;
+    s.mip_lod_bias = std::clamp(finite(s.mip_lod_bias, 0.0f), -16.0f, 15.99f);
+    s.min_lod = std::clamp(finite(s.min_lod, 0.0f), 0.0f, 1000.0f);
+    s.max_lod = std::clamp(finite(s.max_lod, 1000.0f), s.min_lod, 1000.0f);
+    for (float &c : s.border_color)
+        c = finite(c, 0.0f);
+}
 
 // D3D12_FILTER: bit 0 mip, bits 2-3 mag, bits 4-5 min (0 point, 1 linear), bit 6 anisotropic,
 // bits 7-8 the reduction (0 average, 1 comparison, 2 minimum, 3 maximum).
@@ -28,6 +47,7 @@ inline mtlb_sampler_desc to_sampler_desc(const D3D12_SAMPLER_DESC &d)
     std::copy_n(d.BorderColor, 4, s.border_color);
     s.min_lod = d.MinLOD;
     s.max_lod = d.MaxLOD;
+    sanitize(s);
     return s;
 }
 

@@ -30,6 +30,11 @@ constexpr D3D_FEATURE_LEVEL kMaxFeatureLevel = D3D_FEATURE_LEVEL_12_0;
 constexpr D3D_SHADER_MODEL kMaxShaderModel = D3D_SHADER_MODEL_6_6;
 // D3D12_FEATURE values newer than the MinGW headers.
 constexpr int kFeatureOptions19 = 48;
+// Newer feature queries (Agility SDK headers the MinGW build lacks): all answered "not supported".
+constexpr int kFeaturePredication = 50;
+constexpr int kFeaturePlacedResourceSupportInfo = 51;
+constexpr int kFeatureHardwareCopy = 52;
+constexpr int kFeatureTightAlignment = 54;
 constexpr int kFeatureOptions20 = 49;
 constexpr int kFeatureOptions21 = 53;
 constexpr int kFeatureOptions22 = 65;
@@ -758,6 +763,10 @@ HRESULT Device::CheckFeatureSupport(D3D12_FEATURE feature, void *data, UINT size
     case kFeatureOptions19:
     case kFeatureOptions20:
     case kFeatureOptions22:
+    case kFeaturePredication:
+    case kFeaturePlacedResourceSupportInfo:
+    case kFeatureHardwareCopy:
+    case kFeatureTightAlignment:
         // Everything these report is a capability this layer does not have: unaligned block
         // textures, 64-bit typed atomics, mesh shader details, enhanced barriers, triangle fans,
         // dynamic depth bias, GPU upload heaps, non-normalized samplers and so on.

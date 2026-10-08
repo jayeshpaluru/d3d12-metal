@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <cstdlib>
 #include <cstdio>
 #include <vector>
 
@@ -84,8 +85,18 @@ mtlb_result convert_stage(Device *device, RootSignature *root_signature, const v
     OwnedObject output(IRCompilerAllocCompileAndLink(compiler, entry, input.ptr, &error));
     // The compiler outlives root signatures; do not leave it pointing at this one.
     IRCompilerSetGlobalRootSignature(compiler, nullptr);
-    if (!output.ptr)
+    if (!output.ptr) {
+        // D3D12METAL_DUMP_FAILED=<dir> keeps the shaders the converter rejects, for inspection with dxc -dumpbin.
+        if (const char *dir = std::getenv("D3D12METAL_DUMP_FAILED")) {
+            std::string path = std::string(dir) + "/failed_" + std::to_string(hash_bytes(dxil, size)) + ".dxil";
+            fprintf(stderr, "dump %s\n", path.c_str());
+            if (FILE *f = std::fopen(path.c_str(), "wb")) {
+                std::fwrite(dxil, 1, size, f);
+                std::fclose(f);
+            }
+        }
         return fail(MTLB_ERROR_COMPILE_FAILED, error_text(error, "DXIL conversion failed"));
+    }
 
     OwnedMetalLib metallib(IRMetalLibBinaryCreate());
     if (!IRObjectGetMetalLibBinary(output.ptr, ir_stage, metallib.ptr))

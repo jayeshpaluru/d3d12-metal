@@ -31,6 +31,9 @@ public:
     // recreate the same descriptors every frame, so the answers are cached here and the bridge is
     // called once per distinct view.
     HRESULT texture_view(const mtlb_texture_view_desc &desc, uint64_t *resource_id);
+    // The descriptor of a typed view of this buffer (a texture buffer view in the backend), cached the same way.
+    // Views with a counter are not cached: the counter buffer may be destroyed and its handle reused.
+    HRESULT buffer_view(const mtlb_buffer_view_desc &desc, mtlb_descriptor *out);
 
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **out) override
     {
@@ -74,6 +77,7 @@ private:
 
     std::mutex views_mutex_;
     std::map<std::array<uint32_t, 8>, uint64_t> views_;
+    std::map<std::array<uint64_t, 4>, mtlb_descriptor> buffer_views_;
 };
 
 } // namespace d3d12m

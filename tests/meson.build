@@ -44,6 +44,7 @@ tests = [
   ['test_foreign_objects', []],
   ['test_queue_sync', []],
   ['test_rootsig', []],
+  ['test_descriptors', []],
   ['test_triangle', ['color']],
   ['test_cbv_table', ['color']],
   ['test_render_pass', ['color']],
