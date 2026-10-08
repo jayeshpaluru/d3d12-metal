@@ -486,6 +486,10 @@ private:
     {
         if (!render_)
             return;
+        std::copy(state_.targets, state_.targets + MTLB_MAX_RENDER_TARGETS, last_targets_);
+        last_depth_ = state_.depth;
+        last_valid_ = true;
+        last_ended_by_barrier_ = ending_for_barrier_;
         [render_ updateFence:queue_->fence afterStages:MTLRenderStageFragment];
         queue_->fence_pending = true;
         [render_ endEncoding];
@@ -559,6 +563,10 @@ private:
     DrawState state_;
     std::vector<PendingClear> clears_;  // waiting for a pass that binds their view
     bool warned_no_targets_ = false;
+    // The targets of the render pass that ended last, for counting passes that only continue it.
+    Target last_targets_[MTLB_MAX_RENDER_TARGETS];
+    Target last_depth_;
+    bool last_valid_ = false, last_ended_by_barrier_ = false, ending_for_barrier_ = false;
     bool bound_emulated_ = false;  // the render encoder's bindings are those of an emulated (mesh) pipeline
     uint32_t dirty_ = kAll;  // state_ pieces the current render encoder has not seen
     uint32_t dirty_compute_ = kAll;  // the same for the compute encoder
@@ -990,6 +998,11 @@ mtlb_result Replay::open_render_pass()
 
     if (visibility_heap_ && visibility_heap_->results)
         pass.visibilityResultBuffer = visibility_heap_->results;
+    if (last_valid_ && state_.depth == last_depth_ && std::equal(state_.targets, state_.targets + MTLB_MAX_RENDER_TARGETS, last_targets_)) {
+        stat_add(kStatPassResumes);
+        if (last_ended_by_barrier_)
+            stat_add(kStatPassResumesBarrier);
+    }
     render_ = new_render_encoder(pass);
     if (!render_)
         return fail(MTLB_ERROR_DEVICE, "renderCommandEncoderWithDescriptor failed");
@@ -1836,7 +1849,9 @@ mtlb_result Replay::barrier(const mtlb_cmd_barrier &cmd)
         return MTLB_OK;
     sync_needed_ = true;
     end_blit();
+    ending_for_barrier_ = true;
     end_render();
+    ending_for_barrier_ = false;
     if (compute_)
         [compute_ memoryBarrierWithScope:MTLBarrierScopeBuffers | MTLBarrierScopeTextures];
     return MTLB_OK;
@@ -2122,7 +2137,7 @@ void mtlb_stats_get(mtlb_stats *out)
     const auto &s = mtlb::g_stats;
     *out = {s[mtlb::kStatSubmits], s[mtlb::kStatCommandBuffers], s[mtlb::kStatRenderEncoders], s[mtlb::kStatComputeEncoders],
             s[mtlb::kStatBlitEncoders], s[mtlb::kStatBarriers], s[mtlb::kStatSyncs], s[mtlb::kStatEventQueries], s[mtlb::kStatPipelineAttempts],
-            s[mtlb::kStatGpuNanos], s[mtlb::kStatGpuBusyNanos]};
+            s[mtlb::kStatGpuNanos], s[mtlb::kStatGpuBusyNanos], s[mtlb::kStatPassResumes], s[mtlb::kStatPassResumesBarrier]};
 }
 
 mtlb_result mtlb_queue_create(mtlb_device handle, mtlb_queue *out)

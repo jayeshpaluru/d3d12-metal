@@ -9,7 +9,7 @@ tools="$game_root/tools/game"
 log="${GAME_LOG:?set GAME_LOG to the layer log file the game was launched with}"
 # (the splash screens print stats lines too; the profile menu is the first with 60+ render passes per frame)
 for _ in $(seq 180); do
-    tail -1 "$log" 2>/dev/null | grep -q "render passes [6-9][0-9]\." && break; sleep 2
+    grep "stats (per frame" "$log" 2>/dev/null | tail -1 | grep -q "render passes [6-9][0-9]\." && break; sleep 2
 done
 sleep 5
 steps=(); for _ in $(seq $((row - 1))); do steps+=(down); done
