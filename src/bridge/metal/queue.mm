@@ -71,12 +71,8 @@ private:
         kRootArgs = 1u << 3,
         kBlendFactor = 1u << 4,
         kStencilRef = 1u << 5,
-        kAll = 0x3fu,
-    };
-
-    struct VertexBuffer {
-        uint64_t address = 0;
-        uint32_t stride = 0;
+        kVertexBuffers = 1u << 6,
+        kAll = 0x7fu,
     };
 
     mtlb_result execute(const mtlb_cmd_header *cmd);
@@ -110,14 +106,13 @@ private:
     std::vector<MTLViewport> viewports_;
     std::vector<mtlb_rect> scissors_;
     uint32_t topology_ = MTLB_TOPOLOGY_TRIANGLE_LIST;
-    VertexBuffer vertex_buffers_[MTLB_MAX_VERTEX_BUFFERS];
+    IRRuntimeVertexBuffers vertex_buffers_ = {};  // read by the stage-in function
     uint64_t index_address_ = 0;
     uint32_t index_size_ = 0;
     std::vector<uint8_t> root_args_;
     float blend_factor_[4] = {1, 1, 1, 1};
     uint32_t stencil_ref_ = 0;
     uint32_t dirty_ = kAll;
-    uint32_t vertex_dirty_ = ~0u;
     NSUInteger target_width_ = 0, target_height_ = 0;
 };
 
@@ -210,7 +205,6 @@ mtlb_result Replay::begin_render_pass(const mtlb_cmd_begin_render_pass *cmd)
     if (!render_)
         return fail(MTLB_ERROR_DEVICE, "renderCommandEncoderWithDescriptor failed");
     dirty_ = kAll;
-    vertex_dirty_ = ~0u;
     return MTLB_OK;
 }
 
@@ -253,21 +247,9 @@ mtlb_result Replay::apply_state()
         [render_ setBlendColorRed:blend_factor_[0] green:blend_factor_[1] blue:blend_factor_[2] alpha:blend_factor_[3]];
     if (dirty_ & kStencilRef)
         [render_ setStencilReferenceValue:stencil_ref_];
+    if (dirty_ & kVertexBuffers)
+        [render_ setVertexBytes:vertex_buffers_ length:sizeof(vertex_buffers_) atIndex:kIRVertexBufferBindPoint];
     dirty_ = 0;
-
-    for (uint32_t slot = 0; slot < MTLB_MAX_VERTEX_BUFFERS; ++slot) {
-        if (!(vertex_dirty_ & (1u << slot)) || !vertex_buffers_[slot].address)
-            continue;
-        uint64_t offset = 0;
-        Buffer *buffer = find_buffer(queue_->device, vertex_buffers_[slot].address, &offset);
-        if (!buffer)
-            return fail(MTLB_ERROR_INVALID_ARGUMENT, "vertex buffer address does not belong to any buffer");
-        [render_ setVertexBuffer:buffer->buffer
-                          offset:offset
-                 attributeStride:vertex_buffers_[slot].stride
-                         atIndex:kIRVertexBufferBindPoint + slot];
-    }
-    vertex_dirty_ = 0;
     return MTLB_OK;
 }
 
@@ -358,14 +340,13 @@ mtlb_result Replay::reset_state()
     viewports_.clear();
     scissors_.clear();
     topology_ = MTLB_TOPOLOGY_TRIANGLE_LIST;
-    std::fill(std::begin(vertex_buffers_), std::end(vertex_buffers_), VertexBuffer{});
+    std::fill(std::begin(vertex_buffers_), std::end(vertex_buffers_), IRRuntimeVertexBuffer{});
     index_address_ = 0;
     index_size_ = 0;
     root_args_.clear();
     std::fill_n(blend_factor_, 4, 1.0f);
     stencil_ref_ = 0;
     dirty_ = kAll;
-    vertex_dirty_ = ~0u;
     return MTLB_OK;
 }
 
@@ -421,9 +402,10 @@ mtlb_result Replay::execute(const mtlb_cmd_header *header)
             || !array_fits(header->size, fixed, cmd->count, sizeof(mtlb_vertex_buffer)))
             return fail(MTLB_ERROR_INVALID_ARGUMENT, "vertex buffer slots out of range");
         for (uint32_t i = 0; i < cmd->count; ++i) {
-            vertex_buffers_[cmd->start_slot + i] = {cmd->buffers[i].gpu_address, cmd->buffers[i].stride};
-            vertex_dirty_ |= 1u << (cmd->start_slot + i);
+            vertex_buffers_[cmd->start_slot + i] = {cmd->buffers[i].gpu_address, cmd->buffers[i].size,
+                                                    cmd->buffers[i].stride};
         }
+        dirty_ |= kVertexBuffers;
         return MTLB_OK;
     }
     case MTLB_CMD_SET_INDEX_BUFFER: {

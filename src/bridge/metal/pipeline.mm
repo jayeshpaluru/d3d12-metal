@@ -46,7 +46,13 @@ std::string error_text(IRError *error, const char *what)
 // One compiler per thread: creating one per stage per pipeline is wasteful.
 IRCompiler *thread_compiler()
 {
-    thread_local OwnedCompiler compiler(IRCompilerCreate());
+    thread_local OwnedCompiler compiler;
+    if (!compiler.ptr) {
+        compiler.ptr = IRCompilerCreate();
+        // Vertex shaders fetch their inputs through a separate stage-in function
+        // (see get_stage_in) instead of Metal vertex fetch.
+        IRCompilerSetStageInGenerationMode(compiler.ptr, IRStageInCodeGenerationModeUseSeparateStageInFunction);
+    }
     return compiler.ptr;
 }
 
@@ -76,10 +82,10 @@ mtlb_result convert_stage(Device *device, RootSignature *root_signature, const v
     if (!IRObjectGetMetalLibBinary(output.ptr, ir_stage, metallib.ptr))
         return fail(MTLB_ERROR_COMPILE_FAILED, "converted shader has no metallib for the requested stage");
 
-    OwnedReflection reflection(IRShaderReflectionCreate());
-    if (!IRObjectGetReflection(output.ptr, ir_stage, reflection.ptr))
+    std::shared_ptr<IRShaderReflection> reflection(IRShaderReflectionCreate(), IRShaderReflectionDestroy);
+    if (!IRObjectGetReflection(output.ptr, ir_stage, reflection.get()))
         return fail(MTLB_ERROR_COMPILE_FAILED, "shader reflection unavailable");
-    const char *function_name = IRShaderReflectionGetEntryPointFunctionName(reflection.ptr);
+    const char *function_name = IRShaderReflectionGetEntryPointFunctionName(reflection.get());
 
     NSError *ns_error = nil;
     id<MTLLibrary> library = [device->device newLibraryWithData:IRMetalLibGetBytecodeData(metallib.ptr) error:&ns_error];
@@ -91,13 +97,11 @@ mtlb_result convert_stage(Device *device, RootSignature *root_signature, const v
 
     if (ir_stage == IRShaderStageVertex) {
         IRVersionedVSInfo info;
-        if (!IRShaderReflectionCopyVertexInfo(reflection.ptr, IRReflectionVersion_1_0, &info))
+        if (!IRShaderReflectionCopyVertexInfo(reflection.get(), IRReflectionVersion_1_0, &info))
             return fail(MTLB_ERROR_COMPILE_FAILED, "vertex reflection unavailable");
-        for (size_t i = 0; i < info.info_1_0.num_vertex_inputs; ++i) {
-            const IRVertexInputInfo_1_0 &input_info = info.info_1_0.vertex_inputs[i];
-            out.vertex_inputs.push_back({input_info.name, input_info.attributeIndex});
-        }
+        out.num_vertex_inputs = static_cast<uint32_t>(info.info_1_0.num_vertex_inputs);
         IRShaderReflectionReleaseVertexInfo(&info);
+        out.reflection = reflection;
     }
     return MTLB_OK;
 }
@@ -247,47 +251,48 @@ id<MTLDepthStencilState> get_depth_stencil(Device *device, const mtlb_pipeline_d
     return state;
 }
 
-std::string lowercase_key(const char *semantic, uint32_t index)
+// Synthesizes (or fetches from the stage's cache) the stage-in function that
+// feeds the vertex shader from the D3D12 input layout. The function reads the
+// vertex buffers and their strides at draw time from the IRRuntimeVertexBuffers
+// table the replay binds, so strides stay dynamic.
+mtlb_result get_stage_in(Device *device, ShaderStage &vs, const mtlb_pipeline_desc &desc, id<MTLFunction> *out)
 {
-    std::string key(semantic);
-    std::transform(key.begin(), key.end(), key.begin(), [](unsigned char c) { return std::tolower(c); });
-    return key + std::to_string(index);
-}
+    IRVersionedInputLayoutDescriptor layout = {};
+    layout.version = IRInputLayoutDescriptorVersion_1;
+    IRInputLayoutDescriptor1 &il = layout.desc_1_0;
+    il.numElements = desc.num_input_elements;
 
-// Maps the D3D12 input layout onto Metal vertex fetch attributes, using the
-// shader's reflected input names to find each element's attribute slot.
-mtlb_result build_vertex_descriptor(const mtlb_pipeline_desc &desc, const ShaderStage &vs, MTLVertexDescriptor **out)
-{
-    MTLVertexDescriptor *vd = [MTLVertexDescriptor vertexDescriptor];
+    std::string key;  // the layout, serialized
     for (uint32_t i = 0; i < desc.num_input_elements; ++i) {
         const mtlb_input_element &e = desc.input_elements[i];
-        MTLVertexFormat format = to_vertex_format(e.format);
-        if (format == MTLVertexFormatInvalid || e.input_slot >= MTLB_MAX_VERTEX_BUFFERS)
+        if (to_vertex_format(e.format) == MTLVertexFormatInvalid || e.input_slot >= MTLB_MAX_VERTEX_BUFFERS)
             return fail(MTLB_ERROR_UNSUPPORTED, "unsupported input element " + std::string(e.semantic_name));
-
-        const std::string key = lowercase_key(e.semantic_name, e.semantic_index);
-        auto input = std::find_if(vs.vertex_inputs.begin(), vs.vertex_inputs.end(),
-                                  [&](const VertexInput &v) { return v.name == key; });
-        if (input == vs.vertex_inputs.end())
-            continue;  // not consumed by the vertex shader
-
-        const NSUInteger buffer_index = kIRVertexBufferBindPoint + e.input_slot;
-        MTLVertexAttributeDescriptor *attribute = vd.attributes[kIRStageInAttributeStartIndex + input->attribute_index];
-        attribute.format = format;
-        attribute.offset = e.byte_offset;
-        attribute.bufferIndex = buffer_index;
-
-        // The stride arrives with IASetVertexBuffers, so it is set per draw.
-        MTLVertexBufferLayoutDescriptor *layout = vd.layouts[buffer_index];
-        layout.stride = MTLBufferLayoutStrideDynamic;
-        if (e.input_class == MTLB_INPUT_PER_INSTANCE) {
-            layout.stepFunction = MTLVertexStepFunctionPerInstance;
-            layout.stepRate = e.step_rate ? e.step_rate : 1;
-        } else {
-            layout.stepFunction = MTLVertexStepFunctionPerVertex;
-        }
+        il.semanticNames[i] = e.semantic_name;
+        il.inputElementDescs[i] = {e.semantic_index, static_cast<IRFormat>(e.format), e.input_slot, e.byte_offset,
+                                   e.input_class == MTLB_INPUT_PER_INSTANCE ? e.step_rate : 0,
+                                   e.input_class == MTLB_INPUT_PER_INSTANCE ? IRInputClassificationPerInstanceData
+                                                                            : IRInputClassificationPerVertexData};
+        key.append(reinterpret_cast<const char *>(&e), sizeof(e));
     }
-    *out = vd;
+
+    std::lock_guard<std::mutex> lock(vs.stage_in_mutex);
+    auto it = vs.stage_ins.find(key);
+    if (it != vs.stage_ins.end()) {
+        *out = it->second;
+        return MTLB_OK;
+    }
+    OwnedMetalLib metallib(IRMetalLibBinaryCreate());
+    if (!IRMetalLibSynthesizeStageInFunction(thread_compiler(), vs.reflection.get(), &layout, metallib.ptr))
+        return fail(MTLB_ERROR_COMPILE_FAILED, "stage-in function synthesis failed for the input layout");
+    NSError *ns_error = nil;
+    id<MTLLibrary> library = [device->device newLibraryWithData:IRMetalLibGetBytecodeData(metallib.ptr) error:&ns_error];
+    if (!library)
+        return fail(MTLB_ERROR_COMPILE_FAILED, std::string("stage-in library: ") + ns_error.localizedDescription.UTF8String);
+    id<MTLFunction> function = [library newFunctionWithName:library.functionNames.firstObject];
+    if (!function)
+        return fail(MTLB_ERROR_COMPILE_FAILED, "stage-in function missing from its library");
+    vs.stage_ins.emplace(std::move(key), function);
+    *out = function;
     return MTLB_OK;
 }
 
@@ -333,11 +338,15 @@ extern "C" mtlb_result mtlb_pipeline_create(mtlb_device handle, const mtlb_pipel
     pd.rasterSampleCount = desc->sample_count ? desc->sample_count : 1;
     pd.inputPrimitiveTopology = to_topology_class(desc->topology_type);
 
-    MTLVertexDescriptor *vertex_descriptor = nil;
-    result = build_vertex_descriptor(*desc, *vs, &vertex_descriptor);
-    if (result != MTLB_OK)
-        return result;
-    pd.vertexDescriptor = vertex_descriptor;
+    if (vs->num_vertex_inputs) {
+        id<MTLFunction> stage_in = nil;
+        result = get_stage_in(device, const_cast<ShaderStage &>(*vs), *desc, &stage_in);
+        if (result != MTLB_OK)
+            return result;
+        MTLLinkedFunctions *linked = [MTLLinkedFunctions new];
+        linked.functions = @[ stage_in ];
+        pd.vertexLinkedFunctions = linked;
+    }
 
     for (uint32_t i = 0; i < desc->num_render_targets; ++i) {
         if (desc->rtv_formats[i] == MTLB_FORMAT_UNKNOWN)

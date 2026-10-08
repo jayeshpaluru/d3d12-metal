@@ -27,7 +27,16 @@ foreach stage : [['vs', 'vs_6_0', 'VSMain'], ['ps', 'ps_6_0', 'PSMain']]
   )
 endforeach
 
-foreach name : ['test_triangle', 'test_cbv_table']
+foreach stage : [['vs', 'vs_6_0', 'VSMain'], ['ps', 'ps_6_0', 'PSMain']]
+  shader_headers += custom_target(
+    'vertex_input_' + stage[0],
+    input: 'shaders/vertex_input.hlsl',
+    output: 'vertex_input_' + stage[0] + '.h',
+    command: [dxc, '-T', stage[1], '-E', stage[2], '-Fh', '@OUTPUT@', '-Vn', 'g_vertex_input_' + stage[0], '@INPUT@'],
+  )
+endforeach
+
+foreach name : ['test_triangle', 'test_cbv_table', 'test_vertex_input']
   exe = executable(
     name, [name + '.cpp', shader_headers],
     include_directories: test_inc,

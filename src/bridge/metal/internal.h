@@ -21,16 +21,15 @@ namespace mtlb {
 
 struct Buffer;
 
-// One reflected vertex shader input.
-struct VertexInput {
-    std::string name;  // lower-case semantic + index, e.g. "position0"
-    uint8_t attribute_index;
-};
-
-// A converted shader stage: its Metal function and what reflection said about it.
+// A converted shader stage: its Metal function and its reflection.
 struct ShaderStage {
     id<MTLFunction> function = nil;
-    std::vector<VertexInput> vertex_inputs;
+    std::shared_ptr<IRShaderReflection> reflection;  // kept for stage-in synthesis
+    uint32_t num_vertex_inputs = 0;
+
+    // Vertex stage-in functions synthesized for this shader, by serialized input layout.
+    std::mutex stage_in_mutex;
+    std::map<std::string, id<MTLFunction>> stage_ins;
 };
 
 // (hash of the DXIL, DXIL size, root signature id, IRShaderStage, entry point)
