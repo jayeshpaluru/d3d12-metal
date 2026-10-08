@@ -468,31 +468,50 @@ void CommandList::CopyTextureRegion(const D3D12_TEXTURE_COPY_LOCATION *dst, UINT
     const UINT mips = td.MipLevels;
     const UINT mip = subresource % mips;
 
+    // The copied region spans `box` of the source image (the whole source
+    // subresource or footprint when no box is given). `texture_origin` is where
+    // the region sits in the texture; `image_origin` is where it sits inside the
+    // placed footprint, which describes a buffer-backed image.
+    UINT box_origin[3] = {0, 0, 0}, size[3];
+    if (src_box) {
+        box_origin[0] = src_box->left;
+        box_origin[1] = src_box->top;
+        box_origin[2] = src_box->front;
+        size[0] = src_box->right - src_box->left;
+        size[1] = src_box->bottom - src_box->top;
+        size[2] = src_box->back - src_box->front;
+    } else if (to_buffer) {
+        size[0] = mip_extent(static_cast<UINT>(td.Width), mip);
+        size[1] = mip_extent(td.Height, mip);
+        size[2] = td.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE3D ? mip_extent(td.DepthOrArraySize, mip) : 1;
+    } else {
+        size[0] = placed.Footprint.Width;
+        size[1] = placed.Footprint.Height;
+        size[2] = placed.Footprint.Depth;
+    }
+    const UINT dst_origin[3] = {dst_x, dst_y, dst_z};
+    const UINT *texture_origin = to_buffer ? box_origin : dst_origin;
+    const UINT *image_origin = to_buffer ? dst_origin : box_origin;
+
+    const UINT row_pitch = placed.Footprint.RowPitch;
+    const UINT slice_pitch = row_pitch * ((placed.Footprint.Height + info.block_height - 1) / info.block_height);
+
     mtlb_texture_copy_region r{};
     r.texture = texture_resource->texture();
     r.buffer = buffer_resource->buffer();
-    r.buffer_offset = placed.Offset;
-    r.bytes_per_row = placed.Footprint.RowPitch;
-    r.bytes_per_image = placed.Footprint.RowPitch * ((placed.Footprint.Height + info.block_height - 1) / info.block_height);
+    r.buffer_offset = placed.Offset + uint64_t(image_origin[2]) * slice_pitch
+                      + uint64_t(image_origin[1] / info.block_height) * row_pitch
+                      + uint64_t(image_origin[0] / info.block_width) * info.bytes_per_block;
+    r.bytes_per_row = row_pitch;
+    r.bytes_per_image = slice_pitch;
     r.mip_level = mip;
     r.array_slice = subresource / mips;
-    if (to_buffer) {
-        // The region read from the texture starts at the box (or the origin).
-        r.x = src_box ? src_box->left : 0;
-        r.y = src_box ? src_box->top : 0;
-        r.z = src_box ? src_box->front : 0;
-        r.width = src_box ? src_box->right - src_box->left : mip_extent(static_cast<UINT>(td.Width), mip);
-        r.height = src_box ? src_box->bottom - src_box->top : mip_extent(td.Height, mip);
-        r.depth = src_box ? src_box->back - src_box->front
-                          : td.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE3D ? mip_extent(td.DepthOrArraySize, mip) : 1;
-    } else {
-        r.x = dst_x;
-        r.y = dst_y;
-        r.z = dst_z;
-        r.width = src_box ? src_box->right - src_box->left : placed.Footprint.Width;
-        r.height = src_box ? src_box->bottom - src_box->top : placed.Footprint.Height;
-        r.depth = src_box ? src_box->back - src_box->front : placed.Footprint.Depth;
-    }
+    r.x = texture_origin[0];
+    r.y = texture_origin[1];
+    r.z = texture_origin[2];
+    r.width = size[0];
+    r.height = size[1];
+    r.depth = size[2];
 
     flush_clears();
     end_pass();

@@ -237,13 +237,8 @@ void Device::GetCopyableFootprints(const D3D12_RESOURCE_DESC *desc, UINT first, 
                                    D3D12_PLACED_SUBRESOURCE_FOOTPRINT *layouts, UINT *num_rows,
                                    UINT64 *row_sizes, UINT64 *total_bytes)
 {
-    D3D12_RESOURCE_DESC resolved = *desc;
-    resolved.MipLevels = static_cast<UINT16>(resolve_mip_levels(resolved));
-    if (!compute_copyable_footprints(resolved, first, count, base_offset, layouts, num_rows, row_sizes, total_bytes)) {
+    if (!compute_copyable_footprints(*desc, first, count, base_offset, layouts, num_rows, row_sizes, total_bytes))
         D3D12M_LOG("GetCopyableFootprints: unsupported format or subresource range");
-        if (total_bytes)
-            *total_bytes = UINT64_MAX;
-    }
 }
 
 HRESULT Device::MakeResident(UINT, ID3D12Pageable *const *)

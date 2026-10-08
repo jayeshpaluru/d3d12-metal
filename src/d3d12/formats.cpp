@@ -1,6 +1,8 @@
 #include "d3d12/formats.h"
 
 #include <algorithm>
+#include <climits>
+#include <cstring>
 
 namespace d3d12m {
 
@@ -53,59 +55,57 @@ bool compute_copyable_footprints(const D3D12_RESOURCE_DESC &desc, UINT first_sub
                                  D3D12_PLACED_SUBRESOURCE_FOOTPRINT *layouts, UINT *num_rows,
                                  UINT64 *row_size_in_bytes, UINT64 *total_bytes)
 {
-    UINT64 end = base_offset;
+    // Failure leaves every output all-ones, like the native runtime.
+    if (layouts)
+        std::memset(layouts, 0xff, sizeof(*layouts) * num_subresources);
+    if (num_rows)
+        std::memset(num_rows, 0xff, sizeof(*num_rows) * num_subresources);
+    if (row_size_in_bytes)
+        std::memset(row_size_in_bytes, 0xff, sizeof(*row_size_in_bytes) * num_subresources);
+    if (total_bytes)
+        *total_bytes = UINT64_MAX;
 
-    if (desc.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER) {
-        if (first_subresource != 0 || num_subresources > 1)
-            return false;
-        if (num_subresources == 1) {
-            if (layouts) {
-                layouts[0].Offset = base_offset;
-                layouts[0].Footprint = {DXGI_FORMAT_UNKNOWN, static_cast<UINT>(desc.Width), 1, 1,
-                                        static_cast<UINT>(desc.Width)};
-            }
-            if (num_rows)
-                num_rows[0] = 1;
-            if (row_size_in_bytes)
-                row_size_in_bytes[0] = desc.Width;
-            end += desc.Width;
-        }
-        if (total_bytes)
-            *total_bytes = end - base_offset;
-        return true;
-    }
-
-    mtlb_format_info info;
-    if (!get_format_info(desc.Format, &info))
+    // A buffer is one subresource of byte-sized 1x1 blocks.
+    const bool is_buffer = desc.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER;
+    mtlb_format_info info = {1, 1, 1, 0};
+    if (!is_buffer && !get_format_info(desc.Format, &info))
         return false;
-    const UINT mips = resolve_mip_levels(desc);
-    if (uint64_t(first_subresource) + num_subresources > uint64_t(mips) * array_size(desc))
+    const UINT mips = is_buffer ? 1 : resolve_mip_levels(desc);
+    const UINT64 subresource_count = is_buffer ? 1 : uint64_t(mips) * array_size(desc);
+    if (uint64_t(first_subresource) + num_subresources > subresource_count)
         return false;
 
+    // Offsets are aligned relative to base_offset, as in vkd3d-proton.
+    UINT64 offset = 0, total = 0;
     for (UINT i = 0; i < num_subresources; ++i) {
         const UINT mip = (first_subresource + i) % mips;
-        const UINT width = mip_extent(static_cast<UINT>(desc.Width), mip);
-        const UINT height = mip_extent(desc.Height, mip);
+        // Block-compressed extents are rounded up to whole blocks.
+        const UINT width = static_cast<UINT>(align_up(mip_extent(static_cast<UINT>(desc.Width), mip), info.block_width));
+        const UINT height = static_cast<UINT>(align_up(is_buffer ? 1 : mip_extent(desc.Height, mip), info.block_height));
         const UINT depth = desc.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE3D
                                ? mip_extent(desc.DepthOrArraySize, mip) : 1;
-        const UINT rows = (height + info.block_height - 1) / info.block_height;
-        const UINT64 row_size = UINT64((width + info.block_width - 1) / info.block_width) * info.bytes_per_block;
+        const UINT rows = height / info.block_height;
+        const UINT64 row_size = UINT64(width / info.block_width) * info.bytes_per_block;
         const UINT64 row_pitch = align_up(row_size, D3D12_TEXTURE_DATA_PITCH_ALIGNMENT);
 
-        const UINT64 offset = align_up(end, D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT);
         if (layouts) {
-            layouts[i].Offset = offset;
-            layouts[i].Footprint = {desc.Format, width, height, depth, static_cast<UINT>(row_pitch)};
+            layouts[i].Offset = base_offset + offset;
+            layouts[i].Footprint = {is_buffer ? DXGI_FORMAT_UNKNOWN : desc.Format, width, height, depth,
+                                    static_cast<UINT>(row_pitch)};
         }
         if (num_rows)
             num_rows[i] = rows;
         if (row_size_in_bytes)
             row_size_in_bytes[i] = row_size;
+
         // The last row of the last slice is not padded to the pitch.
-        end = offset + row_pitch * rows * (depth - 1) + row_pitch * (rows - 1) + row_size;
+        const UINT64 slice = row_pitch * (rows - 1) + row_size;
+        const UINT64 size = align_up(slice, D3D12_TEXTURE_DATA_PITCH_ALIGNMENT) * (depth - 1) + slice;
+        total = offset + size;
+        offset = align_up(total, D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT);
     }
     if (total_bytes)
-        *total_bytes = end - base_offset;
+        *total_bytes = total;
     return true;
 }
 

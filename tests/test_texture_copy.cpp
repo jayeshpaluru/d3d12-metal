@@ -1,0 +1,173 @@
+// Texture copies with sub-rectangles in both directions, and the footprints
+// that describe the buffer side of them.
+#include <cstring>
+#include <vector>
+
+#include "test_context.h"
+
+namespace {
+
+constexpr UINT kSize = 16;
+
+struct Rgba {
+    uint8_t r, g, b, a;
+};
+
+D3D12_RESOURCE_DESC texture_desc(UINT size, DXGI_FORMAT format, UINT mips)
+{
+    D3D12_RESOURCE_DESC desc = {};
+    desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    desc.Width = size;
+    desc.Height = size;
+    desc.DepthOrArraySize = 1;
+    desc.MipLevels = static_cast<UINT16>(mips);
+    desc.Format = format;
+    desc.SampleDesc.Count = 1;
+    return desc;
+}
+
+void check_footprints(TestContext &ctx)
+{
+    // Block-compressed mips round up to whole blocks: BC1 2x2 is stored as 4x4.
+    D3D12_RESOURCE_DESC bc1 = texture_desc(8, DXGI_FORMAT_BC1_UNORM, 4);
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT layouts[4] = {};
+    UINT rows[4] = {};
+    UINT64 row_sizes[4] = {}, total = 0;
+    ctx.device->GetCopyableFootprints(&bc1, 0, 4, 0, layouts, rows, row_sizes, &total);
+    CHECK(layouts[0].Footprint.Width == 8 && layouts[0].Footprint.Height == 8);
+    CHECK(layouts[2].Footprint.Width == 4 && layouts[2].Footprint.Height == 4);  // 2x2 mip
+    CHECK(layouts[3].Footprint.Width == 4 && layouts[3].Footprint.Height == 4);  // 1x1 mip
+    CHECK(rows[0] == 2 && row_sizes[0] == 16);
+    CHECK(rows[3] == 1 && row_sizes[3] == 8);
+    CHECK(layouts[0].Footprint.RowPitch == 256);
+    for (const auto &layout : layouts)
+        CHECK(layout.Offset % D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT == 0);
+
+    // Buffers: one subresource, row pitch aligned to 256, offsets relative to the base.
+    D3D12_RESOURCE_DESC buffer = {};
+    buffer.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    buffer.Width = 1000;
+    buffer.Height = 1;
+    buffer.DepthOrArraySize = 1;
+    buffer.MipLevels = 1;
+    buffer.SampleDesc.Count = 1;
+    buffer.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT layout = {};
+    UINT row_count = 0;
+    UINT64 row_size = 0;
+    ctx.device->GetCopyableFootprints(&buffer, 0, 1, 24, &layout, &row_count, &row_size, &total);
+    CHECK(layout.Offset == 24);
+    CHECK(layout.Footprint.Format == DXGI_FORMAT_UNKNOWN);
+    CHECK(layout.Footprint.Width == 1000 && layout.Footprint.Height == 1 && layout.Footprint.Depth == 1);
+    CHECK(layout.Footprint.RowPitch == 1024);
+    CHECK(row_count == 1 && row_size == 1000 && total == 1000);
+}
+
+} // namespace
+
+int main()
+{
+    TestContext ctx;
+    check_footprints(ctx);
+
+    D3D12_HEAP_PROPERTIES default_heap = {};
+    default_heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+    D3D12_RESOURCE_DESC desc = texture_desc(kSize, DXGI_FORMAT_R8G8B8A8_UNORM, 1);
+    Com<ID3D12Resource> texture;
+    CHECK_HR(ctx.device->CreateCommittedResource(&default_heap, D3D12_HEAP_FLAG_NONE, &desc,
+                                                 D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+                                                 IID_PPV_ARGS(texture.put())));
+
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint = {};
+    UINT64 total = 0;
+    ctx.device->GetCopyableFootprints(&desc, 0, 1, 0, &footprint, nullptr, nullptr, &total);
+    const UINT pitch = footprint.Footprint.RowPitch;
+
+    // Upload 1: every texel is (x, y, 0, 255).
+    std::vector<uint8_t> gradient(total), solid(total);
+    for (UINT y = 0; y < kSize; ++y) {
+        for (UINT x = 0; x < kSize; ++x) {
+            const Rgba g = {uint8_t(x), uint8_t(y), 0, 255};
+            const Rgba s = {200, 100, 50, 255};
+            std::memcpy(&gradient[y * pitch + x * 4], &g, 4);
+            std::memcpy(&solid[y * pitch + x * 4], &s, 4);
+        }
+    }
+    auto make_upload = [&](const std::vector<uint8_t> &data) {
+        Com<ID3D12Resource> buffer = ctx.create_buffer(D3D12_HEAP_TYPE_UPLOAD, total);
+        void *mapped = nullptr;
+        CHECK_HR(buffer->Map(0, nullptr, &mapped));
+        std::memcpy(mapped, data.data(), data.size());
+        buffer->Unmap(0, nullptr);
+        return buffer;
+    };
+    Com<ID3D12Resource> gradient_upload = make_upload(gradient);
+    Com<ID3D12Resource> solid_upload = make_upload(solid);
+    Com<ID3D12Resource> readback_full = ctx.create_buffer(D3D12_HEAP_TYPE_READBACK, total);
+    Com<ID3D12Resource> readback_region = ctx.create_buffer(D3D12_HEAP_TYPE_READBACK, total);
+
+    auto buffer_location = [&](ID3D12Resource *buffer) {
+        D3D12_TEXTURE_COPY_LOCATION location = {};
+        location.pResource = buffer;
+        location.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+        location.PlacedFootprint = footprint;
+        return location;
+    };
+    D3D12_TEXTURE_COPY_LOCATION texture_location = {};
+    texture_location.pResource = texture.get();
+    texture_location.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+
+    Com<ID3D12CommandAllocator> allocator;
+    CHECK_HR(ctx.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(allocator.put())));
+    Com<ID3D12GraphicsCommandList> list;
+    CHECK_HR(ctx.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator.get(), nullptr,
+                                           IID_PPV_ARGS(list.put())));
+
+    // Whole gradient first, then the 4x4 block (2..6, 2..6) of the solid image
+    // lands at texture (8, 8).
+    D3D12_TEXTURE_COPY_LOCATION src = buffer_location(gradient_upload.get());
+    list->CopyTextureRegion(&texture_location, 0, 0, 0, &src, nullptr);
+    src = buffer_location(solid_upload.get());
+    const D3D12_BOX solid_box = {2, 2, 0, 6, 6, 1};
+    list->CopyTextureRegion(&texture_location, 8, 8, 0, &src, &solid_box);
+
+    // Whole texture back, and texture region (8, 8)-(12, 12) into the readback
+    // image at (2, 3).
+    D3D12_TEXTURE_COPY_LOCATION dst = buffer_location(readback_full.get());
+    list->CopyTextureRegion(&dst, 0, 0, 0, &texture_location, nullptr);
+    dst = buffer_location(readback_region.get());
+    const D3D12_BOX texture_box = {8, 8, 0, 12, 12, 1};
+    list->CopyTextureRegion(&dst, 2, 3, 0, &texture_location, &texture_box);
+    CHECK_HR(list->Close());
+    ctx.execute_and_wait(list.get());
+
+    auto pixel = [&](ID3D12Resource *readback, UINT x, UINT y) {
+        void *mapped = nullptr;
+        CHECK_HR(readback->Map(0, nullptr, &mapped));
+        Rgba p;
+        std::memcpy(&p, static_cast<uint8_t *>(mapped) + y * pitch + x * 4, 4);
+        readback->Unmap(0, nullptr);
+        return p;
+    };
+    auto expect = [](const char *what, Rgba p, Rgba e) {
+        if (std::memcmp(&p, &e, 4) != 0) {
+            std::fprintf(stderr, "%s: got (%u,%u,%u,%u), expected (%u,%u,%u,%u)\n", what, p.r, p.g, p.b, p.a, e.r,
+                         e.g, e.b, e.a);
+            std::exit(1);
+        }
+    };
+
+    const Rgba solid_px = {200, 100, 50, 255};
+    expect("outside the patch, left", pixel(readback_full.get(), 7, 8), {7, 8, 0, 255});
+    expect("patch origin", pixel(readback_full.get(), 8, 8), solid_px);
+    expect("patch last texel", pixel(readback_full.get(), 11, 11), solid_px);
+    expect("outside the patch, right", pixel(readback_full.get(), 12, 8), {12, 8, 0, 255});
+    expect("outside the patch, below", pixel(readback_full.get(), 8, 12), {8, 12, 0, 255});
+
+    expect("region origin", pixel(readback_region.get(), 2, 3), solid_px);
+    expect("region last texel", pixel(readback_region.get(), 5, 6), solid_px);
+    expect("region left of origin", pixel(readback_region.get(), 1, 3), {0, 0, 0, 0});
+    expect("region right of end", pixel(readback_region.get(), 6, 3), {0, 0, 0, 0});
+    expect("region above origin", pixel(readback_region.get(), 2, 2), {0, 0, 0, 0});
+    return 0;
+}
