@@ -6,6 +6,8 @@
 // layer's (RGBA/BGRA order, sRGB encoding) and scales when the sizes differ.
 #include "internal.h"
 
+#import <ImageIO/ImageIO.h>
+
 #include "layer_provider.h"
 
 namespace {
@@ -88,6 +90,28 @@ mtlb_result build_pipeline(Swapchain *swapchain, MTLPixelFormat pixel_format)
     return MTLB_OK;
 }
 
+// Writes a BGRA8 texture as a PNG.
+void write_png(id<MTLTexture> texture, const std::string &path)
+{
+    const NSUInteger width = texture.width, height = texture.height, pitch = width * 4;
+    NSMutableData *pixels = [NSMutableData dataWithLength:pitch * height];
+    [texture getBytes:pixels.mutableBytes bytesPerRow:pitch fromRegion:MTLRegionMake2D(0, 0, width, height) mipmapLevel:0];
+    CGColorSpaceRef color_space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+    CGContextRef context = CGBitmapContextCreate(pixels.mutableBytes, width, height, 8, pitch, color_space,
+                                                 kCGImageAlphaNoneSkipFirst | kCGBitmapByteOrder32Little);
+    CGImageRef image = CGBitmapContextCreateImage(context);
+    NSURL *url = [NSURL fileURLWithPath:@(path.c_str())];
+    CGImageDestinationRef destination =
+        CGImageDestinationCreateWithURL((__bridge CFURLRef)url, CFSTR("public.png"), 1, nullptr);
+    CGImageDestinationAddImage(destination, image, nullptr);
+    const bool ok = CGImageDestinationFinalize(destination);
+    fprintf(stderr, "d3d12-metal: %s present dump %s\n", ok ? "wrote" : "failed to write", path.c_str());
+    CFRelease(destination);
+    CGImageRelease(image);
+    CGContextRelease(context);
+    CGColorSpaceRelease(color_space);
+}
+
 void configure_layer(CAMetalLayer *layer, MTLPixelFormat pixel_format, uint32_t width, uint32_t height)
 {
     layer.pixelFormat = pixel_format;
@@ -134,6 +158,26 @@ mtlb_result encode_present(id<MTLCommandBuffer> command_buffer, Swapchain *swapc
     [encoder setFragmentTexture:texture->texture atIndex:0];
     [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
     [encoder endEncoding];
+
+    const uint64_t present = ++swapchain->presents;
+    if (!swapchain->dump_path.empty() && present == swapchain->dump_frame) {
+        // The same pass again into a texture the CPU can read.
+        MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:drawable.texture.pixelFormat
+                                                                                       width:drawable.texture.width
+                                                                                      height:drawable.texture.height
+                                                                                   mipmapped:NO];
+        td.usage = MTLTextureUsageRenderTarget;
+        td.storageMode = MTLStorageModeShared;
+        id<MTLTexture> capture = [swapchain->device->device newTextureWithDescriptor:td];
+        pass.colorAttachments[0].texture = capture;
+        id<MTLRenderCommandEncoder> again = [command_buffer renderCommandEncoderWithDescriptor:pass];
+        [again setRenderPipelineState:swapchain->pipeline];
+        [again setFragmentTexture:texture->texture atIndex:0];
+        [again drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+        [again endEncoding];
+        const std::string path = swapchain->dump_path;
+        [command_buffer addCompletedHandler:^(id<MTLCommandBuffer>) { write_png(capture, path); }];
+    }
     [command_buffer presentDrawable:drawable];
     return MTLB_OK;
 }
@@ -161,6 +205,12 @@ mtlb_result mtlb_swapchain_create(mtlb_device handle, const mtlb_swapchain_desc 
     swapchain->device = device;
     swapchain->layer = layer;
     swapchain->format = static_cast<mtlb_format>(desc->format);
+    if (const char *dump = getenv("D3D12METAL_DUMP_PRESENT"); dump && pixel_format != MTLPixelFormatRGBA16Float
+        && pixel_format != MTLPixelFormatRGB10A2Unorm) {
+        const char *frame = getenv("D3D12METAL_DUMP_PRESENT_FRAME");
+        swapchain->dump_path = dump;
+        swapchain->dump_frame = frame ? strtoull(frame, nullptr, 10) : 30;
+    }
     if (mtlb_result result = build_pipeline(swapchain, pixel_format); result != MTLB_OK) {
         delete swapchain;
         return result;

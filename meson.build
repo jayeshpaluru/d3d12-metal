@@ -38,7 +38,7 @@ if host_system == 'windows'
   subdir('tests/wine')
 else
   metal_frameworks = [
-    dependency('appleframeworks', modules: ['Metal', 'Foundation', 'QuartzCore', 'AppKit']),
+    dependency('appleframeworks', modules: ['Metal', 'Foundation', 'QuartzCore', 'AppKit', 'ImageIO', 'CoreGraphics']),
   ]
   irconverter = cxx.find_library('metalirconverter', dirs: ['/usr/local/lib'])
   irconverter_inc = include_directories('/usr/local/include')

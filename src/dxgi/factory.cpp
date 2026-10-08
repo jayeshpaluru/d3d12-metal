@@ -5,6 +5,7 @@
 #include "common/com.h"
 #include "common/log.h"
 #include "dxgi/adapter.h"
+#include "dxgi/swapchain.h"
 #include "common/private_data.h"
 
 namespace d3d12m {
@@ -44,19 +45,26 @@ public:
         return enum_adapter(index, adapter);
     }
 
-    HRESULT STDMETHODCALLTYPE MakeWindowAssociation(HWND, UINT) override { return S_OK; }
+    // Recorded only: the layer never handles Alt+Enter or other window messages itself.
+    HRESULT STDMETHODCALLTYPE MakeWindowAssociation(HWND window, UINT) override
+    {
+        associated_window_ = window;
+        return S_OK;
+    }
 
     HRESULT STDMETHODCALLTYPE GetWindowAssociation(HWND *window) override
     {
         if (!window)
             return E_INVALIDARG;
-        *window = 0;
+        *window = associated_window_;
         return S_OK;
     }
 
-    HRESULT STDMETHODCALLTYPE CreateSwapChain(IUnknown *, DXGI_SWAP_CHAIN_DESC *, IDXGISwapChain **) override
+    HRESULT STDMETHODCALLTYPE CreateSwapChain(IUnknown *queue, DXGI_SWAP_CHAIN_DESC *desc, IDXGISwapChain **swap_chain) override
     {
-        D3D12M_STUB_HR();
+        if (!desc || !swap_chain)
+            return DXGI_ERROR_INVALID_CALL;
+        return create_swap_chain(this, queue, *desc, swap_chain);
     }
 
     HRESULT STDMETHODCALLTYPE CreateSoftwareAdapter(HMODULE, IDXGIAdapter **adapter) override
@@ -77,11 +85,13 @@ public:
     // IDXGIFactory2
     BOOL STDMETHODCALLTYPE IsWindowedStereoEnabled() override { return FALSE; }
 
-    HRESULT STDMETHODCALLTYPE CreateSwapChainForHwnd(IUnknown *, HWND, const DXGI_SWAP_CHAIN_DESC1 *,
-                                                     const DXGI_SWAP_CHAIN_FULLSCREEN_DESC *,
-                                                     IDXGIOutput *, IDXGISwapChain1 **) override
+    HRESULT STDMETHODCALLTYPE CreateSwapChainForHwnd(IUnknown *queue, HWND window, const DXGI_SWAP_CHAIN_DESC1 *desc,
+                                                     const DXGI_SWAP_CHAIN_FULLSCREEN_DESC *fullscreen,
+                                                     IDXGIOutput *, IDXGISwapChain1 **swap_chain) override
     {
-        D3D12M_STUB_HR();
+        if (!desc || !swap_chain)
+            return DXGI_ERROR_INVALID_CALL;
+        return create_swap_chain(this, queue, window, *desc, fullscreen, swap_chain);
     }
 
     HRESULT STDMETHODCALLTYPE CreateSwapChainForCoreWindow(IUnknown *, IUnknown *,
@@ -178,6 +188,7 @@ private:
     }
 
     UINT flags_;
+    HWND associated_window_ = {};
     std::vector<mtlb_device_caps> devices_;
 };
 

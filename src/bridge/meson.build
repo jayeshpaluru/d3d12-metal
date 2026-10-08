@@ -4,6 +4,7 @@ wine_dir = 'wine'
 mtlb_wine_generated = custom_target(
   'mtlb_wine_generated',
   input: 'mtlb.h',
+  depend_files: meson.project_source_root() / 'tools/gen_mtlb_wine.py',
   output: ['mtlb_wine_params.h', 'mtlb_wine_client.inc', 'mtlb_wine_unix.inc'],
   command: [find_program('python3'), meson.project_source_root() / 'tools/gen_mtlb_wine.py', '@INPUT@', '@OUTDIR@'],
 )

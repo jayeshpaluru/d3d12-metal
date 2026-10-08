@@ -118,6 +118,12 @@ struct Swapchain {
     id<MTLRenderPipelineState> pipeline;  // fullscreen triangle sampling the back buffer
     mtlb_format format;                   // of the application's back buffers
     std::atomic<bool> display_sync{true};
+
+    // Debug aid: D3D12METAL_DUMP_PRESENT=<file.png> writes what the Nth present
+    // (D3D12METAL_DUMP_PRESENT_FRAME, default 30) drew onto the drawable.
+    std::string dump_path;
+    uint64_t dump_frame = 0;
+    std::atomic<uint64_t> presents{0};
 };
 
 struct Event {

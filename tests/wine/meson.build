@@ -28,3 +28,10 @@ executable(
   cpp_args: wine_test_args,
   link_args: ['-ld3d12', '-ldxgi'],
 )
+
+executable(
+  'hello_triangle',
+  'hello_triangle.cpp', wine_shader_headers['triangle'],
+  cpp_args: wine_test_args,
+  link_args: ['-ld3d12', '-ldxgi', '-luser32', '-lgdi32'],
+)

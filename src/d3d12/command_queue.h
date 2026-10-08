@@ -11,6 +11,7 @@ public:
     static HRESULT create(Device *device, const D3D12_COMMAND_QUEUE_DESC &desc, REFIID riid, void **out);
 
     mtlb_queue handle() const { return queue_; }
+    Device *device() const { return ChildImpl::device(); }
 
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **out) override
     {

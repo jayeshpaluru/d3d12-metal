@@ -10,6 +10,39 @@ void platform_set_event(HANDLE event)
     SetEvent(event);
 }
 
+bool platform_window_client_size(HWND window, UINT *width, UINT *height)
+{
+    RECT rect;
+    if (!GetClientRect(window, &rect))
+        return false;
+    *width = rect.right - rect.left;
+    *height = rect.bottom - rect.top;
+    return true;
+}
+
+HWND platform_root_window(HWND window)
+{
+    HWND root = GetAncestor(window, GA_ROOT);
+    return root ? root : window;
+}
+
+HANDLE platform_create_event(bool signaled)
+{
+    return CreateEventW(nullptr, FALSE, signaled ? TRUE : FALSE, nullptr);
+}
+
+HANDLE platform_duplicate_event(HANDLE event)
+{
+    HANDLE copy = nullptr;
+    HANDLE process = GetCurrentProcess();
+    return DuplicateHandle(process, event, process, &copy, 0, FALSE, DUPLICATE_SAME_ACCESS) ? copy : nullptr;
+}
+
+void platform_close_event(HANDLE event)
+{
+    CloseHandle(event);
+}
+
 } // namespace d3d12m
 
 #else
@@ -38,6 +71,30 @@ void platform_set_event(HANDLE event)
         e->signaled = true;
     }
     e->signaled_cv.notify_all();
+}
+
+bool platform_window_client_size(HWND, UINT *, UINT *)
+{
+    return false;
+}
+
+HWND platform_root_window(HWND window)
+{
+    return window;
+}
+
+HANDLE platform_create_event(bool)
+{
+    return nullptr;
+}
+
+HANDLE platform_duplicate_event(HANDLE)
+{
+    return nullptr;
+}
+
+void platform_close_event(HANDLE)
+{
 }
 
 } // namespace d3d12m

@@ -7,6 +7,7 @@
 #include "common/log.h"
 #include "common/luid.h"
 #include "common/private_data.h"
+#include "dxgi/output.h"
 
 #include "bridge/mtlb.h"
 
@@ -63,11 +64,15 @@ public:
     }
 
     // IDXGIAdapter
-    HRESULT STDMETHODCALLTYPE EnumOutputs(UINT, IDXGIOutput **output) override
+    // One output, the primary display.
+    HRESULT STDMETHODCALLTYPE EnumOutputs(UINT index, IDXGIOutput **output) override
     {
-        if (output)
-            *output = nullptr;
-        return DXGI_ERROR_NOT_FOUND;
+        if (!output)
+            return DXGI_ERROR_INVALID_CALL;
+        *output = nullptr;
+        if (index != 0)
+            return DXGI_ERROR_NOT_FOUND;
+        return hand_out(create_output(this), __uuidof(IDXGIOutput), reinterpret_cast<void **>(output));
     }
 
     HRESULT STDMETHODCALLTYPE GetDesc(DXGI_ADAPTER_DESC *desc) override

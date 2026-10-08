@@ -14,6 +14,19 @@ namespace d3d12m {
 // (ID3D12Fence::SetEventOnCompletion). Win32 builds call SetEvent.
 void platform_set_event(HANDLE event);
 
+// Windows and events for swap chains. The headless native build has neither:
+// it reports no window and creates no events.
+
+// Client area size in pixels. False if `window` is not a window.
+bool platform_window_client_size(HWND window, UINT *width, UINT *height);
+// The top-level window containing `window` (itself if it is one).
+HWND platform_root_window(HWND window);
+// An auto-reset event, or null.
+HANDLE platform_create_event(bool signaled);
+// A new handle to the same event, or null.
+HANDLE platform_duplicate_event(HANDLE event);
+void platform_close_event(HANDLE event);
+
 } // namespace d3d12m
 
 // Native-build event objects, exported for the tests. They stand in for
