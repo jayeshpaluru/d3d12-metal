@@ -45,6 +45,7 @@ portable_tests = [
   ['renderpass', ['color'], []],
   ['descbench', [], []],
   ['psothreads', ['instanced'], ['fill']],
+  ['dxbc', [], []],
 ]
 
 bridge_sources = []
@@ -65,18 +66,24 @@ else
   ]
   irconverter = cxx.find_library('metalirconverter', dirs: ['/usr/local/lib'])
   irconverter_inc = include_directories('/usr/local/include')
+  # DXBC shaders go through libdxilconv (tools/build-dxilconv.sh), loaded on first use; the build tree's copy is the
+  # fallback after the directory of the module itself.
+  dxilconv_arch = host_machine.cpu_family() == 'x86_64' ? 'x86_64' : 'arm64'
+  dxilconv_dir = meson.project_source_root() / 'build-dxilconv' / dxilconv_arch
+  dxilconv_inc = include_directories('third_party/dxilconv')
+  dxilconv_args = ['-DD3D12METAL_DXILCONV_DIR="' + dxilconv_dir + '"']
 
   if wine_unix
     # The unix half of the Wine build: the Metal backend plus the unix-call table.
     shared_library(
       'd3d12metal',
       bridge_sources, bridge_wine_unix_sources,
-      include_directories: [include_directories('src'), irconverter_inc],
+      include_directories: [include_directories('src'), irconverter_inc, dxilconv_inc],
       dependencies: [metal_frameworks, irconverter],
       name_prefix: '',
       name_suffix: 'so',
       cpp_args: ['-fvisibility=hidden'],
-      objcpp_args: ['-fobjc-arc', '-fvisibility=hidden'],
+      objcpp_args: ['-fobjc-arc', '-fvisibility=hidden'] + dxilconv_args,
       link_args: ['-Wl,-install_name,@rpath/d3d12metal.so', '-Wl,-undefined,dynamic_lookup', '-Wl,-rpath,/usr/local/lib'],
     )
   else
@@ -98,10 +105,10 @@ else
     d3d12_metal = shared_library(
       'd3d12metal',
       bridge_sources, d3d12_sources, dxgi_sources,
-      include_directories: [include_directories('src'), irconverter_inc],
+      include_directories: [include_directories('src'), irconverter_inc, dxilconv_inc],
       dependencies: [directx_headers, metal_frameworks, irconverter],
       cpp_args: ['-fvisibility=hidden'],
-      objcpp_args: ['-fobjc-arc', '-fvisibility=hidden'],
+      objcpp_args: ['-fobjc-arc', '-fvisibility=hidden'] + dxilconv_args,
       install: false,
     )
 

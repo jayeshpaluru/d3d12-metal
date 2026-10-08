@@ -3,6 +3,7 @@ if host_system == 'darwin'
     'metal/descriptors.mm',
     'metal/disk_cache.mm',
     'metal/device.mm',
+    'metal/dxbc.mm',
     'metal/formats.mm',
     'metal/heap.mm',
     'metal/kernels.mm',

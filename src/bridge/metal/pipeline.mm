@@ -1,6 +1,7 @@
 // Pipeline creation: DXIL -> Metal IR via libmetalirconverter, then the Metal
 // render pipeline and depth-stencil state.
 #include "internal.h"
+#include "dxbc.h"
 
 #include <algorithm>
 #include <atomic>
@@ -49,7 +50,7 @@ std::string error_text(IRError *error, const char *what)
 constexpr IRCompatibilityFlags kCompatibilityFlags = static_cast<IRCompatibilityFlags>(
     IRCompatibilityFlagBoundsCheck | IRCompatibilityFlagTextureMinLODClamp | IRCompatibilityFlagSamplerLODBias
     | IRCompatibilityFlagSampleNanToZero | IRCompatibilityFlagPositionInvariance);
-constexpr uint32_t kCacheRevision = 1;  // bump when the conversion changes in a way the key does not capture
+constexpr uint32_t kCacheRevision = 2;  // bump when the conversion changes in a way the key does not capture
 
 // One compiler per thread: creating one per stage per pipeline is wasteful.
 IRCompiler *thread_compiler()
@@ -157,10 +158,22 @@ mtlb_result convert_stage(Device *device, RootSignature *root_signature, const v
         }
     }
 
+    // Shader Model 4/5 bytecode becomes DXIL first (the cache above is keyed on the DXBC).
+    const void *source = dxil;
+    uint64_t source_size = size;
+    std::vector<uint8_t> converted;
+    if (is_dxbc_only(dxil, size)) {
+        std::string dxbc_error;
+        if (!dxbc_to_dxil(dxil, size, converted, dxbc_error))
+            return fail(MTLB_ERROR_COMPILE_FAILED, dxbc_error);
+        source = converted.data();
+        source_size = converted.size();
+    }
+
     IRCompiler *compiler = thread_compiler();
     IRCompilerSetGlobalRootSignature(compiler, root_signature->ir);
 
-    OwnedObject input(IRObjectCreateFromDXIL(static_cast<const uint8_t *>(dxil), size, IRBytecodeOwnershipNone));
+    OwnedObject input(IRObjectCreateFromDXIL(static_cast<const uint8_t *>(source), source_size, IRBytecodeOwnershipNone));
     IRError *error = nullptr;
     OwnedObject output(IRCompilerAllocCompileAndLink(compiler, entry, input.ptr, &error));
     // The compiler outlives root signatures; do not leave it pointing at this one.

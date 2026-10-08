@@ -16,6 +16,13 @@ executable(
   link_args: wine_test_link_args,
 )
 
+# Generates the DXBC test shaders (tools/gen-dxbc-test-shaders.sh runs it under Wine).
+executable(
+  'dxbc_compile',
+  'dxbc_compile.cpp',
+  cpp_args: wine_test_args,
+)
+
 # The programs with shaders need DXC (HLSL -> DXIL header arrays g_<name>_vs and g_<name>_ps).
 dxc_option = get_option('dxc')
 dxc = find_program(dxc_option != '' ? dxc_option : 'dxc', required: false)
@@ -83,7 +90,7 @@ else
     endforeach
     executable(
       'p_' + t[0], sources,
-      include_directories: include_directories('../portable'),
+      include_directories: include_directories('../portable', '../shaders'),
       cpp_args: wine_test_args,
       link_args: wine_test_link_args,
     )

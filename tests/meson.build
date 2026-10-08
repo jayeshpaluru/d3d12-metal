@@ -89,7 +89,7 @@ foreach t : portable_tests
   endforeach
   exe = executable(
     'p_' + t[0], sources,
-    include_directories: [test_inc, include_directories('portable')],
+    include_directories: [test_inc, include_directories('portable', 'shaders')],
     dependencies: test_deps,
     link_with: d3d12_metal,
   )

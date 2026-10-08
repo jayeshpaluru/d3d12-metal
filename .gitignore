@@ -10,3 +10,4 @@ build-wine/
 captures/
 .claude/
 __pycache__/
+build-dxilconv/

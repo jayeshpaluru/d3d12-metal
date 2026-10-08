@@ -2,6 +2,7 @@
 # Builds the Wine flavour of d3d12-metal into build-wine/out:
 #   d3d12.dll, dxgi.dll              PE front-end (MinGW cross build)
 #   x86_64-unix/d3d12metal.so        Metal backend + unix-call table (x86-64 macOS)
+#   x86_64-unix/libdxilconv.dylib    DXBC -> DXIL converter (when tools/build-dxilconv.sh has run)
 #   wine_basic.exe, hello_triangle.exe   Win32 test programs
 #
 # Usage: tools/build-wine.sh [--dxc <path to dxc>]    (default: $DXC, dxc on PATH)
@@ -38,5 +39,11 @@ mkdir -p "$out/x86_64-unix"
 cp "$build/mingw/src/pe/d3d12.dll" "$build/mingw/src/pe/dxgi.dll" "$out/"
 cp "$build/mingw/tests/wine/"*.exe "$out/"
 cp "$build/unix/d3d12metal.so" "$out/x86_64-unix/"
+# DXBC (Shader Model 4/5) shaders need the converter next to the backend (tools/build-dxilconv.sh builds it).
+if [ -f "$root/build-dxilconv/x86_64/libdxilconv.dylib" ]; then
+    cp "$root/build-dxilconv/x86_64/libdxilconv.dylib" "$out/x86_64-unix/"
+else
+    echo "note: build-dxilconv/x86_64/libdxilconv.dylib is missing: DXBC shaders will be refused (tools/build-dxilconv.sh)" >&2
+fi
 echo "built $out:"
 ls -R "$out"

@@ -70,6 +70,11 @@ fi
 install_file "$game_out/d3d12.dll" d3d12.dll
 install_file "$game_out/dxgi.dll" dxgi.dll
 install_file "$game_out/x86_64-unix/d3d12metal.so" x86_64-unix/d3d12metal.so
+if [ -f "$game_out/x86_64-unix/libdxilconv.dylib" ]; then
+    install_file "$game_out/x86_64-unix/libdxilconv.dylib" x86_64-unix/libdxilconv.dylib
+else
+    echo "note: no libdxilconv.dylib (DXBC shaders will be refused): tools/build-dxilconv.sh, then tools/build-wine.sh" >&2
+fi
 
 # The configuration is written once; edit it freely (a second install keeps your changes).
 conf="$game_dir/d3d12metal.conf"
