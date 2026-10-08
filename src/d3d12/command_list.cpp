@@ -387,8 +387,8 @@ void CommandList::CopyTextureRegion(const D3D12_TEXTURE_COPY_LOCATION *dst, UINT
     }
 
     const D3D12_RESOURCE_DESC &td = texture_resource->desc();
-    const UINT mips = td.MipLevels;
-    const UINT mip = subresource % mips;
+    UINT mip, array_slice;
+    decompose_subresource(td, subresource, &mip, &array_slice);
 
     // The copied region spans `box` of the source image (the whole source
     // subresource or footprint when no box is given). `texture_origin` is where
@@ -403,9 +403,10 @@ void CommandList::CopyTextureRegion(const D3D12_TEXTURE_COPY_LOCATION *dst, UINT
         size[1] = src_box->bottom - src_box->top;
         size[2] = src_box->back - src_box->front;
     } else if (to_buffer) {
-        size[0] = mip_extent(static_cast<UINT>(td.Width), mip);
-        size[1] = mip_extent(td.Height, mip);
-        size[2] = td.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE3D ? mip_extent(td.DepthOrArraySize, mip) : 1;
+        const Extent extent = subresource_extent(td, mip);
+        size[0] = extent.width;
+        size[1] = extent.height;
+        size[2] = extent.depth;
     } else {
         size[0] = placed.Footprint.Width;
         size[1] = placed.Footprint.Height;
@@ -427,7 +428,7 @@ void CommandList::CopyTextureRegion(const D3D12_TEXTURE_COPY_LOCATION *dst, UINT
     r.bytes_per_row = row_pitch;
     r.bytes_per_image = slice_pitch;
     r.mip_level = mip;
-    r.array_slice = subresource / mips;
+    r.array_slice = array_slice;
     r.x = texture_origin[0];
     r.y = texture_origin[1];
     r.z = texture_origin[2];

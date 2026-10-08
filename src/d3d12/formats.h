@@ -32,6 +32,18 @@ UINT resolve_mip_levels(const D3D12_RESOURCE_DESC &desc);
 // Number of array slices of a texture (1 for 3D textures).
 UINT array_size(const D3D12_RESOURCE_DESC &desc);
 
+// Number of subresources: mips times array slices, or 1 for a buffer.
+UINT subresource_count(const D3D12_RESOURCE_DESC &desc);
+
+// Texel size of mip level `mip` of a texture; a buffer is {Width, 1, 1}.
+struct Extent {
+    UINT width, height, depth;
+};
+Extent subresource_extent(const D3D12_RESOURCE_DESC &desc, UINT mip);
+
+// Splits a subresource index into its mip level and array slice.
+void decompose_subresource(const D3D12_RESOURCE_DESC &desc, UINT subresource, UINT *mip, UINT *array_slice);
+
 // Implements ID3D12Device::GetCopyableFootprints for buffers and textures.
 // Returns false for unsupported formats or out-of-range subresources. The
 // returned size runs from `base_offset` to the end of the last subresource.

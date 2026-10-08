@@ -250,9 +250,7 @@ D3D12_RESOURCE_ALLOCATION_INFO Device::GetResourceAllocationInfo(UINT, UINT coun
     D3D12_RESOURCE_ALLOCATION_INFO info{0, kResourceAlignment};
     for (UINT i = 0; i < count; ++i) {
         UINT64 size = 0;
-        if (!compute_copyable_footprints(descs[i], 0, descs[i].Dimension == D3D12_RESOURCE_DIMENSION_BUFFER
-                                                          ? 1 : resolve_mip_levels(descs[i]) * array_size(descs[i]),
-                                         0, nullptr, nullptr, nullptr, &size))
+        if (!compute_copyable_footprints(descs[i], 0, subresource_count(descs[i]), 0, nullptr, nullptr, nullptr, &size))
             return {UINT64_MAX, kResourceAlignment};
         info.SizeInBytes += align_up(size, kResourceAlignment);
     }

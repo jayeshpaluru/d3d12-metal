@@ -4,6 +4,8 @@
 #include <climits>
 #include <cstring>
 
+#include <directx/d3dx12_resource_helpers.h>
+
 namespace d3d12m {
 
 mtlb_format to_mtlb_format(DXGI_FORMAT format)
@@ -36,6 +38,25 @@ UINT array_size(const D3D12_RESOURCE_DESC &desc)
     return desc.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE3D ? 1 : desc.DepthOrArraySize;
 }
 
+UINT subresource_count(const D3D12_RESOURCE_DESC &desc)
+{
+    return desc.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER ? 1 : resolve_mip_levels(desc) * array_size(desc);
+}
+
+Extent subresource_extent(const D3D12_RESOURCE_DESC &desc, UINT mip)
+{
+    if (desc.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER)
+        return {static_cast<UINT>(desc.Width), 1, 1};
+    return {mip_extent(static_cast<UINT>(desc.Width), mip), mip_extent(desc.Height, mip),
+            desc.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE3D ? mip_extent(desc.DepthOrArraySize, mip) : 1};
+}
+
+void decompose_subresource(const D3D12_RESOURCE_DESC &desc, UINT subresource, UINT *mip, UINT *array_slice)
+{
+    UINT plane;  // single-plane formats only
+    D3D12DecomposeSubresource(subresource, resolve_mip_levels(desc), array_size(desc), *mip, *array_slice, plane);
+}
+
 bool compute_copyable_footprints(const D3D12_RESOURCE_DESC &desc, UINT first_subresource,
                                  UINT num_subresources, UINT64 base_offset,
                                  D3D12_PLACED_SUBRESOURCE_FOOTPRINT *layouts, UINT *num_rows,
@@ -56,20 +77,19 @@ bool compute_copyable_footprints(const D3D12_RESOURCE_DESC &desc, UINT first_sub
     mtlb_format_info info = {1, 1, 1, 0};
     if (!is_buffer && !get_format_info(desc.Format, &info))
         return false;
-    const UINT mips = is_buffer ? 1 : resolve_mip_levels(desc);
-    const UINT64 subresource_count = is_buffer ? 1 : uint64_t(mips) * array_size(desc);
-    if (uint64_t(first_subresource) + num_subresources > subresource_count)
+    if (uint64_t(first_subresource) + num_subresources > subresource_count(desc))
         return false;
 
     // Offsets are aligned relative to base_offset, as in vkd3d-proton.
     UINT64 offset = 0, total = 0;
     for (UINT i = 0; i < num_subresources; ++i) {
-        const UINT mip = (first_subresource + i) % mips;
+        UINT mip, array_slice;
+        decompose_subresource(desc, first_subresource + i, &mip, &array_slice);
+        const Extent extent = subresource_extent(desc, mip);
         // Block-compressed extents are rounded up to whole blocks.
-        const UINT width = static_cast<UINT>(align_up(mip_extent(static_cast<UINT>(desc.Width), mip), info.block_width));
-        const UINT height = static_cast<UINT>(align_up(is_buffer ? 1 : mip_extent(desc.Height, mip), info.block_height));
-        const UINT depth = desc.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE3D
-                               ? mip_extent(desc.DepthOrArraySize, mip) : 1;
+        const UINT width = static_cast<UINT>(align_up(extent.width, info.block_width));
+        const UINT height = static_cast<UINT>(align_up(extent.height, info.block_height));
+        const UINT depth = extent.depth;
         const UINT rows = height / info.block_height;
         const UINT64 row_size = UINT64(width / info.block_width) * info.bytes_per_block;
         const UINT64 row_pitch = align_up(row_size, D3D12_TEXTURE_DATA_PITCH_ALIGNMENT);
