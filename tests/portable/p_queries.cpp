@@ -125,6 +125,36 @@ int main()
         CHECK_EQ(read_u64(bytes, 1), 0u);
         CHECK_EQ(read_u64(bytes, 2), 1u);
         CHECK_EQ(read_u64(bytes, 3), 0u);
+
+        // A query that spans two render passes (a depth clear between the draws ends the first) counts both.
+        ComPtr<ID3D12Resource> spanned = gpu.buffer(D3D12_HEAP_TYPE_READBACK, 8);
+        gpu.run([&](ID3D12GraphicsCommandList *list) {
+            list->SetGraphicsRootSignature(signature.Get());
+            list->SetPipelineState(pso.Get());
+            const D3D12_VIEWPORT viewport = {0, 0, float(kSize), float(kSize), 0, 1};
+            const D3D12_RECT scissor = {0, 0, LONG(kSize), LONG(kSize)};
+            list->RSSetViewports(1, &viewport);
+            list->RSSetScissorRects(1, &scissor);
+            D3D12_CPU_DESCRIPTOR_HANDLE rtv = rtv_heap->GetCPUDescriptorHandleForHeapStart();
+            D3D12_CPU_DESCRIPTOR_HANDLE dsv = dsv_heap->GetCPUDescriptorHandleForHeapStart();
+            list->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
+            list->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
+            list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            const float green[4] = {0, 1, 0, 1};
+            list->SetGraphicsRoot32BitConstants(0, 4, green, 0);
+            D3D12_VERTEX_BUFFER_VIEW v = view(visible.Get());
+            list->IASetVertexBuffers(0, 1, &v);
+            list->BeginQuery(heap.Get(), D3D12_QUERY_TYPE_OCCLUSION, 1);
+            list->DrawInstanced(3, 1, 0, 0);
+            list->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
+            list->DrawInstanced(3, 1, 0, 0);
+            list->EndQuery(heap.Get(), D3D12_QUERY_TYPE_OCCLUSION, 1);
+            list->ResolveQueryData(heap.Get(), D3D12_QUERY_TYPE_OCCLUSION, 1, 1, spanned.Get(), 0);
+        });
+        CHECK_HR(spanned->Map(0, nullptr, reinterpret_cast<void **>(&mapped)));
+        std::vector<uint8_t> span_bytes(mapped, mapped + 8);
+        spanned->Unmap(0, nullptr);
+        CHECK_EQ(read_u64(span_bytes, 0), 2u * green_pixels);
     }
 
     // ---- Timestamps, pipeline statistics, clock calibration ----------------------------------------------------------------

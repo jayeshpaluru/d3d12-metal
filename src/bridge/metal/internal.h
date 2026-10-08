@@ -94,12 +94,17 @@ struct Device {
     std::vector<std::pair<uint64_t, Buffer *>> buffers;
 };
 
+constexpr uint32_t kQuerySlots = 8;
+
 struct QueryHeap {
     Device *device;
     uint32_t kind;
     uint32_t count;
     id<MTLBuffer> results;                    // occlusion counts, 8 bytes per query
     id<MTLCounterSampleBuffer> samples;       // timestamps (nil where the GPU cannot sample them)
+    // Occlusion: a query that spans several render passes keeps one result slot per pass (kQuerySlots of them,
+    // `results` holds count * kQuerySlots counts); resolving sums the slots used since the query began.
+    std::vector<uint32_t> slots_used;
 };
 
 struct Heap {

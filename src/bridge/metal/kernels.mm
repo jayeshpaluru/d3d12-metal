@@ -31,6 +31,20 @@ kernel void write_immediate(device uchar *dst [[buffer(0)]], constant ulong &val
         *reinterpret_cast<device uint *>(at) = uint(value);
 }
 
+// Occlusion queries: sums the result slots a query used (one per render pass it spanned) into 64-bit results,
+// clamped to 0/1 for binary queries. `p` is {queries, binary, first query of the slots, slots per query}.
+kernel void resolve_occlusion(device const ulong *slots [[buffer(0)]], device ulong *out [[buffer(1)]],
+                              constant uint *used [[buffer(2)]], constant uint4 &p [[buffer(3)]],
+                              uint i [[thread_position_in_grid]])
+{
+    if (i >= p.x)
+        return;
+    ulong sum = 0;
+    for (uint s = 0; s < used[i]; ++s)
+        sum += slots[(p.z + i) * p.w + s];
+    out[i] = p.y ? (sum != 0 ? 1 : 0) : sum;
+}
+
 // A timestamp query takes its sample at the end of a compute pass, which needs a dispatch to exist.
 kernel void noop_kernel() {}
 

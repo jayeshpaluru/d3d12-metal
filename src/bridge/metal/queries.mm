@@ -12,10 +12,11 @@ mtlb_result mtlb_query_heap_create(mtlb_device handle, uint32_t kind, uint32_t c
     Device *device = from_handle<Device>(handle);
     if (!device || !out || count == 0)
         return MTLB_ERROR_INVALID_ARGUMENT;
-    auto *heap = new QueryHeap{device, kind, count, nil, nil};
+    auto *heap = new QueryHeap{device, kind, count, nil, nil, {}};
     if (kind == MTLB_QUERY_OCCLUSION || kind == MTLB_QUERY_BINARY_OCCLUSION) {
-        // The visibility result buffer of render passes: 8 bytes per query, shared so the CPU could read it.
-        heap->results = [device->device newBufferWithLength:uint64_t(count) * 8 options:MTLResourceStorageModeShared];
+        // The visibility result buffer of render passes: result slots of 8 bytes per query.
+        heap->slots_used.assign(count, 0);
+        heap->results = [device->device newBufferWithLength:uint64_t(count) * kQuerySlots * 8 options:MTLResourceStorageModeShared];
         if (!heap->results) {
             delete heap;
             return fail(MTLB_ERROR_OUT_OF_MEMORY, "visibility result buffer");

@@ -196,6 +196,7 @@ private:
     mtlb_result begin_query(const mtlb_cmd_query &cmd);
     mtlb_result end_query(const mtlb_cmd_query &cmd);
     mtlb_result resolve_query(const mtlb_cmd_resolve_query &cmd);
+    mtlb_result resolve_occlusion(QueryHeap *heap, const mtlb_cmd_resolve_query &cmd, Buffer *dst);
     mtlb_result marker(const mtlb_cmd_marker &cmd);
     mtlb_result write_immediate(const mtlb_cmd_write_immediate &cmd);
     mtlb_result timestamp(QueryHeap *heap, uint32_t index);
@@ -286,6 +287,15 @@ private:
             rounded <<= 1;
         return [queue_->device->device newBufferWithLength:rounded
                                                    options:MTLResourceStorageModePrivate | MTLResourceHazardTrackingModeUntracked];
+    }
+
+    // The result slot of the active occlusion query for the render pass being set up.
+    uint64_t visibility_offset()
+    {
+        uint32_t &used = visibility_heap_->slots_used[query_.index];
+        const uint32_t slot = std::min(used, kQuerySlots - 1);  // passes beyond the slots overwrite the last
+        used = std::min(used + 1, kQuerySlots);
+        return (uint64_t(query_.index) * kQuerySlots + slot) * 8;
     }
 
     void note_error(mtlb_result result);
@@ -724,7 +734,7 @@ mtlb_result Replay::apply_state()
     if (dirty_ & kHeaps)
         bind_heaps(0);
     if ((dirty_ & kQuery) && query_.active)
-        [render_ setVisibilityResultMode:query_.mode offset:uint64_t(query_.index) * 8];
+        [render_ setVisibilityResultMode:query_.mode offset:visibility_offset()];
     dirty_ = 0;
     return MTLB_OK;
 }
@@ -976,8 +986,9 @@ mtlb_result Replay::begin_query(const mtlb_cmd_query &cmd)
     query_.active = true;
     query_.index = cmd.index;
     query_.mode = cmd.type == MTLB_QUERY_BINARY_OCCLUSION ? MTLVisibilityResultModeBoolean : MTLVisibilityResultModeCounting;
+    heap->slots_used[cmd.index] = 0;
     if (render_)
-        [render_ setVisibilityResultMode:query_.mode offset:uint64_t(cmd.index) * 8];
+        [render_ setVisibilityResultMode:query_.mode offset:visibility_offset()];
     else
         dirty_ |= kQuery;
     return MTLB_OK;
@@ -1050,6 +1061,8 @@ mtlb_result Replay::resolve_query(const mtlb_cmd_resolve_query &cmd)
         timestamp_resolves_.push_back({heap->samples, dst->buffer, cmd.dst_offset, cmd.start, cmd.count});
         return MTLB_OK;
     }
+    if ((cmd.type == MTLB_QUERY_OCCLUSION || cmd.type == MTLB_QUERY_BINARY_OCCLUSION) && heap->results)
+        return resolve_occlusion(heap, cmd, dst);
     id<MTLBlitCommandEncoder> enc = blit();
     if (element != 8 || cmd.type == MTLB_QUERY_PIPELINE_STATISTICS || cmd.type == MTLB_QUERY_SO_STATISTICS) {
         [enc fillBuffer:dst->buffer range:NSMakeRange(cmd.dst_offset, bytes) value:0];
@@ -1059,6 +1072,33 @@ mtlb_result Replay::resolve_query(const mtlb_cmd_resolve_query &cmd)
         [enc copyFromBuffer:heap->results sourceOffset:uint64_t(cmd.start) * 8 toBuffer:dst->buffer
           destinationOffset:cmd.dst_offset size:bytes];
     }
+    return MTLB_OK;
+}
+
+// Sums the result slots of each query on the GPU, after the render passes that wrote them.
+mtlb_result Replay::resolve_occlusion(QueryHeap *heap, const mtlb_cmd_resolve_query &cmd, Buffer *dst)
+{
+    id<MTLComputePipelineState> kernel = internal_kernel(queue_->device, @"resolve_occlusion");
+    if (!kernel)
+        return MTLB_ERROR_COMPILE_FAILED;
+    end_blit();
+    end_render();
+    sync_needed_ = !sync_disabled_;
+    id<MTLComputeCommandEncoder> enc = compute();
+    constexpr uint32_t kChunk = 512;  // setBytes takes at most 4 KB
+    for (uint32_t done = 0; done < cmd.count; done += kChunk) {
+        const uint32_t n = std::min(kChunk, cmd.count - done);
+        const uint32_t params[4] = {n, cmd.type == MTLB_QUERY_BINARY_OCCLUSION ? 1u : 0u, cmd.start + done, kQuerySlots};
+        [enc setComputePipelineState:kernel];
+        [enc setBuffer:heap->results offset:0 atIndex:0];
+        [enc setBuffer:dst->buffer offset:cmd.dst_offset + uint64_t(done) * 8 atIndex:1];
+        [enc setBytes:&heap->slots_used[cmd.start + done] length:n * 4 atIndex:2];
+        [enc setBytes:params length:sizeof(params) atIndex:3];
+        [enc dispatchThreads:MTLSizeMake(n, 1, 1) threadsPerThreadgroup:MTLSizeMake(std::min<uint32_t>(n, 64), 1, 1)];
+    }
+    dirty_compute_ = kAll;
+    end_compute();
+    sync_needed_ = !sync_disabled_;
     return MTLB_OK;
 }
 
