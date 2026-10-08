@@ -2,6 +2,7 @@
 #include "d3d12/command_stream.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 
 #include "common/platform.h"
@@ -15,10 +16,6 @@
 #include "d3d12/resource.h"
 
 namespace d3d12m {
-
-namespace {
-
-} // namespace
 
 // Drops the list's internal reference to a root signature.
 static void release_signature(RootSignature *&signature)
@@ -44,7 +41,9 @@ bool CommandList::resolve_attachment(D3D12_CPU_DESCRIPTOR_HANDLE handle, D3D12_D
         return true;  // a null view: the slot stays unbound
     Resource *resource = device()->acquire_attachment(view.resource_id);
     if (!resource) {
-        D3D12M_LOG("a render target or depth-stencil view names a resource that has been destroyed: treated as null");
+        static std::atomic<bool> logged{false};
+        if (!logged.exchange(true))
+            D3D12M_LOG("a render target or depth-stencil view names a resource that has been destroyed: treated as null (logged once)");
         return true;
     }
     refs_.adopt(resource);
@@ -245,22 +244,25 @@ void CommandList::OMSetRenderTargets(UINT count, const D3D12_CPU_DESCRIPTOR_HAND
 void CommandList::set_render_targets(UINT count, const D3D12_CPU_DESCRIPTOR_HANDLE *rtvs, bool single_handle_to_range,
                                      const D3D12_CPU_DESCRIPTOR_HANDLE *dsv, uint32_t extra_depth_flags)
 {
-    if (closed_ || count > MTLB_MAX_RENDER_TARGETS || (count && !rtvs) || (dsv && !dsv->ptr))
+    if (closed_ || count > MTLB_MAX_RENDER_TARGETS || (count && !rtvs))
         return;
     mtlb_render_target targets[MTLB_MAX_RENDER_TARGETS];
+    // A handle that is not a descriptor of the right heap type binds nothing in its slot (a null view); the rest of the
+    // call still takes effect, so the previous targets are never silently kept.
     for (UINT i = 0; i < count; ++i) {
-        if (!rtvs[single_handle_to_range ? 0 : i].ptr)
-            return;
         const D3D12_CPU_DESCRIPTOR_HANDLE handle = single_handle_to_range
                                                        ? D3D12_CPU_DESCRIPTOR_HANDLE{rtvs[0].ptr + i * kDescriptorSize}
                                                        : rtvs[i];
-        if (!resolve_attachment(handle, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, &targets[i], nullptr))
-            return;
+        targets[i] = {};
+        if (handle.ptr)
+            resolve_attachment(handle, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, &targets[i], nullptr);  // empty when invalid
     }
     mtlb_render_target depth = {};
     uint32_t depth_flags = 0;
-    if (dsv && !resolve_attachment(*dsv, D3D12_DESCRIPTOR_HEAP_TYPE_DSV, &depth, &depth_flags))
-        return;
+    if (dsv && dsv->ptr && !resolve_attachment(*dsv, D3D12_DESCRIPTOR_HEAP_TYPE_DSV, &depth, &depth_flags)) {
+        depth = {};
+        depth_flags = 0;
+    }
     auto *cmd = append<mtlb_cmd_set_render_targets>(MTLB_CMD_SET_RENDER_TARGETS, count * sizeof(mtlb_render_target));
     cmd->count = count;
     cmd->depth = depth;

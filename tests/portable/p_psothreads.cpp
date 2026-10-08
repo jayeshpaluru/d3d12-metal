@@ -128,6 +128,28 @@ int main()
     const t12::Image image = gpu.read_texture(target.Get(), 0, 4);
     t12::expect_pixel("centre", image.pixel(kSize / 2, kSize / 2), {255, 0, 0, 255});
     t12::expect_pixel("corner", image.pixel(0, 0), {0, 0, 255, 255});
+
+    // A render target handle that is not a descriptor binds nothing: the previous targets are not kept, so this draw
+    // (red triangle) does not reach the target, which was cleared to green first.
+    gpu.run([&](ID3D12GraphicsCommandList *list) {
+        const D3D12_VIEWPORT viewport = {0, 0, float(kSize), float(kSize), 0, 1};
+        const D3D12_RECT scissor = {0, 0, LONG(kSize), LONG(kSize)};
+        D3D12_CPU_DESCRIPTOR_HANDLE rtv = rtv_heap->GetCPUDescriptorHandleForHeapStart();
+        const D3D12_CPU_DESCRIPTOR_HANDLE bogus = {16};
+        list->SetGraphicsRootSignature(signature.Get());
+        list->SetPipelineState(pso.Get());
+        list->RSSetViewports(1, &viewport);
+        list->RSSetScissorRects(1, &scissor);
+        list->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
+        const float green[4] = {0, 1, 0, 1};
+        list->ClearRenderTargetView(rtv, green, 0, nullptr);
+        list->OMSetRenderTargets(1, &bogus, FALSE, nullptr);
+        list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        list->IASetVertexBuffers(0, 2, views);
+        list->DrawInstanced(3, 1, 0, 0);
+    });
+    const t12::Image after = gpu.read_texture(target.Get(), 0, 4);
+    t12::expect_pixel("centre after a draw with a bad target handle", after.pixel(kSize / 2, kSize / 2), {0, 255, 0, 255});
     std::printf("p_psothreads: OK (%zu pipelines)\n", pipelines.size());
     return 0;
 }
