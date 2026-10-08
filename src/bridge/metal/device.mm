@@ -26,15 +26,18 @@ Buffer *find_buffer(Device *device, uint64_t address, uint64_t *offset)
     std::shared_lock<std::shared_mutex> lock(device->buffers_mutex);
     auto it = std::upper_bound(device->buffers.begin(), device->buffers.end(), address,
                                [](uint64_t a, const std::pair<uint64_t, Buffer *> &b) { return a < b.first; });
-    // Buffers placed over each other in a heap overlap: the nearest start below may be a short one, so look
-    // back through the buffers that start at or before the address until one covers it.
-    for (int steps = 0; it != device->buffers.begin() && steps < 64; ++steps) {
+    // The table has committed buffers and whole-heap buffers, which do not overlap. A placed buffer of a heap
+    // too large for a whole-heap buffer is there itself and may overlap others: look back through the ones
+    // that start at or before the address until one covers it.
+    while (it != device->buffers.begin()) {
         --it;
         Buffer *buffer = it->second;
         if (address - buffer->gpu_address < buffer->size) {
             *offset = address - buffer->gpu_address;
             return buffer;
         }
+        if (!buffer->placed || buffer->whole_heap)
+            break;  // these overlap nothing: no buffer before this one reaches the address
     }
     return nullptr;
 }

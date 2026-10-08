@@ -106,6 +106,9 @@ struct Heap {
     Device *device;
     id<MTLHeap> heap;
     mtlb_storage storage;
+    // A buffer over the whole heap, which is what the address table holds for it: buffers placed over each
+    // other would overlap there. Absent for a heap larger than a buffer can be.
+    Buffer *alias = nullptr;
 };
 
 struct Buffer {
@@ -117,6 +120,8 @@ struct Buffer {
     uint64_t gpu_address;
     uint64_t size;
     bool placed = false;  // lives in a heap, which owns its residency
+    bool whole_heap = false;  // stands for a whole heap in the address table (never overlaps)
+    bool registered = false;  // in the device's address table (see find_buffer)
 
     // Texture buffer views (typed views and UAV counters), created on first use and kept for the
     // buffer's life: (byte offset, pixel format, texel count, writable).

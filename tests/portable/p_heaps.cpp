@@ -167,6 +167,32 @@ int main()
         CHECK(d == 0.0f);
     }
 
+    // ---- Many buffers placed inside a large one: addresses in the large one still resolve ----------------------------------
+    {
+        ComPtr<ID3D12Heap> big_heap = create_heap(gpu, D3D12_HEAP_TYPE_DEFAULT, 4 * kMiB);
+        ComPtr<ID3D12Resource> large = place(gpu, big_heap.Get(), 0, buffer_desc(2 * kMiB));
+        std::vector<ComPtr<ID3D12Resource>> small;
+        for (int i = 0; i < 150; ++i)
+            small.push_back(place(gpu, big_heap.Get(), 4096 * (i + 1), buffer_desc(256)));
+        ComPtr<ID3D12Resource> readback = gpu.buffer(D3D12_HEAP_TYPE_READBACK, 16);
+        ComPtr<ID3D12GraphicsCommandList> list = gpu.list();
+        ComPtr<ID3D12GraphicsCommandList2> list2;
+        CHECK_HR(list.As(&list2));
+        // Past all the small buffers, and inside one of them (reached through the large one's address).
+        const D3D12_WRITEBUFFERIMMEDIATE_PARAMETER params[2] = {{large->GetGPUVirtualAddress() + kMiB + 8, 0x12345678u},
+                                                                {large->GetGPUVirtualAddress() + 4096 * 3 + 16, 0x9ABCDEF0u}};
+        list2->WriteBufferImmediate(2, params, nullptr);
+        list->CopyBufferRegion(readback.Get(), 0, large.Get(), kMiB + 8, 4);
+        list->CopyBufferRegion(readback.Get(), 4, large.Get(), 4096 * 3 + 16, 4);
+        gpu.run(list.Get());
+        const std::vector<uint8_t> bytes = gpu.read_buffer(readback.Get(), 8);
+        uint32_t a, b;
+        std::memcpy(&a, bytes.data(), 4);
+        std::memcpy(&b, bytes.data() + 4, 4);
+        CHECK_EQ(a, 0x12345678u);
+        CHECK_EQ(b, 0x9ABCDEF0u);
+    }
+
     // ---- A rejected submission keeps the pending clears for the next one ------------------------------------------------
     {
         ComPtr<ID3D12Heap> scratch = create_heap(gpu, D3D12_HEAP_TYPE_DEFAULT, 2 * kMiB);

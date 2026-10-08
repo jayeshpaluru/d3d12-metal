@@ -9,6 +9,7 @@ namespace mtlb {
 void register_buffer(Buffer *buffer)
 {
     Device *device = buffer->device;
+    buffer->registered = true;
     std::lock_guard<std::shared_mutex> lock(device->buffers_mutex);
     auto at = std::lower_bound(device->buffers.begin(), device->buffers.end(), buffer->gpu_address,
                                [](const std::pair<uint64_t, Buffer *> &b, uint64_t a) { return b.first < a; });
@@ -17,6 +18,8 @@ void register_buffer(Buffer *buffer)
 
 void unregister_buffer(Buffer *buffer)
 {
+    if (!buffer->registered)
+        return;
     Device *device = buffer->device;
     std::lock_guard<std::shared_mutex> lock(device->buffers_mutex);
     auto &buffers = device->buffers;
@@ -121,7 +124,19 @@ mtlb_result mtlb_heap_create(mtlb_device handle, uint64_t size, mtlb_storage sto
     if (!mtl_heap)
         return fail(MTLB_ERROR_OUT_OF_MEMORY, "newHeapWithDescriptor failed");
     device->add_resident(mtl_heap);
-    *out = to_handle(new Heap{device, mtl_heap, storage});
+    auto *heap = new Heap{device, mtl_heap, storage};
+    if (size <= device->device.maxBufferLength) {
+        const MTLResourceOptions options = (storage == MTLB_STORAGE_SHARED ? MTLResourceStorageModeShared : MTLResourceStorageModePrivate)
+                                           | MTLResourceHazardTrackingModeUntracked;
+        id<MTLBuffer> whole = [mtl_heap newBufferWithLength:size options:options offset:0];
+        if (whole) {
+            heap->alias = new Buffer(device, whole, whole.gpuAddress, size);
+            heap->alias->placed = true;
+            heap->alias->whole_heap = true;
+            register_buffer(heap->alias);
+        }
+    }
+    *out = to_handle(heap);
     return MTLB_OK;
 }
 
@@ -131,6 +146,10 @@ void mtlb_heap_destroy(mtlb_heap handle)
     if (!heap)
         return;
     heap->device->remove_resident(heap->heap);
+    if (heap->alias) {
+        unregister_buffer(heap->alias);
+        delete heap->alias;
+    }
     delete heap;
 }
 
@@ -147,7 +166,9 @@ mtlb_result mtlb_buffer_create_in_heap(mtlb_heap handle, uint64_t offset, uint64
         return fail(MTLB_ERROR_OUT_OF_MEMORY, "newBufferWithLength:options:offset: failed (offset misaligned or heap full)");
     auto *buffer = new Buffer(heap->device, mtl_buffer, mtl_buffer.gpuAddress, size);
     buffer->placed = true;
-    register_buffer(buffer);
+    // The heap's own buffer stands for it in the address table when the addresses agree.
+    if (!heap->alias || mtl_buffer.gpuAddress != heap->alias->gpu_address + offset)
+        register_buffer(buffer);
     if (info) {
         info->cpu_ptr = heap->storage == MTLB_STORAGE_SHARED ? mtl_buffer.contents : nullptr;
         info->gpu_address = buffer->gpu_address;
