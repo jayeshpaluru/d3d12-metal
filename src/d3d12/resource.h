@@ -6,6 +6,7 @@
 #include <mutex>
 
 #include "bridge/mtlb.h"
+#include "d3d12/heap.h"
 #include "d3d12/object.h"
 
 namespace d3d12m {
@@ -14,6 +15,11 @@ class Resource final : public ChildImpl<ID3D12Resource2> {
 public:
     static HRESULT create_committed(Device *device, const D3D12_HEAP_PROPERTIES &heap,
                                     const D3D12_RESOURCE_DESC &desc, REFIID riid, void **out);
+    // A resource at `offset` of a heap; it may overlap other resources of the heap.
+    static HRESULT create_placed(Device *device, Heap *heap, UINT64 offset, const D3D12_RESOURCE_DESC &desc,
+                                 REFIID riid, void **out);
+    // Clears a placed render target or depth-stencil texture to zero (see Device::take_pending_init).
+    bool needs_initial_clear() const { return needs_init_; }
 
     bool is_buffer() const { return desc_.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER; }
     mtlb_buffer buffer() const { return buffer_; }
@@ -53,8 +59,8 @@ private:
                 desc_.Format, desc_.SampleDesc, desc_.Layout, desc_.Flags, {}};
     }
 
-    HRESULT init_buffer();
-    HRESULT init_texture();
+    HRESULT init_buffer(Heap *heap, UINT64 offset);
+    HRESULT init_texture(Heap *heap, UINT64 offset);
 
     D3D12_RESOURCE_DESC desc_{};
     D3D12_HEAP_PROPERTIES heap_{};
@@ -62,6 +68,8 @@ private:
     mtlb_texture texture_ = 0;
     uint8_t *cpu_ptr_ = nullptr;
     uint64_t gpu_address_ = 0;
+    Heap *placed_in_ = nullptr;  // owned reference
+    bool needs_init_ = false;
 
     std::mutex views_mutex_;
     std::map<std::array<uint32_t, 8>, uint64_t> views_;

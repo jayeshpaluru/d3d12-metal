@@ -12,6 +12,7 @@ d3d12_sources += files(
   'exports.cpp',
   'fence.cpp',
   'formats.cpp',
+  'heap.cpp',
   'pipeline_state.cpp',
   'pipeline_stream.cpp',
   'resource.cpp',
