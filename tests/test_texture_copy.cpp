@@ -48,12 +48,58 @@ void check_footprints(TestContext &ctx)
     CHECK(row_count == 1 && row_size == 1000 && total == 1000);
 }
 
+// Uploads with block-rounded footprints: a 2x2 mip is reported as 4x4 and a
+// destination origin leaves less room than the footprint covers. Neither may
+// copy past the texture.
+void check_bc1_small_mips(TestContext &ctx)
+{
+    const CD3DX12_HEAP_PROPERTIES heap(D3D12_HEAP_TYPE_DEFAULT);
+    D3D12_RESOURCE_DESC desc = texture_desc(8, DXGI_FORMAT_BC1_UNORM, 4);
+    ComPtr<ID3D12Resource> texture;
+    CHECK_HR(ctx.device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_COPY_DEST,
+                                                 nullptr, IID_PPV_ARGS(texture.ReleaseAndGetAddressOf())));
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT layouts[4] = {};
+    UINT64 total = 0;
+    ctx.device->GetCopyableFootprints(&desc, 0, 4, 0, layouts, nullptr, nullptr, &total);
+
+    std::vector<uint8_t> data(total);
+    for (size_t i = 0; i < data.size(); ++i)
+        data[i] = static_cast<uint8_t>(i * 13 + 1);
+    ComPtr<ID3D12Resource> upload = ctx.create_upload_buffer(data.data(), total);
+    ComPtr<ID3D12Resource> readback = ctx.create_buffer(D3D12_HEAP_TYPE_READBACK, total);
+
+    ComPtr<ID3D12GraphicsCommandList> list = ctx.create_list();
+    for (UINT mip = 0; mip < 4; ++mip) {
+        const CD3DX12_TEXTURE_COPY_LOCATION dst(texture.Get(), mip), src(upload.Get(), layouts[mip]);
+        // Mip 0 goes to the lower right quadrant, so the 8x8 footprint overhangs.
+        const UINT origin = mip == 0 ? 4 : 0;
+        list->CopyTextureRegion(&dst, origin, origin, 0, &src, nullptr);
+    }
+    // Read mips 1 to 3 back (mip 0 only holds one quadrant).
+    for (UINT mip = 1; mip < 4; ++mip) {
+        const CD3DX12_TEXTURE_COPY_LOCATION dst(readback.Get(), layouts[mip]), src(texture.Get(), mip);
+        list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+    }
+    CHECK_HR(list->Close());
+    ctx.execute_and_wait(list.Get());
+
+    void *mapped = nullptr;
+    CHECK_HR(readback->Map(0, nullptr, &mapped));
+    for (UINT mip = 1; mip < 4; ++mip) {
+        // Each of these mips is a single block of 8 bytes at the start of its footprint.
+        const uint8_t *got = static_cast<uint8_t *>(mapped) + layouts[mip].Offset;
+        CHECK(std::memcmp(got, data.data() + layouts[mip].Offset, 8) == 0);
+    }
+    readback->Unmap(0, nullptr);
+}
+
 } // namespace
 
 int main()
 {
     TestContext ctx;
     check_footprints(ctx);
+    check_bc1_small_mips(ctx);
 
     const CD3DX12_HEAP_PROPERTIES default_heap(D3D12_HEAP_TYPE_DEFAULT);
     D3D12_RESOURCE_DESC desc = texture_desc(kSize, DXGI_FORMAT_R8G8B8A8_UNORM, 1);

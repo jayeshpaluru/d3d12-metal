@@ -410,9 +410,11 @@ void CommandList::CopyTextureRegion(const D3D12_TEXTURE_COPY_LOCATION *dst, UINT
         size[1] = extent.height;
         size[2] = extent.depth;
     } else {
-        size[0] = placed.Footprint.Width;
-        size[1] = placed.Footprint.Height;
-        size[2] = placed.Footprint.Depth;
+        // The footprint may be larger than the mip (block-rounded); stop at the texture's edge.
+        const Extent extent = subresource_extent(td, mip);
+        size[0] = std::min(placed.Footprint.Width, extent.width > dst_x ? extent.width - dst_x : 0);
+        size[1] = std::min(placed.Footprint.Height, extent.height > dst_y ? extent.height - dst_y : 0);
+        size[2] = std::min(placed.Footprint.Depth, extent.depth > dst_z ? extent.depth - dst_z : 0);
     }
     const UINT dst_origin[3] = {dst_x, dst_y, dst_z};
     const UINT *texture_origin = to_buffer ? box_origin : dst_origin;
