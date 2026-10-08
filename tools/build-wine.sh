@@ -1,6 +1,7 @@
 #!/bin/bash
 # Builds the Wine flavour of d3d12-metal into build-wine/out:
 #   d3d12.dll, dxgi.dll              PE front-end (MinGW cross build)
+#   winrt_shim.dll                   ApiInformation stand-in for games (see src/pe/winrt_shim.c)
 #   x86_64-unix/d3d12metal.so        Metal backend + unix-call table (x86-64 macOS)
 #   wine_basic.exe, hello_triangle.exe   Win32 test programs
 #
@@ -35,7 +36,7 @@ setup_and_compile unix macos-x86_64.txt
 
 rm -rf "$out"
 mkdir -p "$out/x86_64-unix"
-cp "$build/mingw/src/pe/d3d12.dll" "$build/mingw/src/pe/dxgi.dll" "$out/"
+cp "$build/mingw/src/pe/d3d12.dll" "$build/mingw/src/pe/dxgi.dll" "$build/mingw/src/pe/winrt_shim.dll" "$out/"
 cp "$build/mingw/tests/wine/"*.exe "$out/"
 cp "$build/unix/d3d12metal.so" "$out/x86_64-unix/"
 echo "built $out:"

@@ -9,6 +9,13 @@ executable(
   link_args: wine_test_link_args,
 )
 
+executable(
+  'exports_test',
+  'exports_test.cpp',
+  cpp_args: wine_test_args,
+  link_args: wine_test_link_args,
+)
+
 # The programs with shaders need DXC (HLSL -> DXIL header arrays g_<name>_vs and g_<name>_ps).
 dxc_option = get_option('dxc')
 dxc = find_program(dxc_option != '' ? dxc_option : 'dxc', required: false)

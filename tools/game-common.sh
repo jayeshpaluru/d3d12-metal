@@ -20,6 +20,10 @@ game_screens="$game_root/build-wine/game-screens"
 override_key="HKCU\\Software\\Wine\\AppDefaults\\$GAME_EXE\\DllOverrides"
 override_dlls=(d3d12 d3d12core dxgi)
 manifest_name=".d3d12metal-install"
+# Wine's wintypes.dll stubs Windows.Foundation.Metadata.ApiInformation with E_NOTIMPL, which kills C++/WinRT callers;
+# the install points that class at winrt_shim.dll instead (HKLM, so it applies to every process of the prefix).
+apiinfo_key='HKLM\Software\Microsoft\WindowsRuntime\ActivatableClassId\Windows.Foundation.Metadata.ApiInformation'
+apiinfo_builtin='C:\windows\system32\wintypes.dll'
 
 dry_run=0
 # run <command...>: runs it, or only prints it under --dry-run.

@@ -5,7 +5,10 @@
 #include <chrono>
 #include <iterator>
 
+#include <cstdlib>
+
 #include "common/com.h"
+#include "common/config.h"
 #include "common/log.h"
 #include "common/luid.h"
 #include "common/private_data.h"
@@ -18,6 +21,13 @@ namespace d3d12m {
 namespace {
 
 constexpr UINT kVendorIdApple = 0x106B;
+
+// A hexadecimal option ("VENDOR_ID"), or `fallback` when it is not set.
+UINT config_hex(const char *key, UINT fallback)
+{
+    const char *value = config_get(key);
+    return value && *value ? static_cast<UINT>(std::strtoul(value, nullptr, 16)) : fallback;
+}
 
 // Copies the members shared by all three adapter description structs.
 template <typename Desc>
@@ -46,7 +56,8 @@ public:
         for (size_t i = 0; i < max_chars && caps.name[i]; i++)
             desc_.Description[i] = static_cast<unsigned char>(caps.name[i]);
 
-        desc_.VendorId = kVendorIdApple;
+        desc_.VendorId = config_hex("VENDOR_ID", kVendorIdApple);
+        desc_.DeviceId = config_hex("DEVICE_ID", 0);
         desc_.DedicatedVideoMemory = caps.recommended_max_working_set_size;
         desc_.SharedSystemMemory = caps.recommended_max_working_set_size;
         desc_.AdapterLuid = luid_from_registry_id(caps.registry_id);

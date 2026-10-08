@@ -1,0 +1,4 @@
+LIBRARY winrt_shim
+EXPORTS
+    DllGetActivationFactory
+    DllCanUnloadNow

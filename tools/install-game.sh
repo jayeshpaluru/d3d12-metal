@@ -20,7 +20,7 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-for f in d3d12.dll dxgi.dll x86_64-unix/d3d12metal.so; do
+for f in d3d12.dll dxgi.dll winrt_shim.dll x86_64-unix/d3d12metal.so; do
     [ -f "$game_out/$f" ] || { echo "missing $game_out/$f (run tools/build-wine.sh first)" >&2; exit 2; }
 done
 need_wine
@@ -70,6 +70,7 @@ fi
 install_file "$game_out/d3d12.dll" d3d12.dll
 install_file "$game_out/dxgi.dll" dxgi.dll
 install_file "$game_out/x86_64-unix/d3d12metal.so" x86_64-unix/d3d12metal.so
+install_file "$game_out/winrt_shim.dll" winrt_shim.dll
 
 # The configuration is written once; edit it freely (a second install keeps your changes).
 conf="$game_dir/d3d12metal.conf"
@@ -108,4 +109,7 @@ done
 if [ "$dry_run" = 0 ]; then
     wine_cmd reg query "$override_key" | tr -d '\r' | grep REG_SZ | sed 's/^ */  /'
 fi
+shim_path="C:\\$(echo "${game_dir#$(game_prefix)/drive_c/}" | tr / '\\')\\winrt_shim.dll"
+echo "registry:     ApiInformation -> $shim_path"
+run wine_cmd reg add "$apiinfo_key" /v DllPath /t REG_SZ /d "$shim_path" /f >/dev/null
 echo "done."

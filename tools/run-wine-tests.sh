@@ -3,6 +3,7 @@
 #   wine_basic.exe                  device, copies, offscreen triangle, fence events
 #   p_*.exe                         the portable tests (tests/portable), also run natively
 #   hello_samples.exe texture|constbuffers   D3D12HelloTexture / HelloConstBuffers in a window
+#   exports_test.exe                dxgi.dll/d3d12.dll exports are code, not forwarders (read as AGS does)
 #   swapchain_test.exe              swap chain on a window: latency object, resize, formats, outputs
 #   hello_triangle.exe --selftest   renders in a window, reads the back buffer, checks pixels
 #   hello_triangle.exe --frames 300 on screen; the presented frame is checked, and so is a
@@ -23,7 +24,7 @@ WINE_ROOT="${WINE_ROOT:-/Users/jsp/code/deps/wine/Wine Devel.app/Contents/Resour
 export WINEPREFIX="${WINEPREFIX:-/Users/jsp/code/deps/wineprefix}"
 
 for path in "$out/d3d12.dll" "$out/dxgi.dll" "$out/x86_64-unix/d3d12metal.so" "$out/wine_basic.exe" \
-            "$out/swapchain_test.exe" "$out/hello_triangle.exe" "$out/hello_samples.exe" "$WINE_ROOT/bin/wine"; do
+            "$out/swapchain_test.exe" "$out/exports_test.exe" "$out/hello_triangle.exe" "$out/hello_samples.exe" "$WINE_ROOT/bin/wine"; do
     [ -e "$path" ] || { echo "missing $path (run tools/build-wine.sh first)" >&2; exit 2; }
 done
 mkdir -p "$screens" "$logs"
@@ -109,6 +110,16 @@ for sample in texture constbuffers; do
     fi
     cleanup
 done
+
+# --- exports_test: dxgi.dll and d3d12.dll export real code, not forwarders ----------------------
+echo "== exports_test"
+if run_limited 120 "$logs/exports_test.log" wine exports_test.exe && grep -q "^exports_test: PASS" "$logs/exports_test.log"; then
+    pass "exports_test"
+else
+    fail "exports_test" "see $logs/exports_test.log"
+    tail -10 "$logs/exports_test.log"
+fi
+cleanup
 
 # --- swapchain_test ----------------------------------------------------------------------
 echo "== swapchain_test"
