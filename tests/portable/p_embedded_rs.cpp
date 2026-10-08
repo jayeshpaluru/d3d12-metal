@@ -2,6 +2,8 @@
 // (tests/shaders/embedded_rs.hlsl) carries its signature, the pipeline is made with a null pRootSignature, the
 // application builds an equal signature from the same bytecode and binds it.
 #include "embedded_rs_cs.h"
+#include "embedded_rs_gfx_ps.h"
+#include "embedded_rs_gfx_vs.h"
 #include "t12.h"
 
 int main()
@@ -50,6 +52,50 @@ int main()
     if (SUCCEEDED(gpu.device->CreateComputePipelineState(&bad, IID_PPV_ARGS(refused.GetAddressOf())))) {
         std::fprintf(stderr, "a pipeline without any root signature was created\n");
         return 1;
+    }
+
+    // A graphics pipeline whose root signature is embedded in the pixel shader only. Two pipelines from the same
+    // shaders (and their embedded signature) work, and so does drawing with a signature the application made.
+    {
+        ComPtr<ID3D12RootSignature> gfx_signature;
+        CHECK_HR(gpu.device->CreateRootSignature(0, g_embedded_rs_gfx_ps, sizeof(g_embedded_rs_gfx_ps), IID_PPV_ARGS(gfx_signature.GetAddressOf())));
+        const D3D12_INPUT_ELEMENT_DESC layout[] = {
+            {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0}};
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC gfx = graphics_pso_desc(nullptr, T12_SHADER(g_embedded_rs_gfx_vs), T12_SHADER(g_embedded_rs_gfx_ps), layout, 1);
+        ComPtr<ID3D12PipelineState> first_gfx, second_gfx;
+        CHECK_HR(gpu.device->CreateGraphicsPipelineState(&gfx, IID_PPV_ARGS(first_gfx.GetAddressOf())));
+        gfx.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
+        gfx.BlendState.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+        CHECK_HR(gpu.device->CreateGraphicsPipelineState(&gfx, IID_PPV_ARGS(second_gfx.GetAddressOf())));
+
+        constexpr UINT kSize = 16;
+        ComPtr<ID3D12Resource> target = gpu.texture(tex2d_desc(DXGI_FORMAT_R8G8B8A8_UNORM, kSize, kSize, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET),
+                                                    D3D12_RESOURCE_STATE_RENDER_TARGET);
+        ComPtr<ID3D12DescriptorHeap> rtv_heap = gpu.descriptor_heap(D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 1);
+        gpu.device->CreateRenderTargetView(target.Get(), nullptr, rtv_heap->GetCPUDescriptorHandleForHeapStart());
+        const float triangle[] = {-1, -1, 0, 3, -1, 0, -1, 3, 0};
+        ComPtr<ID3D12Resource> vertices = gpu.upload_buffer(triangle, sizeof(triangle));
+        const D3D12_VERTEX_BUFFER_VIEW vbv = {vertices->GetGPUVirtualAddress(), sizeof(triangle), 12};
+        gpu.run([&](ID3D12GraphicsCommandList *list) {
+            list->SetGraphicsRootSignature(gfx_signature.Get());
+            const D3D12_VIEWPORT viewport = {0, 0, float(kSize), float(kSize), 0, 1};
+            const D3D12_RECT scissor = {0, 0, LONG(kSize), LONG(kSize)};
+            list->RSSetViewports(1, &viewport);
+            list->RSSetScissorRects(1, &scissor);
+            D3D12_CPU_DESCRIPTOR_HANDLE rtv = rtv_heap->GetCPUDescriptorHandleForHeapStart();
+            list->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
+            list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            list->IASetVertexBuffers(0, 1, &vbv);
+            const float red[4] = {1, 0, 0, 1}, green[4] = {0, 1, 0, 1};
+            list->SetPipelineState(first_gfx.Get());
+            list->SetGraphicsRoot32BitConstants(0, 4, red, 0);
+            list->DrawInstanced(3, 1, 0, 0);
+            list->SetPipelineState(second_gfx.Get());
+            list->SetGraphicsRoot32BitConstants(0, 4, green, 0);
+            list->DrawInstanced(3, 1, 0, 0);
+        });
+        const Image image = gpu.read_texture(target.Get(), 0, 4);
+        expect_pixel("pipeline with a pixel shader's embedded root signature", image.pixel(kSize / 2, kSize / 2), {0, 255, 0, 255});
     }
     std::printf("p_embedded_rs passed\n");
     return 0;

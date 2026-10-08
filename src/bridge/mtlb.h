@@ -595,6 +595,8 @@ MTLB_EXPORT mtlb_result mtlb_compute_pipeline_create(mtlb_device device, const m
 
 /* Converts the DXIL with the Metal shader converter against the root signature
  * and builds the render pipeline and depth-stencil state. */
+/* Test hook: the next pipeline creation (graphics or compute) on `device` fails with `result`. */
+MTLB_EXPORT void mtlb_device_test_fail_next_pipeline(mtlb_device device, mtlb_result result);
 MTLB_EXPORT mtlb_result mtlb_pipeline_create(mtlb_device device, const mtlb_pipeline_desc *desc,
                                              mtlb_pipeline *out);
 MTLB_EXPORT void mtlb_pipeline_destroy(mtlb_pipeline pipeline);

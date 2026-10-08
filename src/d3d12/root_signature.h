@@ -5,6 +5,7 @@
 
 #include "bridge/mtlb.h"
 #include "d3d12/object.h"
+#include "d3d12/root_signature_blob.h"
 
 namespace d3d12m {
 
@@ -18,6 +19,12 @@ public:
     };
 
     static HRESULT create(Device *device, const void *blob, size_t size, REFIID riid, void **out);
+    // The root signature embedded in a shader (the RTS0 part of its container): one object per distinct payload, shared
+    // by every pipeline that embeds it (so the converted shaders, which are keyed by root signature, are found again).
+    // Returns it with an internal reference (release_internal_ref).
+    static HRESULT acquire_embedded(Device *device, const void *shader, size_t size, RootSignature **out);
+
+    const RootSignatureKey &content_key() const { return content_key_; }
 
     // The application's root parameters, by index.
     const std::vector<Slot> &slots() const { return slots_; }
@@ -37,6 +44,8 @@ private:
     ~RootSignature() override;
 
     mtlb_root_signature handle_ = 0;
+    RootSignatureKey content_key_;
+    bool shared_ = false;  // registered in the device's embedded root signatures
     // Static samplers become a descriptor table, appended after the application's parameters, over
     // a sampler heap of the root signature's own.
     mtlb_buffer static_samplers_ = 0;

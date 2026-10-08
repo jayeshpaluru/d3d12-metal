@@ -13,10 +13,12 @@
 #include "d3d12/descriptor_heap.h"
 #include "d3d12/fence.h"
 #include "d3d12/object.h"
+#include "d3d12/root_signature_blob.h"
 
 namespace d3d12m {
 
 class Resource;
+class RootSignature;
 
 // Logs (once) that a descriptor handle was refused; see Device::validate_cpu_range.
 void log_bad_handle(const char *what);
@@ -70,6 +72,12 @@ public:
     // returns true the first time a key is recorded (the caller logs only then).
     bool failed_pipeline(uint64_t key, HRESULT *hr);
     bool note_failed_pipeline(uint64_t key, HRESULT hr);
+
+    // Root signatures made from the ones embedded in shaders, by content (RootSignature::acquire_embedded). Entries do
+    // not keep their signature alive: it removes itself when destroyed.
+    RootSignature *find_embedded_root_signature(const RootSignatureKey &key);  // with an internal reference
+    void add_embedded_root_signature(RootSignature *signature);
+    void remove_embedded_root_signature(RootSignature *signature);
 
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **out) override
     {
@@ -246,6 +254,8 @@ private:
     FenceWaiter fence_waiter_;
     std::mutex failed_pipelines_mutex_;
     std::unordered_map<uint64_t, HRESULT> failed_pipelines_;
+    std::mutex embedded_signatures_mutex_;
+    std::vector<RootSignature *> embedded_signatures_;
 };
 
 } // namespace d3d12m

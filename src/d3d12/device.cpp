@@ -838,6 +838,30 @@ bool Device::note_failed_pipeline(uint64_t key, HRESULT hr)
     return failed_pipelines_.emplace(key, hr).second;
 }
 
+RootSignature *Device::find_embedded_root_signature(const RootSignatureKey &key)
+{
+    std::lock_guard<std::mutex> lock(embedded_signatures_mutex_);
+    for (RootSignature *signature : embedded_signatures_) {
+        // One that is being destroyed refuses the reference and is skipped (it removes itself right after).
+        if (signature->content_key() == key && signature->try_add_internal_ref())
+            return signature;
+    }
+    return nullptr;
+}
+
+void Device::add_embedded_root_signature(RootSignature *signature)
+{
+    std::lock_guard<std::mutex> lock(embedded_signatures_mutex_);
+    embedded_signatures_.push_back(signature);
+}
+
+void Device::remove_embedded_root_signature(RootSignature *signature)
+{
+    std::lock_guard<std::mutex> lock(embedded_signatures_mutex_);
+    embedded_signatures_.erase(std::remove(embedded_signatures_.begin(), embedded_signatures_.end(), signature),
+                               embedded_signatures_.end());
+}
+
 HRESULT Device::GetDeviceRemovedReason()
 {
     D3D12M_TRACED_BEGIN

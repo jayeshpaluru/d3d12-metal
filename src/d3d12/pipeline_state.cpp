@@ -7,6 +7,7 @@
 #include "common/stats.h"
 #include "d3d12/device.h"
 #include "d3d12/formats.h"
+#include "d3d12/root_signature.h"
 
 namespace d3d12m {
 
@@ -38,9 +39,15 @@ uint64_t hash_bytes(const void *data, size_t size, uint64_t hash = 1469598103934
     return hash;
 }
 
-// Identifies a pipeline description for the failure cache: the state, the root signature and the shader contents
-// (not their addresses).
-uint64_t pipeline_key(mtlb_pipeline_desc pd)
+// Identifies a pipeline description for the failure cache: the state, the root signature and the shader contents (not
+// their addresses or handles: those are reused by later objects).
+uint64_t root_signature_hash(const RootSignature &signature)
+{
+    const RootSignatureKey &key = signature.content_key();
+    return hash_bytes(&key, sizeof(key));
+}
+
+uint64_t pipeline_key(mtlb_pipeline_desc pd, const RootSignature &signature)
 {
     const uint64_t vs = hash_bytes(pd.vs_dxil, pd.vs_size);
     const uint64_t ps = pd.ps_dxil ? hash_bytes(pd.ps_dxil, pd.ps_size) : 0;
@@ -49,35 +56,46 @@ uint64_t pipeline_key(mtlb_pipeline_desc pd)
     const uint64_t ds = pd.ds_dxil ? hash_bytes(pd.ds_dxil, pd.ds_size) : 0;
     pd.vs_dxil = pd.ps_dxil = pd.gs_dxil = pd.hs_dxil = pd.ds_dxil = nullptr;
     pd.vs_entry = pd.ps_entry = nullptr;
-    const uint64_t stages[5] = {vs, ps, gs, hs, ds};
+    pd.root_signature = 0;
+    const uint64_t stages[6] = {vs, ps, gs, hs, ds, root_signature_hash(signature)};
     return hash_bytes(&pd, sizeof(pd), hash_bytes(stages, sizeof(stages)));
 }
 
-uint64_t pipeline_key(mtlb_compute_pipeline_desc pd)
+uint64_t pipeline_key(mtlb_compute_pipeline_desc pd, const RootSignature &signature)
 {
     const uint64_t cs = hash_bytes(pd.cs_dxil, pd.cs_size);
     pd.cs_dxil = nullptr;
     pd.cs_entry = nullptr;
-    return hash_bytes(&pd, sizeof(pd), cs) ^ 0x9e3779b97f4a7c15ull;
+    pd.root_signature = 0;
+    return hash_bytes(&pd, sizeof(pd), cs ^ root_signature_hash(signature)) ^ 0x9e3779b97f4a7c15ull;
 }
 
-// A pipeline created without a root signature takes the one embedded in its shader (the RTS0 part of the DXIL
-// container): XeSS and some engines compile their shaders that way. The signature is made here and released with the
-// holder, the pipeline keeps its own reference.
+// Failures that say something about the description (a shader that does not convert, a state Metal refuses) are
+// remembered; those that come from the moment (memory, a device that went away) are retried.
+bool is_permanent_failure(mtlb_result result)
+{
+    return result == MTLB_ERROR_COMPILE_FAILED || result == MTLB_ERROR_UNSUPPORTED || result == MTLB_ERROR_INVALID_ARGUMENT;
+}
+
+// A pipeline created without a root signature takes the one embedded in its shaders (the RTS0 part of the DXIL
+// container): XeSS and some engines compile their shaders that way. One object per distinct signature serves all pipelines
+// (Device::find_embedded_root_signature), the pipeline keeps its own reference.
 struct EmbeddedRootSignature {
-    ID3D12RootSignature *created = nullptr;
+    RootSignature *signature = nullptr;
     ~EmbeddedRootSignature()
     {
-        if (created)
-            created->Release();
+        if (signature)
+            signature->release_internal_ref();
     }
-    RootSignature *from(Device *device, const D3D12_SHADER_BYTECODE &shader)
+    // The signature of the first of `shaders` that carries one.
+    RootSignature *from(Device *device, std::initializer_list<D3D12_SHADER_BYTECODE> shaders)
     {
-        if (!shader.pShaderBytecode || !shader.BytecodeLength
-            || FAILED(RootSignature::create(device, shader.pShaderBytecode, shader.BytecodeLength, __uuidof(ID3D12RootSignature),
-                                            reinterpret_cast<void **>(&created))))
-            return nullptr;
-        return ours<RootSignature>(created);
+        for (const D3D12_SHADER_BYTECODE &shader : shaders) {
+            if (shader.pShaderBytecode && shader.BytecodeLength
+                && SUCCEEDED(RootSignature::acquire_embedded(device, shader.pShaderBytecode, shader.BytecodeLength, &signature)))
+                return signature;
+        }
+        return nullptr;
     }
 };
 
@@ -103,7 +121,7 @@ HRESULT PipelineState::create_graphics(Device *device, const D3D12_GRAPHICS_PIPE
 
     // Only RootSignature objects of this layer can be passed in.
     EmbeddedRootSignature embedded;
-    RootSignature *root_signature = desc.pRootSignature ? ours<RootSignature>(desc.pRootSignature) : embedded.from(device, desc.VS);
+    RootSignature *root_signature = desc.pRootSignature ? ours<RootSignature>(desc.pRootSignature) : embedded.from(device, {desc.VS, desc.PS, desc.GS, desc.HS, desc.DS});
     if (!root_signature)
         return E_INVALIDARG;
 
@@ -179,7 +197,7 @@ HRESULT PipelineState::create_graphics(Device *device, const D3D12_GRAPHICS_PIPE
         m.step_rate = e.InstanceDataStepRate;
     }
 
-    const uint64_t key = pipeline_key(pd);
+    const uint64_t key = pipeline_key(pd, *root_signature);
     HRESULT known_failure;
     if (device->failed_pipeline(key, &known_failure))
         return known_failure;
@@ -188,7 +206,7 @@ HRESULT PipelineState::create_graphics(Device *device, const D3D12_GRAPHICS_PIPE
     auto *pso = new PipelineState(device);
     mtlb_result result = mtlb_pipeline_create(device->handle(), &pd, &pso->pipeline_);
     if (result != MTLB_OK) {
-        if (device->note_failed_pipeline(key, to_hresult(result)))
+        if (is_permanent_failure(result) && device->note_failed_pipeline(key, to_hresult(result)))
             D3D12M_LOG("pipeline creation failed (not retried): %s", mtlb_last_error());
         pso->Release();
         return to_hresult(result);
@@ -205,7 +223,7 @@ HRESULT PipelineState::create_compute(Device *device, const D3D12_COMPUTE_PIPELI
     if (!out)
         return E_POINTER;
     EmbeddedRootSignature embedded;
-    RootSignature *root_signature = desc.pRootSignature ? ours<RootSignature>(desc.pRootSignature) : embedded.from(device, desc.CS);
+    RootSignature *root_signature = desc.pRootSignature ? ours<RootSignature>(desc.pRootSignature) : embedded.from(device, {desc.CS});
     if (!root_signature || !desc.CS.pShaderBytecode || !desc.CS.BytecodeLength) {
         D3D12M_LOG("compute pipeline: root signature %p (ours: %d), CS %p size %zu", static_cast<void *>(desc.pRootSignature),
                    root_signature != nullptr, desc.CS.pShaderBytecode, desc.CS.BytecodeLength);
@@ -217,7 +235,7 @@ HRESULT PipelineState::create_compute(Device *device, const D3D12_COMPUTE_PIPELI
     pd.cs_size = desc.CS.BytecodeLength;
     pd.root_signature = root_signature->handle();
 
-    const uint64_t key = pipeline_key(pd);
+    const uint64_t key = pipeline_key(pd, *root_signature);
     HRESULT known_failure;
     if (device->failed_pipeline(key, &known_failure))
         return known_failure;
@@ -226,7 +244,7 @@ HRESULT PipelineState::create_compute(Device *device, const D3D12_COMPUTE_PIPELI
     auto *pso = new PipelineState(device);
     mtlb_result result = mtlb_compute_pipeline_create(device->handle(), &pd, &pso->pipeline_);
     if (result != MTLB_OK) {
-        if (device->note_failed_pipeline(key, to_hresult(result)))
+        if (is_permanent_failure(result) && device->note_failed_pipeline(key, to_hresult(result)))
             D3D12M_LOG("compute pipeline creation failed (not retried): %s", mtlb_last_error());
         pso->Release();
         return to_hresult(result);

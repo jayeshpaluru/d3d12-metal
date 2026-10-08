@@ -889,6 +889,12 @@ id<MTLRenderPipelineState> mtlb::build_emulated_state(Device *device, const Emul
     return IRRuntimeNewGeometryEmulationPipeline(device->device, &d, error);
 }
 
+extern "C" void mtlb_device_test_fail_next_pipeline(mtlb_device handle, mtlb_result result)
+{
+    if (Device *device = from_handle<Device>(handle))
+        device->test_fail_pipeline.store(result);
+}
+
 extern "C" mtlb_result mtlb_pipeline_create(mtlb_device handle, const mtlb_pipeline_desc *desc, mtlb_pipeline *out)
 {
     Device *device = from_handle<Device>(handle);
@@ -897,6 +903,8 @@ extern "C" mtlb_result mtlb_pipeline_create(mtlb_device handle, const mtlb_pipel
         || desc->num_input_elements > MTLB_MAX_INPUT_ELEMENTS)
         return MTLB_ERROR_INVALID_ARGUMENT;
     stat_add(kStatPipelineAttempts);
+    if (const int injected = device->test_fail_pipeline.exchange(0))
+        return fail(static_cast<mtlb_result>(injected), "injected pipeline failure");
 
     RootSignature *root_signature = from_handle<RootSignature>(desc->root_signature);
     if (!root_signature)
@@ -1013,6 +1021,8 @@ extern "C" mtlb_result mtlb_compute_pipeline_create(mtlb_device handle, const mt
     if (!device || !desc || !out || !desc->cs_dxil || !desc->cs_size || !desc->root_signature)
         return MTLB_ERROR_INVALID_ARGUMENT;
     stat_add(kStatPipelineAttempts);
+    if (const int injected = device->test_fail_pipeline.exchange(0))
+        return fail(static_cast<mtlb_result>(injected), "injected pipeline failure");
     RootSignature *root_signature = from_handle<RootSignature>(desc->root_signature);
     if (!root_signature)
         return MTLB_ERROR_INVALID_ARGUMENT;

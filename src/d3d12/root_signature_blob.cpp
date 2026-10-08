@@ -568,6 +568,41 @@ HRESULT serialize_root_signature(const D3D12_VERSIONED_ROOT_SIGNATURE_DESC &desc
     return S_OK;
 }
 
+HRESULT root_signature_payload(const void *blob, size_t size, const uint8_t **payload, size_t *payload_size)
+{
+    if (!blob)
+        return E_INVALIDARG;
+    const auto *data = static_cast<const uint8_t *>(blob);
+    uint32_t magic = 0;
+    if (size >= 4)
+        std::memcpy(&magic, data, 4);
+    if (magic != kDxbc) {
+        *payload = data;
+        *payload_size = size;
+        return S_OK;
+    }
+    return find_rts0_part(data, size, *payload, *payload_size);
+}
+
+RootSignatureKey root_signature_key(const void *blob, size_t size)
+{
+    const uint8_t *payload = nullptr;
+    size_t payload_size = 0;
+    RootSignatureKey key;
+    if (FAILED(root_signature_payload(blob, size, &payload, &payload_size)))
+        return key;
+    // Two FNV-1a hashes with different bases and primes.
+    uint64_t a = 14695981039346656037ull, b = 0x9e3779b97f4a7c15ull;
+    for (size_t i = 0; i < payload_size; ++i) {
+        a = (a ^ payload[i]) * 1099511628211ull;
+        b = (b ^ (payload[i] + 0x3bull)) * 0x100000001b3ull + (b >> 29);
+    }
+    key.hash[0] = a;
+    key.hash[1] = b;
+    key.size = payload_size;
+    return key;
+}
+
 HRESULT parse_root_signature(const void *blob, size_t size, ParsedRootSignature &out)
 {
     if (!blob)

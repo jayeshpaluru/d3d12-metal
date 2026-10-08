@@ -20,6 +20,7 @@ HRESULT RootSignature::create(Device *device, const void *blob, size_t size, REF
         return hr;
 
     auto *rs = new RootSignature(device);
+    rs->content_key_ = root_signature_key(blob, size);
     const UINT num_samplers = parsed.desc11.NumStaticSamplers;
 
     // The shader converter has no static samplers. Turn them into one more descriptor table, a
@@ -103,8 +104,35 @@ void RootSignature::init_arguments(uint8_t *arguments) const
         std::memcpy(arguments + static_samplers_offset_, &static_samplers_address_, sizeof(static_samplers_address_));
 }
 
+HRESULT RootSignature::acquire_embedded(Device *device, const void *shader, size_t size, RootSignature **out)
+{
+    *out = nullptr;
+    if (!shader || !size)
+        return E_INVALIDARG;
+    const uint8_t *payload;
+    size_t payload_size;
+    if (FAILED(root_signature_payload(shader, size, &payload, &payload_size)))
+        return E_INVALIDARG;
+    const RootSignatureKey key = root_signature_key(shader, size);
+    if ((*out = device->find_embedded_root_signature(key)))
+        return S_OK;
+    ID3D12RootSignature *created = nullptr;
+    HRESULT hr = create(device, shader, size, __uuidof(ID3D12RootSignature), reinterpret_cast<void **>(&created));
+    if (FAILED(hr))
+        return hr;
+    auto *rs = ours<RootSignature>(created);
+    rs->shared_ = true;
+    device->add_embedded_root_signature(rs);
+    rs->add_internal_ref();
+    created->Release();
+    *out = rs;
+    return S_OK;
+}
+
 RootSignature::~RootSignature()
 {
+    if (shared_)
+        device()->remove_embedded_root_signature(this);
     if (handle_)
         mtlb_root_signature_destroy(handle_);
     if (static_samplers_)

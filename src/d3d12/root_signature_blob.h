@@ -55,4 +55,17 @@ HRESULT serialize_root_signature(const D3D12_VERSIONED_ROOT_SIGNATURE_DESC &desc
 // is bounds-checked; malformed input yields E_INVALIDARG.
 HRESULT parse_root_signature(const void *blob, size_t size, ParsedRootSignature &out);
 
+// Identifies a root signature by what it describes (the RTS0 payload), not by the address of the object or of the blob
+// that carried it: two hashes of the payload and its size.
+struct RootSignatureKey {
+    uint64_t hash[2] = {};
+    uint64_t size = 0;
+    bool operator==(const RootSignatureKey &o) const { return hash[0] == o.hash[0] && hash[1] == o.hash[1] && size == o.size; }
+};
+RootSignatureKey root_signature_key(const void *blob, size_t size);
+
+// The RTS0 payload of a DXBC/DXIL container (checksum verified), or `blob` itself when it is a bare payload: what two
+// root signatures have in common when they describe the same layout, whichever shader or blob carried them.
+HRESULT root_signature_payload(const void *blob, size_t size, const uint8_t **payload, size_t *payload_size);
+
 } // namespace d3d12m

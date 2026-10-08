@@ -72,6 +72,7 @@ struct Device {
     id<MTLDevice> device;
     id<MTLResidencySet> residency;
     std::atomic<bool> residency_dirty{false};
+    std::atomic<int> test_fail_pipeline{0};  // mtlb_device_test_fail_next_pipeline
 
     // Listener shared by all events' notifications (see notify.mm).
     MTLSharedEventListener *listener;
