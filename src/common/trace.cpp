@@ -46,7 +46,7 @@ std::string method_name(const char *pretty)
     }
     for (size_t at; (at = text.find("__attribute__((")) != std::string::npos;)
         text.erase(at, text.find("))", at) + 3 - at);
-    for (const char *noise : {"(anonymous namespace)::", "d3d12m::"}) {
+    for (const char *noise : {"(anonymous namespace)::", "{anonymous}::", "d3d12m::"}) {
         for (size_t at; (at = text.find(noise)) != std::string::npos;)
             text.erase(at, strlen(noise));
     }
