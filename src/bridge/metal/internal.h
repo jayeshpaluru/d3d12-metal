@@ -133,6 +133,9 @@ struct QueryHeap {
     // kSamplesPerBuffer samples, so a large heap is several buffers, made when first used; query i is sample
     // i % kSamplesPerBuffer of buffer i / kSamplesPerBuffer. Use sample_buffer().
     std::vector<id<MTLCounterSampleBuffer>> samples;
+    std::vector<uint8_t> samples_failed;  // per buffer: creation was tried and failed (not tried again)
+    uint32_t sample_attempts = 0;         // buffer creations tried (mtlb_query_heap_test_sample_attempts)
+    bool test_fail_samples = false;
     std::mutex samples_mutex;
     // Occlusion: a query that spans several render passes keeps one result slot per pass (kQuerySlots of them,
     // `results` holds count * kQuerySlots counts); resolving sums the slots used since the query began.

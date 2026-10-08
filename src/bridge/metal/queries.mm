@@ -16,7 +16,8 @@ id<MTLCounterSampleBuffer> sample_buffer(QueryHeap *heap, uint32_t index)
     if (chunk >= heap->samples.size())
         return nil;
     std::lock_guard<std::mutex> lock(heap->samples_mutex);
-    if (!heap->samples[chunk]) {
+    if (!heap->samples[chunk] && !heap->samples_failed[chunk]) {
+        ++heap->sample_attempts;
         id<MTLCounterSet> timestamp_set = nil;
         for (id<MTLCounterSet> set in heap->device->device.counterSets) {
             if ([set.name isEqualToString:MTLCommonCounterSetTimestamp])
@@ -27,9 +28,13 @@ id<MTLCounterSampleBuffer> sample_buffer(QueryHeap *heap, uint32_t index)
         descriptor.storageMode = MTLStorageModeShared;
         descriptor.sampleCount = std::min(heap->count - chunk * kSamplesPerBuffer, kSamplesPerBuffer);
         NSError *error = nil;
-        heap->samples[chunk] = [heap->device->device newCounterSampleBufferWithDescriptor:descriptor error:&error];
-        if (!heap->samples[chunk])
-            backend_log("timestamp queries unavailable: %s", error.localizedDescription.UTF8String);
+        if (!heap->test_fail_samples)
+            heap->samples[chunk] = [heap->device->device newCounterSampleBufferWithDescriptor:descriptor error:&error];
+        if (!heap->samples[chunk]) {
+            // Tried once per buffer: the failure is remembered, and logged once.
+            heap->samples_failed[chunk] = 1;
+            backend_log("timestamp queries unavailable: %s", error ? error.localizedDescription.UTF8String : "injected failure");
+        }
     }
     return heap->samples[chunk];
 }
@@ -60,9 +65,10 @@ mtlb_result mtlb_query_heap_create(mtlb_device handle, uint32_t kind, uint32_t c
             if ([set.name isEqualToString:MTLCommonCounterSetTimestamp])
                 timestamp_set = set;
         }
-        if (timestamp_set && [device->device supportsCounterSampling:MTLCounterSamplingPointAtStageBoundary])
+        if (timestamp_set && [device->device supportsCounterSampling:MTLCounterSamplingPointAtStageBoundary]) {
             heap->samples.resize((count + kSamplesPerBuffer - 1) / kSamplesPerBuffer);  // made by sample_buffer()
-        else {
+            heap->samples_failed.assign(heap->samples.size(), 0);
+        } else {
             static std::atomic<bool> logged{false};
             if (!logged.exchange(true))
                 backend_log("this GPU cannot sample timestamps at encoder boundaries; timestamp queries read zero");
@@ -70,6 +76,17 @@ mtlb_result mtlb_query_heap_create(mtlb_device handle, uint32_t kind, uint32_t c
     }
     *out = to_handle(heap);
     return MTLB_OK;
+}
+
+uint64_t mtlb_query_heap_test_sample_attempts(mtlb_query_heap handle, int fail_creation)
+{
+    auto *heap = from_handle<QueryHeap>(handle);
+    if (!heap)
+        return 0;
+    std::lock_guard<std::mutex> lock(heap->samples_mutex);
+    if (fail_creation >= 0)
+        heap->test_fail_samples = fail_creation != 0;
+    return heap->sample_attempts;
 }
 
 void mtlb_query_heap_destroy(mtlb_query_heap handle)

@@ -693,6 +693,9 @@ enum {
 
 MTLB_EXPORT mtlb_result mtlb_query_heap_create(mtlb_device device, uint32_t kind, uint32_t count, mtlb_query_heap *out);
 MTLB_EXPORT void mtlb_query_heap_destroy(mtlb_query_heap heap);
+/* Test hook for timestamp heaps: returns how many counter sample buffer creations were tried; `fail_creation` 1 makes
+ * the next creations fail, 0 lets them succeed, -1 leaves it. */
+MTLB_EXPORT uint64_t mtlb_query_heap_test_sample_attempts(mtlb_query_heap heap, int fail_creation);
 
 /* GPU timestamps tick at this rate. */
 MTLB_EXPORT uint64_t mtlb_timestamp_frequency(mtlb_device device);
