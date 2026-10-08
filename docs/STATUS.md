@@ -105,6 +105,28 @@ Descriptor writes without bridge calls, the shader disk cache, thread-safe PSO c
 - The Godot console launcher exe does not exit under Wine; the runner uses the GUI exe, which writes stdout as well.
 - Run `tools/run-godot-test.sh` after `tools/build-wine.sh`; Godot is not part of the repository (see README).
 
+## Milestone 5: game launch harness
+
+Tooling for getting Marvel's Spider-Man Remastered running; no game code or assets are involved (README, "Running the game").
+
+- **Configuration file.** Every `D3D12METAL_*` option can be set in `d3d12metal.conf` next to `d3d12.dll`; the environment overrides it.
+  The PE side reads the file (`src/common/config.cpp`) and sends its entries to the unix side with `mtlb_configure` as the first unix call
+  (the unix side `setenv`s them unless the environment already has them), so the backend's own `getenv` options (cache, dump) follow the file.
+- **File logging.** `D3D12METAL_LOG_FILE` makes both sides append whole lines to one file. The PE side does not open it: it sends
+  its lines through `mtlb_log_write` (one `write(2)` on an `O_APPEND` descriptor in `src/bridge/metal/log.cpp`), so there is no DOS-path
+  conversion and lines of the two sides never interleave. Messages before the transport is up (or when it failed to load) go to stderr only.
+  Off, the cost is a cached boolean per message.
+- **API trace.** `D3D12METAL_TRACE=1`: `D3D12M_TRACE(args...)` / `D3D12M_TRACED_BEGIN ... D3D12M_TRACED_END(args...)` (`src/common/trace.h`)
+  are at the top of every D3D12 and DXGI method (HRESULT methods run their body in a lambda so the result can be logged; stubs are
+  counted by `D3D12M_STUB_LOG`; `QueryInterface` is traced in `query_interfaces`). Off, each is one predictable branch. A new method needs the macro to
+  show up in the inventory. Lines show the arguments (pointers with a summary of common descriptors, IIDs by name) and the HRESULT.
+  Calls are logged for the first 50 of each method and every 1000th after that; the method list has exact counts.
+- **Scripts.** `tools/install-game.sh`, `tools/uninstall-game.sh`, `tools/run-game.sh` (shared code in `tools/game-common.sh`,
+  window listing in `tools/list_windows.swift`).
+- **Validated without the game** with `hello_triangle.exe` copied to `Spider-Man.exe` in a fake game folder of the test prefix, run with
+  `run-game.sh --direct` and no `WINEDLLOVERRIDES`: the registry overrides load the layer, the conf file is honoured (log file, trace lines,
+  method list), screenshots are taken. The real game has not been run yet.
+
 ## Known limitations
 
 - Swap chains: windowed only, no HDR (`R16G16B16A16_FLOAT` is presented as sRGB content),
