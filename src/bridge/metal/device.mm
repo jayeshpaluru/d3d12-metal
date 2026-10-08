@@ -227,7 +227,7 @@ void mtlb_texture_destroy(mtlb_texture handle)
     delete texture;
 }
 
-mtlb_result mtlb_event_create(mtlb_device handle, uint64_t initial_value, mtlb_event *out)
+mtlb_result mtlb_event_create(mtlb_device handle, uint64_t initial_value, mtlb_event *out, uint64_t **mirror)
 {
     Device *device = from_handle<Device>(handle);
     if (!device || !out)
@@ -236,7 +236,11 @@ mtlb_result mtlb_event_create(mtlb_device handle, uint64_t initial_value, mtlb_e
     if (!event)
         return fail(MTLB_ERROR_DEVICE, "newSharedEvent failed");
     event.signaledValue = initial_value;
-    *out = to_handle(new Event{device, event});
+    auto *created = new Event{device, event};
+    created->mirror->store(initial_value, std::memory_order_relaxed);
+    if (mirror)
+        *mirror = reinterpret_cast<uint64_t *>(created->mirror.get());
+    *out = to_handle(created);
     return MTLB_OK;
 }
 
@@ -247,12 +251,15 @@ void mtlb_event_destroy(mtlb_event handle)
 
 uint64_t mtlb_event_completed_value(mtlb_event handle)
 {
+    stat_add(kStatEventQueries);
     return from_handle<Event>(handle)->event.signaledValue;
 }
 
 void mtlb_event_signal_cpu(mtlb_event handle, uint64_t value)
 {
-    from_handle<Event>(handle)->event.signaledValue = value;
+    Event *event = from_handle<Event>(handle);
+    event->event.signaledValue = value;
+    event->mirror->store(value, std::memory_order_release);
 }
 
 mtlb_result mtlb_event_wait_cpu(mtlb_event handle, uint64_t value, uint64_t timeout_ms)

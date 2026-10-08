@@ -240,6 +240,7 @@ typedef struct mtlb_stats {
     uint64_t blit_encoders;
     uint64_t barriers;         /* barrier records that ended encoders / ordered work */
     uint64_t syncs;            /* encoders that waited on the queue fence */
+    uint64_t event_queries;    /* mtlb_event_completed_value calls (fence reads that went to Metal) */
 } mtlb_stats;
 MTLB_EXPORT void mtlb_stats_get(mtlb_stats *out);
 
@@ -613,8 +614,14 @@ MTLB_EXPORT uint64_t mtlb_queue_render_pass_count(mtlb_queue queue);
 MTLB_EXPORT mtlb_result mtlb_queue_signal(mtlb_queue queue, mtlb_event event, uint64_t value);
 MTLB_EXPORT mtlb_result mtlb_queue_wait(mtlb_queue queue, mtlb_event event, uint64_t value);
 
-MTLB_EXPORT mtlb_result mtlb_event_create(mtlb_device device, uint64_t initial_value, mtlb_event *out);
+/* `mirror` receives the address of a 64-bit value the backend keeps equal to the event's completed value: updated
+ * (atomically, monotonically for GPU signals) when a queue signal completes and by mtlb_event_signal_cpu. Read it with
+ * an atomic load from the same address space instead of calling mtlb_event_completed_value, which is a bridge
+ * call. It may lag the event slightly; it is valid until mtlb_event_destroy. */
+MTLB_EXPORT mtlb_result mtlb_event_create(mtlb_device device, uint64_t initial_value, mtlb_event *out,
+                                          uint64_t **mirror);
 MTLB_EXPORT void mtlb_event_destroy(mtlb_event event);
+/* The event's value as Metal has it (the mirror may lag it). */
 MTLB_EXPORT uint64_t mtlb_event_completed_value(mtlb_event event);
 MTLB_EXPORT void mtlb_event_signal_cpu(mtlb_event event, uint64_t value);
 /* Blocks until the event reaches `value`; timeout_ms of UINT64_MAX waits forever.
@@ -708,7 +715,7 @@ MTLB_ASSERT_OFFSET(mtlb_span, size, 8);
 MTLB_ASSERT_SIZE(mtlb_format_info, 16);
 MTLB_ASSERT_SIZE(mtlb_device_caps, 304);
 MTLB_ASSERT_SIZE(mtlb_cache_stats, 48);
-MTLB_ASSERT_SIZE(mtlb_stats, 56);
+MTLB_ASSERT_SIZE(mtlb_stats, 64);
 MTLB_ASSERT_SIZE(mtlb_buffer_info, 24);
 MTLB_ASSERT_OFFSET(mtlb_buffer_info, gpu_address, 8);
 MTLB_ASSERT_SIZE(mtlb_descriptor, 24);

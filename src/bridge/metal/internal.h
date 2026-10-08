@@ -25,7 +25,7 @@ namespace mtlb {
 
 // Backend counters (mtlb_stats): relaxed atomic increments, a few nanoseconds each.
 enum Stat : unsigned { kStatSubmits, kStatCommandBuffers, kStatRenderEncoders, kStatComputeEncoders, kStatBlitEncoders,
-                       kStatBarriers, kStatSyncs, kStatCount };
+                       kStatBarriers, kStatSyncs, kStatEventQueries, kStatCount };
 extern std::atomic<uint64_t> g_stats[kStatCount];
 inline void stat_add(Stat stat) { g_stats[stat].fetch_add(1, std::memory_order_relaxed); }
 
@@ -247,7 +247,17 @@ struct Swapchain {
 struct Event {
     Device *device;
     id<MTLSharedEvent> event;
+    // The front-end's lock-free view of the event's value (mtlb_event_create); completion handlers keep it alive.
+    std::shared_ptr<std::atomic<uint64_t>> mirror = std::make_shared<std::atomic<uint64_t>>(0);
 };
+
+// Raises `mirror` to at least `value`.
+inline void raise_mirror(std::atomic<uint64_t> &mirror, uint64_t value)
+{
+    uint64_t seen = mirror.load(std::memory_order_relaxed);
+    while (seen < value && !mirror.compare_exchange_weak(seen, value, std::memory_order_release, std::memory_order_relaxed)) {
+    }
+}
 
 template <typename T>
 T *from_handle(uint64_t handle)

@@ -1724,7 +1724,7 @@ void mtlb_stats_get(mtlb_stats *out)
         return;
     const auto &s = mtlb::g_stats;
     *out = {s[mtlb::kStatSubmits], s[mtlb::kStatCommandBuffers], s[mtlb::kStatRenderEncoders], s[mtlb::kStatComputeEncoders],
-            s[mtlb::kStatBlitEncoders], s[mtlb::kStatBarriers], s[mtlb::kStatSyncs]};
+            s[mtlb::kStatBlitEncoders], s[mtlb::kStatBarriers], s[mtlb::kStatSyncs], s[mtlb::kStatEventQueries]};
 }
 
 mtlb_result mtlb_queue_create(mtlb_device handle, mtlb_queue *out)
@@ -1827,7 +1827,14 @@ mtlb_result mtlb_queue_signal(mtlb_queue handle, mtlb_event event_handle, uint64
     if (!queue || !event)
         return MTLB_ERROR_INVALID_ARGUMENT;
     std::lock_guard<std::mutex> lock(queue->mutex);
-    [open_command_buffer(queue) encodeSignalEvent:event->event value:value];
+    const std::shared_ptr<std::atomic<uint64_t>> mirror = event->mirror;
+    id<MTLCommandBuffer> cb = open_command_buffer(queue);
+    [cb encodeSignalEvent:event->event value:value];
+    // The signal has happened once the buffer completes; the front-end reads the mirror instead of asking Metal.
+    [cb addCompletedHandler:^(id<MTLCommandBuffer> done) {
+        if (done.status == MTLCommandBufferStatusCompleted)
+            raise_mirror(*mirror, value);
+    }];
     commit_open(queue);
     return MTLB_OK;
 }

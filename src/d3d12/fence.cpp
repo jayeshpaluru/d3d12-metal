@@ -13,7 +13,11 @@ HRESULT Fence::create(Device *device, UINT64 initial_value, D3D12_FENCE_FLAGS fl
         return E_POINTER;
     auto *fence = new Fence(device);
     fence->flags_ = flags;
-    mtlb_result result = mtlb_event_create(device->handle(), initial_value, &fence->event_);
+    uint64_t *mirror = nullptr;
+    mtlb_result result = mtlb_event_create(device->handle(), initial_value, &fence->event_, &mirror);
+    if (result == MTLB_OK && !mirror)
+        result = MTLB_ERROR_DEVICE;
+    fence->mirror_ = reinterpret_cast<std::atomic<UINT64> *>(mirror);
     if (result != MTLB_OK) {
         fence->Release();
         return to_hresult(result);
@@ -31,14 +35,27 @@ Fence::~Fence()
 UINT64 Fence::GetCompletedValue()
 {
     D3D12M_TRACE();
-    return mtlb_event_completed_value(event_);
+    return mirror_->load(std::memory_order_acquire);
+}
+
+UINT64 Fence::refresh()
+{
+    const UINT64 value = mtlb_event_completed_value(event_);
+    UINT64 seen = mirror_->load(std::memory_order_relaxed);
+    while (seen < value && !mirror_->compare_exchange_weak(seen, value, std::memory_order_release)) {
+    }
+    return value;
 }
 
 HRESULT Fence::SetEventOnCompletion(UINT64 value, HANDLE event)
 {
     D3D12M_TRACED_BEGIN
-    if (!event)
-        return to_hresult(mtlb_event_wait_cpu(event_, value, UINT64_MAX));
+    if (!event) {
+        const mtlb_result result = mtlb_event_wait_cpu(event_, value, UINT64_MAX);
+        if (result == MTLB_OK)
+            refresh();  // a caller that waited expects GetCompletedValue() >= value
+        return to_hresult(result);
+    }
     if (GetCompletedValue() >= value) {
         platform_set_event(event);
         return S_OK;
@@ -103,7 +120,7 @@ void FenceWaiter::run()
                 auto it = waits_.find(reinterpret_cast<Fence *>(batch[i].cookie));
                 if (it == waits_.end())
                     continue;
-                const UINT64 completed = it->first->GetCompletedValue();
+                const UINT64 completed = it->first->refresh();
                 auto &pending = it->second;
                 while (!pending.empty() && pending.begin()->first <= completed) {
                     reached.push_back(std::move(pending.begin()->second));

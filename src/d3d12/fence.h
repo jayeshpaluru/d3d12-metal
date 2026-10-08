@@ -1,6 +1,7 @@
 // ID3D12Fence backed by a Metal shared event.
 #pragma once
 
+#include <atomic>
 #include <functional>
 #include <map>
 #include <mutex>
@@ -32,7 +33,13 @@ private:
     explicit Fence(Device *device) : ChildImpl(device) {}
     ~Fence() override;
 
+    // Brings the mirror up to what Metal has (the waiter thread: a notification may beat the queue's completion handler).
+    UINT64 refresh();
+    friend class FenceWaiter;
+
     mtlb_event event_ = 0;
+    // The backend's shared-memory copy of the completed value (see mtlb_event_create).
+    std::atomic<UINT64> *mirror_ = nullptr;
     D3D12_FENCE_FLAGS flags_ = D3D12_FENCE_FLAG_NONE;
 };
 
