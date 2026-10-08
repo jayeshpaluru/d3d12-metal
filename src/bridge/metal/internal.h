@@ -4,10 +4,14 @@
 
 #import <Metal/Metal.h>
 
+#include <array>
 #include <atomic>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <string>
+#include <tuple>
+#include <vector>
 
 #include <metal_irconverter/metal_irconverter.h>
 
@@ -17,6 +21,24 @@ namespace mtlb {
 
 struct Buffer;
 
+// One reflected vertex shader input.
+struct VertexInput {
+    std::string name;  // lower-case semantic + index, e.g. "position0"
+    uint8_t attribute_index;
+};
+
+// A converted shader stage: its Metal function and what reflection said about it.
+struct ShaderStage {
+    id<MTLFunction> function = nil;
+    std::vector<VertexInput> vertex_inputs;
+};
+
+// (hash of the DXIL, DXIL size, root signature id, IRShaderStage, entry point)
+using ShaderKey = std::tuple<uint64_t, uint64_t, uint64_t, uint32_t, std::string>;
+
+// Depth/stencil description fields that matter to an MTLDepthStencilState.
+using DepthStencilKey = std::array<uint32_t, 13>;
+
 struct Device {
     id<MTLDevice> device;
     id<MTLResidencySet> residency;
@@ -24,6 +46,13 @@ struct Device {
 
     // Listener shared by all events' notifications (see notify.mm).
     MTLSharedEventListener *listener;
+
+    // Converted shaders, shared by every pipeline using the same DXIL and root
+    // signature, and depth-stencil states shared by equal descriptions.
+    std::mutex shaders_mutex;
+    std::map<ShaderKey, std::shared_ptr<const ShaderStage>> shaders;
+    std::mutex depth_stencil_mutex;
+    std::map<DepthStencilKey, id<MTLDepthStencilState>> depth_stencil_states;
 
     // GPU address -> buffer, for resolving D3D12-style virtual addresses.
     std::mutex buffers_mutex;
@@ -49,6 +78,8 @@ struct Texture {
 };
 
 struct RootSignature {
+    Device *device;
+    uint64_t id;  // unique for the process lifetime, so cache keys never see a reused address
     IRRootSignature *ir;
 };
 

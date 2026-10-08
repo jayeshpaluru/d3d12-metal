@@ -3,6 +3,7 @@
 #include "internal.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <vector>
 
@@ -42,26 +43,32 @@ std::string error_text(IRError *error, const char *what)
     return text;
 }
 
-struct VertexInput {
-    std::string name;  // lower-case semantic + index, e.g. "position0"
-    uint8_t attribute_index;
-};
+// One compiler per thread: creating one per stage per pipeline is wasteful.
+IRCompiler *thread_compiler()
+{
+    thread_local OwnedCompiler compiler(IRCompilerCreate());
+    return compiler.ptr;
+}
 
-struct Stage {
-    id<MTLFunction> function = nil;
-    std::vector<VertexInput> vertex_inputs;
-};
+// FNV-1a, enough to tell shaders apart together with their size.
+uint64_t hash_bytes(const void *data, uint64_t size)
+{
+    uint64_t hash = 14695981039346656037ull;
+    for (uint64_t i = 0; i < size; ++i)
+        hash = (hash ^ static_cast<const uint8_t *>(data)[i]) * 1099511628211ull;
+    return hash;
+}
 
 // Converts one DXIL shader against `root_signature` and loads its Metal function.
-mtlb_result build_stage(id<MTLDevice> device, const IRRootSignature *root_signature, const void *dxil,
-                        uint64_t size, const char *entry, IRShaderStage ir_stage, Stage &out)
+mtlb_result convert_stage(Device *device, RootSignature *root_signature, const void *dxil, uint64_t size,
+                          const char *entry, IRShaderStage ir_stage, ShaderStage &out)
 {
-    OwnedCompiler compiler(IRCompilerCreate());
-    IRCompilerSetGlobalRootSignature(compiler.ptr, root_signature);
+    IRCompiler *compiler = thread_compiler();
+    IRCompilerSetGlobalRootSignature(compiler, root_signature->ir);
 
     OwnedObject input(IRObjectCreateFromDXIL(static_cast<const uint8_t *>(dxil), size, IRBytecodeOwnershipNone));
     IRError *error = nullptr;
-    OwnedObject output(IRCompilerAllocCompileAndLink(compiler.ptr, entry, input.ptr, &error));
+    OwnedObject output(IRCompilerAllocCompileAndLink(compiler, entry, input.ptr, &error));
     if (!output.ptr)
         return fail(MTLB_ERROR_COMPILE_FAILED, error_text(error, "DXIL conversion failed"));
 
@@ -75,7 +82,7 @@ mtlb_result build_stage(id<MTLDevice> device, const IRRootSignature *root_signat
     const char *function_name = IRShaderReflectionGetEntryPointFunctionName(reflection.ptr);
 
     NSError *ns_error = nil;
-    id<MTLLibrary> library = [device newLibraryWithData:IRMetalLibGetBytecodeData(metallib.ptr) error:&ns_error];
+    id<MTLLibrary> library = [device->device newLibraryWithData:IRMetalLibGetBytecodeData(metallib.ptr) error:&ns_error];
     if (!library)
         return fail(MTLB_ERROR_COMPILE_FAILED, std::string("newLibraryWithData: ") + ns_error.localizedDescription.UTF8String);
     out.function = [library newFunctionWithName:[NSString stringWithUTF8String:function_name]];
@@ -92,6 +99,29 @@ mtlb_result build_stage(id<MTLDevice> device, const IRRootSignature *root_signat
         }
         IRShaderReflectionReleaseVertexInfo(&info);
     }
+    return MTLB_OK;
+}
+
+// Returns the converted stage from the device cache, converting it on a miss.
+mtlb_result get_stage(Device *device, RootSignature *root_signature, const void *dxil, uint64_t size,
+                      const char *entry, IRShaderStage ir_stage, std::shared_ptr<const ShaderStage> &out)
+{
+    const ShaderKey key{hash_bytes(dxil, size), size, root_signature->id, static_cast<uint32_t>(ir_stage),
+                        entry ? entry : ""};
+    {
+        std::lock_guard<std::mutex> lock(device->shaders_mutex);
+        auto it = device->shaders.find(key);
+        if (it != device->shaders.end()) {
+            out = it->second;
+            return MTLB_OK;
+        }
+    }
+    auto stage = std::make_shared<ShaderStage>();
+    mtlb_result result = convert_stage(device, root_signature, dxil, size, entry, ir_stage, *stage);
+    if (result != MTLB_OK)
+        return result;
+    std::lock_guard<std::mutex> lock(device->shaders_mutex);
+    out = device->shaders.emplace(key, std::move(stage)).first->second;  // keeps the first on a race
     return MTLB_OK;
 }
 
@@ -180,6 +210,43 @@ MTLStencilDescriptor *to_stencil(const mtlb_stencil_face &face, uint32_t read_ma
     return s;
 }
 
+// Returns the shared depth-stencil state for the description's relevant fields.
+id<MTLDepthStencilState> get_depth_stencil(Device *device, const mtlb_pipeline_desc &desc)
+{
+    DepthStencilKey key{};
+    key[0] = desc.depth_enable ? desc.depth_func : MTLB_COMPARE_ALWAYS;
+    key[1] = desc.depth_enable && desc.depth_write_enable;
+    if (desc.stencil_enable) {
+        key[2] = 1;
+        key[3] = desc.stencil_read_mask;
+        key[4] = desc.stencil_write_mask;
+        const mtlb_stencil_face *faces[2] = {&desc.front_face, &desc.back_face};
+        for (int i = 0; i < 2; ++i) {
+            key[5 + i * 4] = faces[i]->fail_op;
+            key[6 + i * 4] = faces[i]->depth_fail_op;
+            key[7 + i * 4] = faces[i]->pass_op;
+            key[8 + i * 4] = faces[i]->func;
+        }
+    }
+
+    std::lock_guard<std::mutex> lock(device->depth_stencil_mutex);
+    auto it = device->depth_stencil_states.find(key);
+    if (it != device->depth_stencil_states.end())
+        return it->second;
+
+    MTLDepthStencilDescriptor *dd = [MTLDepthStencilDescriptor new];
+    dd.depthCompareFunction = to_compare(key[0]);
+    dd.depthWriteEnabled = key[1] != 0;
+    if (desc.stencil_enable) {
+        dd.frontFaceStencil = to_stencil(desc.front_face, desc.stencil_read_mask, desc.stencil_write_mask);
+        dd.backFaceStencil = to_stencil(desc.back_face, desc.stencil_read_mask, desc.stencil_write_mask);
+    }
+    id<MTLDepthStencilState> state = [device->device newDepthStencilStateWithDescriptor:dd];
+    if (state)
+        device->depth_stencil_states.emplace(key, state);
+    return state;
+}
+
 std::string lowercase_key(const char *semantic, uint32_t index)
 {
     std::string key(semantic);
@@ -189,7 +256,7 @@ std::string lowercase_key(const char *semantic, uint32_t index)
 
 // Maps the D3D12 input layout onto Metal vertex fetch attributes, using the
 // shader's reflected input names to find each element's attribute slot.
-mtlb_result build_vertex_descriptor(const mtlb_pipeline_desc &desc, const Stage &vs, MTLVertexDescriptor **out)
+mtlb_result build_vertex_descriptor(const mtlb_pipeline_desc &desc, const ShaderStage &vs, MTLVertexDescriptor **out)
 {
     MTLVertexDescriptor *vd = [MTLVertexDescriptor vertexDescriptor];
     for (uint32_t i = 0; i < desc.num_input_elements; ++i) {
@@ -247,27 +314,27 @@ extern "C" mtlb_result mtlb_pipeline_create(mtlb_device handle, const mtlb_pipel
     if (!root_signature)
         return MTLB_ERROR_INVALID_ARGUMENT;
 
-    Stage vs, ps;
-    mtlb_result result = build_stage(device->device, root_signature->ir, desc->vs_dxil, desc->vs_size,
-                                     desc->vs_entry, IRShaderStageVertex, vs);
+    std::shared_ptr<const ShaderStage> vs, ps;
+    mtlb_result result = get_stage(device, root_signature, desc->vs_dxil, desc->vs_size, desc->vs_entry,
+                                   IRShaderStageVertex, vs);
     if (result != MTLB_OK)
         return result;
     if (desc->ps_dxil && desc->ps_size) {
-        result = build_stage(device->device, root_signature->ir, desc->ps_dxil, desc->ps_size,
-                             desc->ps_entry, IRShaderStageFragment, ps);
+        result = get_stage(device, root_signature, desc->ps_dxil, desc->ps_size, desc->ps_entry,
+                           IRShaderStageFragment, ps);
         if (result != MTLB_OK)
             return result;
     }
 
     MTLRenderPipelineDescriptor *pd = [MTLRenderPipelineDescriptor new];
-    pd.vertexFunction = vs.function;
-    pd.fragmentFunction = ps.function;
-    pd.rasterizationEnabled = ps.function != nil;
+    pd.vertexFunction = vs->function;
+    pd.fragmentFunction = ps ? ps->function : nil;
+    pd.rasterizationEnabled = ps != nullptr;
     pd.rasterSampleCount = desc->sample_count ? desc->sample_count : 1;
     pd.inputPrimitiveTopology = to_topology_class(desc->topology_type);
 
     MTLVertexDescriptor *vertex_descriptor = nil;
-    result = build_vertex_descriptor(*desc, vs, &vertex_descriptor);
+    result = build_vertex_descriptor(*desc, *vs, &vertex_descriptor);
     if (result != MTLB_OK)
         return result;
     pd.vertexDescriptor = vertex_descriptor;
@@ -307,14 +374,7 @@ extern "C" mtlb_result mtlb_pipeline_create(mtlb_device handle, const mtlb_pipel
     if (!state)
         return fail(MTLB_ERROR_COMPILE_FAILED, std::string("newRenderPipelineState: ") + ns_error.localizedDescription.UTF8String);
 
-    MTLDepthStencilDescriptor *dd = [MTLDepthStencilDescriptor new];
-    dd.depthCompareFunction = desc->depth_enable ? to_compare(desc->depth_func) : MTLCompareFunctionAlways;
-    dd.depthWriteEnabled = desc->depth_enable && desc->depth_write_enable;
-    if (desc->stencil_enable) {
-        dd.frontFaceStencil = to_stencil(desc->front_face, desc->stencil_read_mask, desc->stencil_write_mask);
-        dd.backFaceStencil = to_stencil(desc->back_face, desc->stencil_read_mask, desc->stencil_write_mask);
-    }
-    id<MTLDepthStencilState> depth_stencil = [device->device newDepthStencilStateWithDescriptor:dd];
+    id<MTLDepthStencilState> depth_stencil = get_depth_stencil(device, *desc);
     if (!depth_stencil)
         return fail(MTLB_ERROR_COMPILE_FAILED, "newDepthStencilState failed");
 
@@ -336,7 +396,8 @@ extern "C" mtlb_result mtlb_pipeline_create(mtlb_device handle, const mtlb_pipel
 extern "C" mtlb_result mtlb_root_signature_create(mtlb_device handle, const void *blob, uint64_t size,
                                                    mtlb_root_signature *out, mtlb_root_signature_layout *layout)
 {
-    if (!from_handle<Device>(handle) || !blob || !out || !layout)
+    Device *device = from_handle<Device>(handle);
+    if (!device || !blob || !out || !layout)
         return MTLB_ERROR_INVALID_ARGUMENT;
 
     IRError *error = nullptr;
@@ -368,7 +429,8 @@ extern "C" mtlb_result mtlb_root_signature_create(mtlb_device handle, const void
     }
     layout->argument_buffer_size = static_cast<uint32_t>((end + 7) & ~uint64_t(7));
 
-    *out = to_handle(new RootSignature{root_signature.ptr});
+    static std::atomic<uint64_t> next_id{1};
+    *out = to_handle(new RootSignature{device, next_id++, root_signature.ptr});
     root_signature.ptr = nullptr;  // owned by the handle now
     return MTLB_OK;
 }
@@ -378,6 +440,13 @@ extern "C" void mtlb_root_signature_destroy(mtlb_root_signature handle)
     RootSignature *root_signature = from_handle<RootSignature>(handle);
     if (!root_signature)
         return;
+    {
+        // Shaders converted against this root signature can no longer be reused.
+        Device *device = root_signature->device;
+        std::lock_guard<std::mutex> lock(device->shaders_mutex);
+        for (auto it = device->shaders.begin(); it != device->shaders.end();)
+            it = std::get<2>(it->first) == root_signature->id ? device->shaders.erase(it) : std::next(it);
+    }
     IRRootSignatureDestroy(root_signature->ir);
     delete root_signature;
 }
