@@ -20,11 +20,6 @@ constexpr D3D_FEATURE_LEVEL kMaxFeatureLevel = D3D_FEATURE_LEVEL_12_0;
 constexpr D3D_SHADER_MODEL kMaxShaderModel = D3D_SHADER_MODEL_6_6;
 constexpr UINT64 kResourceAlignment = 64 * 1024;
 
-UINT64 align_up(UINT64 value, UINT64 alignment)
-{
-    return (value + alignment - 1) / alignment * alignment;
-}
-
 // Typed access to the in/out structure of CheckFeatureSupport.
 template <typename T>
 T *feature_data(void *data, UINT size)

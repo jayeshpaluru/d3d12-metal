@@ -30,7 +30,7 @@ void fill_common(Desc &d, const DXGI_ADAPTER_DESC2 &src)
     d.AdapterLuid = src.AdapterLuid;
 }
 
-class Adapter final : public RefCounted<IDXGIAdapter3> {
+class Adapter final : public WithPrivateData<RefCounted<IDXGIAdapter3>> {
 public:
     // Takes ownership of `device` and a reference on `parent`.
     Adapter(IDXGIFactory *parent, mtlb_device device, const mtlb_device_caps &caps)
@@ -60,22 +60,6 @@ public:
     {
         return query_interfaces<IUnknown, IDXGIObject, IDXGIAdapter, IDXGIAdapter1,
                                 IDXGIAdapter2, IDXGIAdapter3>(this, riid, out);
-    }
-
-    // IDXGIObject
-    HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID name, UINT size, const void *data) override
-    {
-        return private_data_.set(name, size, data);
-    }
-
-    HRESULT STDMETHODCALLTYPE SetPrivateDataInterface(REFGUID name, const IUnknown *iface) override
-    {
-        return private_data_.set_interface(name, iface);
-    }
-
-    HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID name, UINT *size, void *data) override
-    {
-        return private_data_.get(name, size, data);
     }
 
     HRESULT STDMETHODCALLTYPE GetParent(REFIID riid, void **parent) override
@@ -169,7 +153,6 @@ private:
     mtlb_device device_;
     UINT64 budget_;
     DXGI_ADAPTER_DESC2 desc_{}; // GetDesc/GetDesc1 are prefixes of this
-    PrivateData private_data_;
 };
 
 } // namespace

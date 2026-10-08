@@ -23,11 +23,6 @@ mtlb_render_target to_render_target(const RenderTargetDescriptor &rtv)
     return {rtv.texture, rtv.view_format, rtv.mip_level, rtv.array_slice, 0};
 }
 
-UINT mip_extent(UINT size, UINT mip)
-{
-    return std::max(1u, size >> mip);
-}
-
 } // namespace
 
 HRESULT CommandList::create(Device *device, D3D12_COMMAND_LIST_TYPE type, ID3D12CommandAllocator *allocator,

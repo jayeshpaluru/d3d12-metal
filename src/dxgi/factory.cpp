@@ -9,7 +9,7 @@ namespace d3d12m {
 
 namespace {
 
-class Factory final : public RefCounted<IDXGIFactory5> {
+class Factory final : public WithPrivateData<RefCounted<IDXGIFactory5>> {
 public:
     explicit Factory(UINT flags) : flags_(flags) {}
 
@@ -17,22 +17,6 @@ public:
     {
         return query_interfaces<IUnknown, IDXGIObject, IDXGIFactory, IDXGIFactory1, IDXGIFactory2,
                                 IDXGIFactory3, IDXGIFactory4, IDXGIFactory5>(this, riid, out);
-    }
-
-    // IDXGIObject
-    HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID name, UINT size, const void *data) override
-    {
-        return private_data_.set(name, size, data);
-    }
-
-    HRESULT STDMETHODCALLTYPE SetPrivateDataInterface(REFGUID name, const IUnknown *iface) override
-    {
-        return private_data_.set_interface(name, iface);
-    }
-
-    HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID name, UINT *size, void *data) override
-    {
-        return private_data_.get(name, size, data);
     }
 
     // A factory has no parent object; like the Windows one, answer with itself.
@@ -188,7 +172,6 @@ private:
     }
 
     UINT flags_;
-    PrivateData private_data_;
 };
 
 } // namespace

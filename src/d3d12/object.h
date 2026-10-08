@@ -15,34 +15,16 @@ class Device;
 // Implements ID3D12Object on top of reference counting. `I` is the most-derived
 // interface of the final class.
 template <typename I>
-class ObjectImpl : public RefCounted<I> {
+class ObjectImpl : public WithPrivateData<RefCounted<I>> {
 public:
-    HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID guid, UINT *size, void *data) override
-    {
-        return private_data_.get(guid, size, data);
-    }
-
-    HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID guid, UINT size, const void *data) override
-    {
-        return private_data_.set(guid, size, data);
-    }
-
-    HRESULT STDMETHODCALLTYPE SetPrivateDataInterface(REFGUID guid, const IUnknown *iface) override
-    {
-        return private_data_.set_interface(guid, iface);
-    }
-
     HRESULT STDMETHODCALLTYPE SetName(LPCWSTR name) override
     {
         size_t length = 0;
         while (name && name[length])
             ++length;
-        return private_data_.set(WKPDID_D3DDebugObjectNameW,
+        return this->private_data_.set(WKPDID_D3DDebugObjectNameW,
                                  name ? static_cast<UINT>((length + 1) * sizeof(WCHAR)) : 0, name);
     }
-
-private:
-    PrivateData private_data_;
 };
 
 // The command list types this layer can create allocators, lists and queues for.

@@ -37,4 +37,28 @@ private:
     std::vector<Entry> entries_;
 };
 
+// Adds the private data methods shared by ID3D12Object and IDXGIObject (their
+// signatures match) to an interface implementation `Base`.
+template <typename Base>
+class WithPrivateData : public Base {
+public:
+    HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID guid, UINT *size, void *data) override
+    {
+        return private_data_.get(guid, size, data);
+    }
+
+    HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID guid, UINT size, const void *data) override
+    {
+        return private_data_.set(guid, size, data);
+    }
+
+    HRESULT STDMETHODCALLTYPE SetPrivateDataInterface(REFGUID guid, const IUnknown *iface) override
+    {
+        return private_data_.set_interface(guid, iface);
+    }
+
+protected:
+    PrivateData private_data_;
+};
+
 } // namespace d3d12m

@@ -6,20 +6,6 @@
 
 namespace d3d12m {
 
-namespace {
-
-UINT64 align_up(UINT64 value, UINT64 alignment)
-{
-    return (value + alignment - 1) / alignment * alignment;
-}
-
-UINT mip_extent(UINT size, UINT mip)
-{
-    return std::max(1u, size >> mip);
-}
-
-} // namespace
-
 mtlb_format to_mtlb_format(DXGI_FORMAT format)
 {
     mtlb_format_info info;

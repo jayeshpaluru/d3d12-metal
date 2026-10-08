@@ -1,10 +1,23 @@
 // DXGI format helpers: mapping to bridge formats and subresource layout maths.
 #pragma once
 
+#include <algorithm>
+
 #include "common/com.h"
 #include "bridge/mtlb.h"
 
 namespace d3d12m {
+
+inline UINT64 align_up(UINT64 value, UINT64 alignment)
+{
+    return (value + alignment - 1) / alignment * alignment;
+}
+
+// Size of mip level `mip` along an axis of `size` texels.
+inline UINT mip_extent(UINT size, UINT mip)
+{
+    return std::max(1u, size >> mip);
+}
 
 // Returns the bridge format for `format`, or MTLB_FORMAT_UNKNOWN when the
 // bridge does not support it (DXGI_FORMAT_UNKNOWN included).
