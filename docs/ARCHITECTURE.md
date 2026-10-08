@@ -189,6 +189,23 @@
   application churns. `Map`/`Unmap`/`GetGPUVirtualAddress` never cross. `QueryVideoMemoryInfo` (polled every frame)
   used to cross every time and is answered from a 250 ms cache. The Godot scene makes 9 unix calls per frame.
 
+## Milestone 6 design
+
+- **Geometry and tessellation emulation.** A pipeline with a GS, or an HS and DS, becomes a Metal *mesh* pipeline built with the converter's runtime
+  (`IRRuntimeNewGeometryEmulationPipeline`, `IRRuntimeNewGeometryTessellationEmulationPipeline`): the vertex shader runs as the object function
+  (plus the hull shader and tessellator for patches), the geometry or domain shader as the mesh function. All stages are converted with a second
+  per-thread compiler that has `IRCompilerEnableGeometryAndTessellationEmulation` on, and with the topology type of the pipeline
+  (`IRCompilerSetInputTopology`); the stage-in function is synthesized for the input layout (an empty layout for a vertex shader that pulls its
+  data from buffers). Stages keep their `MTLLibrary` (functions with constants are instantiated by the runtime) and the reflection scalars the
+  runtime configuration needs (`ShaderStage`, `EmulatedPipeline`). The disk cache key of such a stage includes the emulation flag and topology.
+- **Binding and drawing.** The replay binds root arguments (at the argument buffer and hull/domain points), descriptor heaps and the
+  `IRRuntimeVertexBuffers` table on the object and mesh stages instead of the vertex stage, a zero buffer for what the application did not set (the
+  converted stages read their argument buffers regardless), and the tessellator tables (`IRRuntimeLoadTessellatorTables`) for patch pipelines.
+  Draws go through `IRRuntimeDraw[Indexed]PrimitivesGeometryEmulation` / `IRRuntimeDraw[Indexed]PatchesTessellationEmulation` (the index buffer's
+  view offset is folded into the first index). Adjacency (`*_ADJ`) and patch-list topologies are recorded; a plain pipeline skips draws that use
+  them, an emulated one skips draws whose topology does not match (patch lists need the hull shader's control point count).
+- **Statistics.** `mtlb_stats` carries the GPU time of completed command buffers; `D3D12METAL_STATS=1` prints it with the frame rate.
+
 ## Wine build
 
 Under Wine the layer is two halves in one process (one address space):

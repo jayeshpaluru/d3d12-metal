@@ -153,7 +153,7 @@ Tooling for getting Marvel's Spider-Man Remastered running; no game code or asse
   types); timestamps are sampled at the boundary of a compute pass of their own, and
   `ResolveQueryData` of timestamps is a CPU copy in the command buffer's completion handler, which the queue's next buffer
   waits for through an event (nothing blocks; a copy or draw in the same list that reads the destination sees stale data).
-- Predication, depth bounds, `SetSamplePositions`, adjacency and patch topologies (the call is
+- Predication, depth bounds, `SetSamplePositions` (the call is
   ignored and logged) are not supported.
 - Reserved (tiled) resources are refused; shared handles, pipeline libraries, ray tracing,
   mesh shaders and variable rate shading are absent (the matching features report unsupported).
@@ -215,4 +215,18 @@ Wine notes:
   - Fragment outputs of another type than their render target (uint4 to RGBA8_UNORM and the like) are written through a view of the other kind.
   - Index buffer views of format UNKNOWN unbind; ClearUnorderedAccessViewUint handles R11G11B10_FLOAT; timestamp query heaps are split
     over several counter sample buffers (4096 samples each, made when first used).
-  - Open: geometry, hull, domain and stream-output stages are refused (Metal Shader Converter can emulate them through mesh shaders; not done).
+  - Open at the time: geometry, hull, domain and stream-output stages were refused (done in milestone 6).
+
+## Milestone 6: gameplay
+
+- **Input without macOS permissions.** `tools/game/keys.c` (built by `tools/game/keys.sh` into `build-wine/out/keys.exe`) runs inside the game's
+  prefix and sends keys (`SendInput` with scan codes, or `-m post` for window messages) and mouse clicks to the game window. Menus take keys
+  at once; gameplay only reads the keyboard after the window has been clicked. `tools/game/play.sh <name>` launches the game with statistics on
+  (the installed `d3d12metal.conf`, `trace=0 stats=0`, stays as it is; the environment overrides it) and drives it from SELECT PROFILE into the
+  open world (`tools/game/to-gameplay.sh`: waits for the menu's stats line, profile row 2, CONTINUE, a screenshot every 10 s while loading, a click);
+  afterwards `tools/game/keys.sh hold:w:2500 hold:space:300 ...` moves Spider-Man and `tools/game/screenshot.sh <name>` captures.
+- **Geometry, hull and domain shaders** run through Metal Shader Converter's mesh shader emulation (`create_emulated_pipeline` in
+  `pipeline.mm`, ARCHITECTURE.md "Milestone 6 design"). Stream output is refused with E_NOTIMPL (the converter has no public API for it).
+- **Copies between a block-compressed texture and one with a texel per block** (a compressor's R32G32B32A32_UINT output copied into BC6H) go
+  through a buffer: Metal refuses a BC view of such a texture, and the failed assertion killed the game on entering the open world.
+- Statistics (`D3D12METAL_STATS=1`) now print the frame rate and the GPU time per frame (sum of the command buffers' GPU intervals, and their union).
