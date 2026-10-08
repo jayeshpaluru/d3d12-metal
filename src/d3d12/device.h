@@ -20,6 +20,10 @@ namespace d3d12m {
 class Resource;
 class RootSignature;
 
+// The highest feature level the layer reports: 12_0, or 12_1 with `feature_level=12_1` in d3d12metal.conf
+// (D3D12METAL_FEATURE_LEVEL), which also reports rasterizer ordered views as supported.
+D3D_FEATURE_LEVEL max_feature_level();
+
 // Logs (once) that a descriptor handle was refused; see Device::validate_cpu_range.
 void log_bad_handle(const char *what);
 

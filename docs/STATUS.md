@@ -281,3 +281,32 @@ Performance findings (Spider-Man, gameplay scene, `tools/game/measure.sh`):
   in different scenes. The CPU is spread over ~35 game threads at 5-20 % each (the game's job system), the layer's submit thread is about 3 ms per frame on both.
   Asynchronous submission (a worker thread for `ExecuteCommandLists`) would take ~3 ms off the submitting thread but needs
   object lifetimes held across it.
+
+## Milestone 8 prep (Spider-Man 2)
+
+- **Game profiles.** `GAME=sm1|sm2` selects exe, Steam app id, install folder, arguments and screen references
+  (`build-wine/ref/<game>/`) for install-game.sh, uninstall-game.sh, run-game.sh and tools/game/*; default sm1. launch.sh exports
+  `ROSETTA_ADVERTISE_AVX=1`. A missing game folder is reported, not fatal. `SPOOF_GPU=amd tools/install-game.sh` (opt-in) writes
+  `adapter_name=` / `vendor_id` / `device_id` into the conf and a matching PCI enum key.
+- **DirectStorage GDeflate meta command** (`src/d3d12/meta_command.*`, `src/bridge/metal/gdeflate*`): `EnumerateMetaCommands`,
+  `EnumerateMetaCommandParameters`, `CheckFeatureSupport(QUERY_META_COMMAND)` (scratch size), `CreateMetaCommand`,
+  `InitializeMetaCommand`, `ExecuteMetaCommand` of command `1bddd090-c47e-459c-8f81-42c9f97a5308`. Two MSL kernels run at the
+  command's place in the queue: a one-group prefix sum of tile counts (publishes an indirect 2D grid), then one 32-lane SIMD group per
+  64 KiB tile, a port of Microsoft's reference HLSL decoder (THIRD_PARTY_NOTICES.md). Every access is bounds-checked; damaged streams
+  and wrong stream ids cannot touch memory outside the buffers. At most 1024 streams per call. `gdeflate=0` (D3D12METAL_GDEFLATE=0)
+  hides the command so DirectStorage uses its own shader. `p_gdeflate` (native and Wine): 9 sizes x 6 data kinds x levels 0/1/6/12 against
+  the reference compressor, 20 mixed streams, unaligned data, the call/control count rules, 1024 streams, the compute queue, damaged streams.
+  Throughput on an M2 Max (`p_gdeflate --bench`, 64 MB of output, 8 decompressions per submit): text-like data at level 1 / 6 3.7 / 6.7
+  GB/s, three-symbol data 2.2 / 3.4 GB/s, incompressible (stored blocks) 24-26 GB/s. Not optimised yet: the match copies of a round run one
+  after the other with a barrier each; independent copies could run in parallel.
+- **Per-shader quirks** (`src/common/quirks.*`): hash = vkd3d-proton's (FNV-1 over the bytecode as passed to the pipeline call), so its
+  tables transfer. `quirk_force_compute_barrier=<hex hashes>` in the conf, or the built-in table (Spider-Man2 `0x324071d329f05ccc`, hash
+  unverified against our trace). `shader_hashes=1` logs every pipeline's shader hashes. A quirk shader gets a UAV barrier after each
+  Dispatch / ExecuteIndirect dispatch. `test_quirks_*`.
+- **Feature level.** `feature_level=12_1` reports 12_1 and ROVs. MSC does back ROVs: `p_rov` shows ordered buffer and texture ROVs
+  exact (0 of 655360 wrong) where plain UAVs are wrong in about 95% of pixels. Conservative rasterization stays unsupported (Metal has none),
+  so this is a test switch, not a conformant 12_1. Default stays 12_0, ROVs off. Fragment buffer 5 (converter uniforms) is now bound.
+- **Other fix:** blend state on integer render targets is dropped (Metal asserted; Spider-Man 2 enables it).
+- **First boot of Spider-Man 2** (direct launch): DirectStorage creates the GDeflate meta command and initialises it; the game renders its
+  first splash ("Sony Interactive Entertainment presents") at ~117 fps with the pipelines it creates, but does not advance past it
+  (no ExecuteMetaCommand seen, one compute shader fails DXIL conversion, one typed buffer view format is unsupported).

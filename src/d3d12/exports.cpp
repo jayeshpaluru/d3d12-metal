@@ -9,7 +9,7 @@ using namespace d3d12m;
 D3D12M_EXPORT HRESULT D3D12CreateDevice(IUnknown *adapter, D3D_FEATURE_LEVEL minimum_feature_level, REFIID riid, void **device)
 {
     D3D12M_TRACED_BEGIN
-    if (minimum_feature_level > D3D_FEATURE_LEVEL_12_0)
+    if (minimum_feature_level > max_feature_level())
         return DXGI_ERROR_UNSUPPORTED;
 
     ID3D12Device10 *created = nullptr;

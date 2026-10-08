@@ -1312,6 +1312,10 @@ mtlb_result Replay::apply_state()
         }
         [render_ setFragmentBytes:state_.root_args length:state_.root_args_size atIndex:kIRArgumentBufferBindPoint];
     }
+    if (dirty_ == kAll) {
+        static const uint32_t zero_uniforms[4] = {};
+        [render_ setFragmentBytes:zero_uniforms length:sizeof(zero_uniforms) atIndex:kIRArgumentBufferUniformsBindPoint];
+    }
     if (dirty_ & kBlendFactor)
         [render_ setBlendColorRed:state_.blend_factor[0] green:state_.blend_factor[1] blue:state_.blend_factor[2] alpha:state_.blend_factor[3]];
     if (dirty_ & kStencilRef)

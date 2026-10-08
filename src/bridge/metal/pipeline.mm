@@ -669,7 +669,8 @@ mtlb_result fill_attachments(const mtlb_pipeline_desc &desc, const ShaderStage *
         MTLRenderPipelineColorAttachmentDescriptor *ca = color_attachments[i];
         ca.pixelFormat = format;
         ca.writeMask = to_write_mask(blend.write_mask);
-        ca.blendingEnabled = blend.blend_enable != 0;
+        // Integer formats cannot blend in Metal (D3D12 ignores the blend state of them, and games leave it enabled).
+        ca.blendingEnabled = blend.blend_enable != 0 && !is_integer_pixel_format(format);
         ca.sourceRGBBlendFactor = to_blend_factor(blend.src_blend);
         ca.destinationRGBBlendFactor = to_blend_factor(blend.dest_blend);
         ca.rgbBlendOperation = to_blend_op(blend.blend_op);

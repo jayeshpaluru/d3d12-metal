@@ -75,6 +75,13 @@ public:
 #ifdef _WIN32
         query_pci_ids(vendor, device, subsystem, revision);
 #endif
+        // adapter_name=<text> in d3d12metal.conf replaces the description (with vendor_id / device_id: an identity for games
+        // that whitelist GPUs).
+        if (const char *name = config_get("ADAPTER_NAME"); name && *name) {
+            std::fill(std::begin(desc_.Description), std::end(desc_.Description), WCHAR(0));
+            for (size_t i = 0; i < max_chars && name[i]; i++)
+                desc_.Description[i] = static_cast<unsigned char>(name[i]);
+        }
         desc_.VendorId = config_hex("VENDOR_ID", vendor);
         desc_.DeviceId = config_hex("DEVICE_ID", device);
         desc_.SubSysId = subsystem;

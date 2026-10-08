@@ -8,7 +8,7 @@
 # The registry is changed with `wine reg add`, which talks to the prefix's running wineserver (Steam keeps running).
 #
 # Usage: tools/install-game.sh [--dry-run]       (build first: tools/build-wine.sh)
-# Environment: GAME (sm1|sm2, default sm1), GAME_DIR, GAME_EXE, STEAM_WINEPREFIX, WINE_ROOT (see tools/game-common.sh)
+# Environment: SPOOF_GPU=amd (see below), GAME (sm1|sm2, default sm1), GAME_DIR, GAME_EXE, STEAM_WINEPREFIX, WINE_ROOT (see tools/game-common.sh)
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/game-common.sh"
 
@@ -97,6 +97,20 @@ dump_failed=$game_logs/failed-shaders
 EOF
     fi
     record "d3d12metal.conf" "-"
+fi
+
+# SPOOF_GPU=amd: the adapter presents itself as an AMD RX 6800 (1002:73BF), for games that whitelist GPUs by name or vendor
+# (a test switch, off by default): lines in the conf and the PCI enum key Wine would have registered for that id.
+if [ "${SPOOF_GPU:-}" = amd ]; then
+    echo "spoof:        adapter AMD Radeon RX 6800 (1002:73BF)"
+    if [ "$dry_run" = 0 ] && ! grep -q '^adapter_name=' "$conf"; then
+        printf 'adapter_name=AMD Radeon RX 6800\nvendor_id=1002\ndevice_id=73bf\n' >> "$conf"
+    fi
+    pci='HKLM\System\CurrentControlSet\Enum\PCI\VEN_1002&DEV_73BF&SUBSYS_00000000&REV_00\00000000'
+    run wine_cmd reg add "$pci" /v DeviceDesc /t REG_SZ /d "AMD Radeon RX 6800" /f >/dev/null
+    run wine_cmd reg add "$pci" /v Class /t REG_SZ /d Display /f >/dev/null
+    run wine_cmd reg add "$pci" /v ClassGUID /t REG_SZ /d '{4D36E968-E325-11CE-BFC1-08002BE10318}' /f >/dev/null
+    run wine_cmd reg add "$pci" /v Driver /t REG_SZ /d '{4D36E968-E325-11CE-BFC1-08002BE10318}\0000' /f >/dev/null
 fi
 
 if [ "$dry_run" = 0 ]; then

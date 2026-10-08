@@ -12,7 +12,7 @@ endif
 
 # Shader name -> [vs header, ps header], from shaders/<name>.hlsl.
 shader_headers = {}
-foreach shader : ['color', 'vertex_input', 'hello_texture', 'const_buffers', 'instanced', 'rt_mismatch', 'uav_pass', 'embedded_rs_gfx', 'geometry', 'tessellation']
+foreach shader : ['color', 'vertex_input', 'hello_texture', 'const_buffers', 'instanced', 'rt_mismatch', 'uav_pass', 'embedded_rs_gfx', 'geometry', 'tessellation', 'rov']
   headers = []
   foreach stage : stages_of.get(shader, [['vs', 'vs_6_0', 'VSMain'], ['ps', 'ps_6_0', 'PSMain']])
     headers += custom_target(
@@ -110,6 +110,18 @@ foreach mode : ['quirk', 'plain']
   )
   test('test_quirks_' + mode, exe, args: mode == 'plain' ? ['plain'] : [], timeout: 60,
        env: {'D3D12METAL_CACHE_DIR': test_cache_root / ('quirks_' + mode)})
+endforeach
+
+# The feature level option: 12_0 by default, 12_1 (with ROVs) when asked for.
+feature_level_test = executable(
+  'test_feature_level', 'test_feature_level.cpp',
+  include_directories: test_inc,
+  dependencies: test_deps,
+  link_with: d3d12_metal,
+)
+foreach level : ['12_0', '12_1']
+  test('test_feature_level_' + level, feature_level_test, args: [level], timeout: 60,
+       env: {'D3D12METAL_CACHE_DIR': test_cache_root / ('feature_level_' + level), 'D3D12METAL_FEATURE_LEVEL': level})
 endforeach
 
 # The swap chain test: its Objective-C half (a layer standing in for a window) is a separate file.

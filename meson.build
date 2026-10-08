@@ -32,6 +32,8 @@ stages_of = {
   'uav_pass': [['vs', 'vs_6_0', 'VSMain'], ['vsr', 'vs_6_0', 'VSRead'], ['ps', 'ps_6_0', 'PSMain'], ['psw', 'ps_6_0', 'PSWrite']],
   'geometry': [['vs', 'vs_6_0', 'VSMain'], ['gs', 'gs_6_0', 'GSMain'], ['ps', 'ps_6_0', 'PSMain']],
   'tessellation': [['vs', 'vs_6_0', 'VSMain'], ['hs', 'hs_6_0', 'HSMain'], ['ds', 'ds_6_0', 'DSMain'], ['ps', 'ps_6_0', 'PSMain']],
+  'rov': [['vs', 'vs_6_0', 'VSMain'], ['ps', 'ps_6_0', 'PSOrdered'], ['psp', 'ps_6_0', 'PSPlain'],
+          ['pst', 'ps_6_0', 'PSOrderedTexture'], ['pspt', 'ps_6_0', 'PSPlainTexture']],
 }
 
 portable_tests = [
@@ -58,6 +60,7 @@ portable_tests = [
   ['tessellation', ['tessellation'], []],
   ['embedded_rs', ['embedded_rs_gfx'], ['embedded_rs']],
   ['gdeflate', [], []],
+  ['rov', ['rov'], []],
 ]
 
 # The reference GDeflate codec (NVIDIA's libdeflate fork, MIT, as used by Microsoft's DirectStorage samples): only the

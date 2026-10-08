@@ -7,6 +7,7 @@
 #include <type_traits>
 #include <vector>
 
+#include "common/config.h"
 #include "common/luid.h"
 #include "common/platform.h"
 #include "common/stats.h"
@@ -27,9 +28,25 @@
 
 namespace d3d12m {
 
+D3D_FEATURE_LEVEL max_feature_level()
+{
+    static const D3D_FEATURE_LEVEL level = [] {
+        const char *value = config_get("FEATURE_LEVEL");
+        if (!value || !*value || !std::strcmp(value, "12_0"))
+            return D3D_FEATURE_LEVEL_12_0;
+        if (!std::strcmp(value, "12_1")) {
+            D3D12M_LOG("feature_level=12_1: reporting feature level 12_1 and rasterizer ordered views; conservative "
+                       "rasterization stays unsupported (a test switch, not a conformant 12_1)");
+            return D3D_FEATURE_LEVEL_12_1;
+        }
+        D3D12M_LOG("feature_level=%s is not supported (12_0 or 12_1); using 12_0", value);
+        return D3D_FEATURE_LEVEL_12_0;
+    }();
+    return level;
+}
+
 namespace {
 
-constexpr D3D_FEATURE_LEVEL kMaxFeatureLevel = D3D_FEATURE_LEVEL_12_0;
 constexpr D3D_SHADER_MODEL kMaxShaderModel = D3D_SHADER_MODEL_6_6;
 // D3D12_FEATURE values newer than the MinGW headers.
 constexpr int kFeatureOptions19 = 48;
@@ -908,7 +925,9 @@ HRESULT Device::CheckFeatureSupport(D3D12_FEATURE feature, void *data, UINT size
         o->TiledResourcesTier = D3D12_TILED_RESOURCES_TIER_NOT_SUPPORTED;
         o->ResourceBindingTier = D3D12_RESOURCE_BINDING_TIER_3;
         o->TypedUAVLoadAdditionalFormats = TRUE;
-        o->ROVsSupported = FALSE;
+        // Rasterizer ordered views are backed by the converter (raster order groups; tests/portable/p_rov.cpp) but only
+        // reported at the feature level that requires them, so the default behaviour of titles stays what it was.
+        o->ROVsSupported = max_feature_level() >= D3D_FEATURE_LEVEL_12_1;
         o->ConservativeRasterizationTier = D3D12_CONSERVATIVE_RASTERIZATION_TIER_NOT_SUPPORTED;
         o->MaxGPUVirtualAddressBitsPerResource = 40;
         o->ResourceHeapTier = D3D12_RESOURCE_HEAP_TIER_2;
@@ -1033,7 +1052,7 @@ HRESULT Device::CheckFeatureSupport(D3D12_FEATURE feature, void *data, UINT size
         D3D_FEATURE_LEVEL best = {};
         for (UINT i = 0; i < f->NumFeatureLevels; ++i) {
             D3D_FEATURE_LEVEL level = f->pFeatureLevelsRequested[i];
-            if (level <= kMaxFeatureLevel && level > best)
+            if (level <= max_feature_level() && level > best)
                 best = level;
         }
         if (!best)
