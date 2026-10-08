@@ -600,7 +600,7 @@ void CommandList::ExecuteBundle(ID3D12GraphicsCommandList *bundle_ptr)
             mine.signature = state->signature;
         }
         mine.args = state->args;
-        mine.dirty = false;  // the bundle's stream carries the snapshots it needed
+        mine.dirty = state->dirty;  // arguments it set after its last draw still have to reach the next one
     }
     has_graphics_pipeline_ = has_graphics_pipeline_ || bundle->has_graphics_pipeline_;
     has_compute_pipeline_ = has_compute_pipeline_ || bundle->has_compute_pipeline_;

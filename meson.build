@@ -40,7 +40,7 @@ portable_tests = [
   ['indirect', ['color'], ['fill']],
   ['msaa', ['color'], ['msaa_read']],
   ['queries', ['color'], ['fill']],
-  ['draw', ['instanced'], []],
+  ['draw', ['instanced', 'color'], []],
   ['sdk', [], []],
 ]
 

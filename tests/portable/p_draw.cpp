@@ -1,5 +1,7 @@
 // Draw variations: primitive topologies, per-instance data with step rates, StartInstanceLocation,
 // BaseVertexLocation, adjacency topologies (refused) and bundles.
+#include "color_ps.h"
+#include "color_vs.h"
 #include "instanced_ps.h"
 #include "instanced_vs.h"
 #include "t12.h"
@@ -252,6 +254,40 @@ int main()
             expect_colour("draw after bundle", image, 0.0f, -0.5f, kBlue);
             expect_colour("bundle draws two instances only", image, 0.5f, -0.5f, kBlack);
         }
+    }
+
+    // ---- Root arguments a bundle sets after its last draw reach the next draw of the list ------------------------------
+    {
+        const D3D12_ROOT_PARAMETER1 constants = root_constants(0, 4);
+        ComPtr<ID3D12RootSignature> signature = gpu.root_signature(&constants, 1);
+        const D3D12_INPUT_ELEMENT_DESC layout[] = {
+            {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0}};
+        ComPtr<ID3D12PipelineState> pso =
+            gpu.graphics_pso(graphics_pso_desc(signature.Get(), T12_SHADER(g_color_vs), T12_SHADER(g_color_ps), layout, 1));
+        // Triangle 0 in the upper left quadrant, triangle 1 in the lower right.
+        const float vertices[18] = {-0.8f, 0.2f, 0.5f, -0.2f, 0.2f, 0.5f, -0.5f, 0.8f, 0.5f,
+                                    0.2f, -0.8f, 0.5f, 0.8f, -0.8f, 0.5f, 0.5f, -0.2f, 0.5f};
+        ComPtr<ID3D12Resource> vertex_buffer = gpu.upload_buffer(vertices, sizeof(vertices));
+        const D3D12_VERTEX_BUFFER_VIEW view = {vertex_buffer->GetGPUVirtualAddress(), sizeof(vertices), 12};
+        const float red[4] = {1, 0, 0, 1}, green[4] = {0, 1, 0, 1};
+
+        ComPtr<ID3D12GraphicsCommandList> bundle = gpu.list(D3D12_COMMAND_LIST_TYPE_BUNDLE);
+        bundle->SetGraphicsRootSignature(signature.Get());
+        bundle->SetPipelineState(pso.Get());
+        bundle->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        bundle->IASetVertexBuffers(0, 1, &view);
+        bundle->SetGraphicsRoot32BitConstants(0, 4, red, 0);
+        bundle->DrawInstanced(3, 1, 0, 0);
+        bundle->SetGraphicsRoot32BitConstants(0, 4, green, 0);  // no draw after this in the bundle
+        CHECK_HR(bundle->Close());
+
+        const Image image = f.render(pso.Get(), D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST, [&](ID3D12GraphicsCommandList *list) {
+            list->SetGraphicsRootSignature(signature.Get());
+            list->ExecuteBundle(bundle.Get());
+            list->DrawInstanced(3, 1, 3, 0);
+        });
+        expect_colour("bundle draw uses its own arguments", image, -0.5f, 0.4f, kRed);
+        expect_colour("draw after the bundle uses the arguments it left", image, 0.5f, -0.4f, kGreen);
     }
 
     std::printf("p_draw: PASS\n");
