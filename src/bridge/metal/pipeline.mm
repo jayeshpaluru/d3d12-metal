@@ -561,6 +561,50 @@ MTLPrimitiveTopologyClass to_topology_class(uint32_t type)
     }
 }
 
+// The render targets (bit i: SV_Target i) a pixel shader declares in the output signature of its DXIL container. All of
+// them when the container cannot be read: a target counted as written only decides whether its type is checked.
+uint32_t dxil_written_targets(const void *dxil, uint64_t size)
+{
+    constexpr uint32_t kAll = 0xff;
+    if (!dxil || size < 32)
+        return kAll;
+    const auto *bytes = static_cast<const uint8_t *>(dxil);
+    auto u32 = [&](uint64_t offset) {
+        uint32_t v;
+        std::memcpy(&v, bytes + offset, 4);
+        return v;
+    };
+    if (u32(0) != 0x43425844u)  // 'DXBC'
+        return kAll;
+    const uint32_t parts = u32(28);
+    if (32 + uint64_t(parts) * 4 > size)
+        return kAll;
+    for (uint32_t i = 0; i < parts; ++i) {
+        const uint64_t at = u32(32 + i * 4);
+        if (at + 8 > size)
+            return kAll;
+        if (u32(at) != 0x3147534Fu)  // 'OSG1'
+            continue;
+        const uint64_t end = std::min<uint64_t>(at + 8 + u32(at + 4), size);
+        const uint64_t data = at + 8;
+        if (data + 8 > end)
+            return kAll;
+        const uint32_t count = u32(data), first = u32(data + 4);
+        constexpr uint64_t kElement = 32;  // DxilProgramSignatureElement
+        if (first < 8 || data + first + uint64_t(count) * kElement > end)
+            return kAll;
+        uint32_t written = 0;
+        for (uint32_t e = 0; e < count; ++e) {
+            const uint64_t element = data + first + e * kElement;
+            const uint32_t semantic_index = u32(element + 8), system_value = u32(element + 12);
+            if (system_value == 64 && semantic_index < 8)  // D3D_NAME_TARGET
+                written |= 1u << semantic_index;
+        }
+        return written;
+    }
+    return kAll;
+}
+
 // The attachment formats and blend state of a pipeline, shared by plain and emulated (mesh) pipelines.
 struct Attachments {
     std::array<MTLPixelFormat, MTLB_MAX_RENDER_TARGETS> color_view_formats{};
@@ -571,8 +615,9 @@ mtlb_result fill_attachments(const mtlb_pipeline_desc &desc, const ShaderStage *
                              MTLRenderPipelineColorAttachmentDescriptorArray *color_attachments, Attachments *out)
 {
     const mtlb_pipeline_desc *const d = &desc;
-    // Bit i is set when the fragment shader writes integers to render target i.
-    uint32_t integer_outputs = 0;
+    // Bit i is set when the fragment shader writes integers to render target i; written_outputs, when it writes target i at
+    // all (a target it leaves alone keeps the view of its own format).
+    uint32_t integer_outputs = 0, written_outputs = ps ? dxil_written_targets(d->ps_dxil, d->ps_size) : 0;
     if (ps) {
         IRVersionedFSInfo info;
         if (IRShaderReflectionCopyFragmentInfo(ps->reflection.get(), IRReflectionVersion_1_0, &info)) {
@@ -590,7 +635,7 @@ mtlb_result fill_attachments(const mtlb_pipeline_desc &desc, const ShaderStage *
         // D3D12 tolerates a shader output of another type than the render target (the result is undefined, and
         // games do it with the output masked); Metal refuses the pipeline. The target is written through a view of
         // the other kind instead (the bits land as they are); where no such view exists, the pipeline is refused.
-        if (ps && ((integer_outputs >> i) & 1) != (is_integer_pixel_format(format) ? 1u : 0u)) {
+        if (ps && ((written_outputs >> i) & 1) && ((integer_outputs >> i) & 1) != (is_integer_pixel_format(format) ? 1u : 0u)) {
             const MTLPixelFormat other = opposite_kind_format(format);
             if (other != MTLPixelFormatInvalid) {
                 color_view_formats[i] = other;

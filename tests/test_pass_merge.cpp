@@ -6,6 +6,8 @@
 #include "color_vs.h"
 #include "d3d12/command_queue.h"
 #include "portable/t12.h"
+#include "rt_mismatch_ps.h"
+#include "rt_mismatch_vs.h"
 #include "uav_pass_ps.h"
 #include "uav_pass_psw.h"
 #include "uav_pass_vs.h"
@@ -145,6 +147,55 @@ int main()
         list->ResourceBarrier(2, barriers);
         scene.draw(list.Get(), scene.color.Get(), blue);
         CHECK_EQ(scene.run(list.Get()), 2);
+    }
+
+    // Two pipelines on the same two targets (a normalised one and an integer one): one writes both, the other only the
+    // first. The integer target keeps its own view for the one that leaves it alone, so switching between them keeps the
+    // pass (a view of the other kind for the unwritten target would split it).
+    {
+        const D3D12_ROOT_PARAMETER1 constants = root_constants(0, 4);
+        ComPtr<ID3D12RootSignature> signature = scene.gpu.root_signature(&constants, 1);
+        const D3D12_INPUT_ELEMENT_DESC layout[] = {
+            {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0}};
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC one = graphics_pso_desc(signature.Get(), T12_SHADER(g_color_vs), T12_SHADER(g_color_ps), layout, 1);
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC both =
+            graphics_pso_desc(signature.Get(), T12_SHADER(g_rt_mismatch_vs), T12_SHADER(g_rt_mismatch_ps), layout, 1);
+        for (auto *desc : {&one, &both}) {
+            desc->NumRenderTargets = 2;
+            desc->RTVFormats[1] = DXGI_FORMAT_R32_UINT;
+        }
+        ComPtr<ID3D12PipelineState> writes_one = scene.gpu.graphics_pso(one), writes_both = scene.gpu.graphics_pso(both);
+        ComPtr<ID3D12Resource> ids = scene.gpu.texture(tex2d_desc(DXGI_FORMAT_R32_UINT, kSize, kSize, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET),
+                                                       D3D12_RESOURCE_STATE_RENDER_TARGET);
+        ComPtr<ID3D12DescriptorHeap> rtvs = scene.gpu.descriptor_heap(D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 2);
+        scene.gpu.device->CreateRenderTargetView(scene.target.Get(), nullptr, scene.gpu.cpu_handle(rtvs.Get(), 0));
+        scene.gpu.device->CreateRenderTargetView(ids.Get(), nullptr, scene.gpu.cpu_handle(rtvs.Get(), 1));
+        D3D12_CPU_DESCRIPTOR_HANDLE handles[2] = {scene.gpu.cpu_handle(rtvs.Get(), 0), scene.gpu.cpu_handle(rtvs.Get(), 1)};
+
+        ComPtr<ID3D12GraphicsCommandList> list = scene.gpu.list();
+        list->SetGraphicsRootSignature(signature.Get());
+        const D3D12_VIEWPORT viewport = {0, 0, float(kSize), float(kSize), 0, 1};
+        const D3D12_RECT scissor = {0, 0, LONG(kSize), LONG(kSize)};
+        list->RSSetViewports(1, &viewport);
+        list->RSSetScissorRects(1, &scissor);
+        list->OMSetRenderTargets(2, handles, FALSE, nullptr);
+        const float clear[4] = {0, 0, 0, 1};
+        list->ClearRenderTargetView(handles[0], clear, 0, nullptr);
+        list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        list->IASetVertexBuffers(0, 1, &scene.vbv);
+        const float colour[4] = {0.25f, 0.5f, 1.0f, 1.0f};
+        list->SetGraphicsRoot32BitConstants(0, 4, colour, 0);
+        for (int i = 0; i < 4; ++i) {
+            list->SetPipelineState(i % 2 ? writes_both.Get() : writes_one.Get());
+            list->DrawInstanced(3, 1, 0, 0);
+        }
+        CHECK_EQ(scene.run(list.Get()), 1);
+        const Image image = scene.gpu.read_texture(scene.target.Get(), 0, 4);
+        expect_pixel("mixed pipelines, colour", image.pixel(kSize / 2, kSize / 2), {64, 128, 255, 255}, 2);
+        const Image id_image = scene.gpu.read_texture(ids.Get(), 0, 4);
+        uint32_t id;
+        std::memcpy(&id, id_image.at(kSize / 2, kSize / 2), 4);
+        CHECK_EQ(id, 1);
     }
     std::printf("test_pass_merge: PASS\n");
     return 0;
