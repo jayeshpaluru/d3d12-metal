@@ -142,6 +142,20 @@ int main()
     ComPtr<ID3D12PipelineState> compute_pso2;
     CHECK_HR(device->CreateComputePipelineState(&compute_desc, IID_PPV_ARGS(compute_pso2.GetAddressOf())));
 
+    // A compute stream that also carries empty graphics shader subobjects (as Godot's D3D12 driver writes it): still a
+    // compute pipeline.
+    struct ComputeWithEmptyGraphics {
+        StreamObject<ID3D12RootSignature *, D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_ROOT_SIGNATURE> root_signature;
+        StreamObject<D3D12_SHADER_BYTECODE, D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_VS> vs;
+        StreamObject<D3D12_SHADER_BYTECODE, D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_PS> ps;
+        StreamObject<D3D12_SHADER_BYTECODE, D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_CS> cs;
+    } mixed = {};
+    mixed.root_signature.value = signature.Get();
+    mixed.cs.value = T12_SHADER(g_noop_cs);
+    stream = {sizeof(mixed), &mixed};
+    ComPtr<ID3D12PipelineState> mixed_pso;
+    CHECK_HR(device2->CreatePipelineState(&stream, IID_PPV_ARGS(mixed_pso.GetAddressOf())));
+
     // Both stages, an unknown subobject type, a truncated payload and mesh shaders are refused.
     struct Both {
         StreamObject<ID3D12RootSignature *, D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_ROOT_SIGNATURE> root_signature;
