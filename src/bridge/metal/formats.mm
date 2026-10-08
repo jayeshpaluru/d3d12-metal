@@ -27,7 +27,66 @@ struct Entry {
     MTLVertexFormat vertex;
 };
 
+// Typeless formats are resources only: the pixel format is the one a texture is created with, views
+// reinterpret it. Formats that exist only to view one plane of a depth-stencil texture
+// (R32_FLOAT_X8X24_TYPELESS and friends) map to the depth-stencil texture's own format.
 constexpr Entry kFormats[] = {
+    {MTLB_FORMAT_R32G32B32A32_TYPELESS, 1, 1, 16, C | T | R | W | Y,
+     MTLPixelFormatRGBA32Float, MTLVertexFormatInvalid},
+    {MTLB_FORMAT_R32G32B32_TYPELESS, 1, 1, 12, C | Y,
+     MTLPixelFormatInvalid, MTLVertexFormatInvalid},
+    {MTLB_FORMAT_R16G16B16A16_TYPELESS, 1, 1, 8, C | T | R | B | W | Y,
+     MTLPixelFormatRGBA16Float, MTLVertexFormatInvalid},
+    {MTLB_FORMAT_R32G32_TYPELESS, 1, 1, 8, C | T | R | W | Y,
+     MTLPixelFormatRG32Float, MTLVertexFormatInvalid},
+    {MTLB_FORMAT_R32G8X24_TYPELESS, 1, 1, 8, DS | T | R | Y,
+     MTLPixelFormatDepth32Float_Stencil8, MTLVertexFormatInvalid},
+    {MTLB_FORMAT_D32_FLOAT_S8X24_UINT, 1, 1, 8, DS | T | R,
+     MTLPixelFormatDepth32Float_Stencil8, MTLVertexFormatInvalid},
+    {MTLB_FORMAT_R32_FLOAT_X8X24_TYPELESS, 1, 1, 8, D | T | Y,
+     MTLPixelFormatDepth32Float_Stencil8, MTLVertexFormatInvalid},
+    {MTLB_FORMAT_X32_TYPELESS_G8X24_UINT, 1, 1, 8, MTLB_FORMAT_FLAG_STENCIL | T | Y,
+     MTLPixelFormatDepth32Float_Stencil8, MTLVertexFormatInvalid},
+    {MTLB_FORMAT_R10G10B10A2_TYPELESS, 1, 1, 4, C | T | R | B | W | Y,
+     MTLPixelFormatRGB10A2Unorm, MTLVertexFormatInvalid},
+    {MTLB_FORMAT_R16G16_TYPELESS, 1, 1, 4, C | T | R | B | W | Y,
+     MTLPixelFormatRG16Float, MTLVertexFormatInvalid},
+    {MTLB_FORMAT_R32_TYPELESS, 1, 1, 4, C | T | R | W | Y,
+     MTLPixelFormatR32Float, MTLVertexFormatInvalid},
+    {MTLB_FORMAT_R24G8_TYPELESS, 1, 1, 4, DS | T | R | Y,
+     MTLPixelFormatDepth32Float_Stencil8, MTLVertexFormatInvalid},
+    {MTLB_FORMAT_R24_UNORM_X8_TYPELESS, 1, 1, 4, D | T | Y,
+     MTLPixelFormatDepth32Float_Stencil8, MTLVertexFormatInvalid},
+    {MTLB_FORMAT_X24_TYPELESS_G8_UINT, 1, 1, 4, MTLB_FORMAT_FLAG_STENCIL | T | Y,
+     MTLPixelFormatDepth32Float_Stencil8, MTLVertexFormatInvalid},
+    {MTLB_FORMAT_R8G8_TYPELESS, 1, 1, 2, C | T | R | B | W | Y,
+     MTLPixelFormatRG8Unorm, MTLVertexFormatInvalid},
+    {MTLB_FORMAT_R16_TYPELESS, 1, 1, 2, C | T | R | B | W | Y,
+     MTLPixelFormatR16Float, MTLVertexFormatInvalid},
+    {MTLB_FORMAT_R8_TYPELESS, 1, 1, 1, C | T | R | B | W | Y,
+     MTLPixelFormatR8Unorm, MTLVertexFormatInvalid},
+    {MTLB_FORMAT_A8_UNORM, 1, 1, 1, C | T | R | B,
+     MTLPixelFormatA8Unorm, MTLVertexFormatInvalid},
+    {MTLB_FORMAT_R9G9B9E5_SHAREDEXP, 1, 1, 4, C | T,
+     MTLPixelFormatRGB9E5Float, MTLVertexFormatInvalid},
+    {MTLB_FORMAT_BC1_TYPELESS, 4, 4, 8, BC | Y,
+     MTLPixelFormatBC1_RGBA, MTLVertexFormatInvalid},
+    {MTLB_FORMAT_BC2_TYPELESS, 4, 4, 16, BC | Y,
+     MTLPixelFormatBC2_RGBA, MTLVertexFormatInvalid},
+    {MTLB_FORMAT_BC3_TYPELESS, 4, 4, 16, BC | Y,
+     MTLPixelFormatBC3_RGBA, MTLVertexFormatInvalid},
+    {MTLB_FORMAT_BC4_TYPELESS, 4, 4, 8, BC | Y,
+     MTLPixelFormatBC4_RUnorm, MTLVertexFormatInvalid},
+    {MTLB_FORMAT_BC5_TYPELESS, 4, 4, 16, BC | Y,
+     MTLPixelFormatBC5_RGUnorm, MTLVertexFormatInvalid},
+    {MTLB_FORMAT_B5G6R5_UNORM, 1, 1, 2, C | T | R | B,
+     MTLPixelFormatB5G6R5Unorm, MTLVertexFormatInvalid},
+    {MTLB_FORMAT_B5G5R5A1_UNORM, 1, 1, 2, C | T | R | B,
+     MTLPixelFormatBGR5A1Unorm, MTLVertexFormatInvalid},
+    {MTLB_FORMAT_BC6H_TYPELESS, 4, 4, 16, BC | Y,
+     MTLPixelFormatBC6H_RGBUfloat, MTLVertexFormatInvalid},
+    {MTLB_FORMAT_BC7_TYPELESS, 4, 4, 16, BC | Y,
+     MTLPixelFormatBC7_RGBAUnorm, MTLVertexFormatInvalid},
     {MTLB_FORMAT_R32G32B32A32_FLOAT, 1, 1, 16, C | T | R | W,
      MTLPixelFormatRGBA32Float, MTLVertexFormatFloat4},
     {MTLB_FORMAT_R32G32B32A32_UINT, 1, 1, 16, C | T | R | W,
@@ -192,6 +251,37 @@ MTLVertexFormat to_vertex_format(uint32_t format)
 {
     const Entry *e = find_format(format);
     return e ? e->vertex : MTLVertexFormatInvalid;
+}
+
+MTLPixelFormat to_texture_pixel_format(uint32_t format, bool depth_stencil_usage)
+{
+    const Entry *e = find_format(format);
+    if (!e)
+        return MTLPixelFormatInvalid;
+    if (depth_stencil_usage && (e->flags & MTLB_FORMAT_FLAG_TYPELESS)) {
+        switch (format) {
+        case MTLB_FORMAT_R32_TYPELESS: return MTLPixelFormatDepth32Float;
+        case MTLB_FORMAT_R16_TYPELESS: return MTLPixelFormatDepth16Unorm;
+        default: break;  // R32G8X24 and R24G8 already map to a depth-stencil format
+        }
+    }
+    return e->pixel;
+}
+
+MTLPixelFormat to_view_pixel_format(MTLPixelFormat base, uint32_t view_format)
+{
+    const Entry *e = find_format(view_format);
+    if (!e)
+        return MTLPixelFormatInvalid;
+    const bool base_depth = base == MTLPixelFormatDepth32Float || base == MTLPixelFormatDepth16Unorm
+                            || base == MTLPixelFormatDepth32Float_Stencil8 || base == MTLPixelFormatDepth24Unorm_Stencil8;
+    if (!base_depth)
+        return e->pixel;
+    // A view of a depth-stencil texture reads one plane. The depth plane is the texture's own
+    // format (shaders read it as a float texture); the stencil plane has a format of its own.
+    if (e->flags & MTLB_FORMAT_FLAG_STENCIL && !(e->flags & MTLB_FORMAT_FLAG_DEPTH))
+        return MTLPixelFormatX32_Stencil8;
+    return base;
 }
 
 } // namespace mtlb

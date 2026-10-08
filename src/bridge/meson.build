@@ -1,5 +1,6 @@
 if host_system == 'darwin'
   bridge_sources += files(
+    'metal/descriptors.mm',
     'metal/device.mm',
     'metal/formats.mm',
     'metal/notify.mm',

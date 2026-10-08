@@ -24,6 +24,11 @@ namespace mtlb {
 
 struct Buffer;
 
+// (type, pixel format, first mip, mips, first slice, slices, swizzle) of a texture view.
+using ViewKey = std::array<uint32_t, 7>;
+// Sampler description fields that matter to an MTLSamplerState (the LOD bias lives in the descriptor).
+using SamplerKey = std::array<uint32_t, 11>;
+
 // A converted shader stage: its Metal function and its reflection.
 struct ShaderStage {
     id<MTLFunction> function = nil;
@@ -57,6 +62,27 @@ struct Device {
     std::mutex depth_stencil_mutex;
     std::map<DepthStencilKey, id<MTLDepthStencilState>> depth_stencil_states;
 
+    // Samplers shared by equal descriptions.
+    std::mutex sampler_mutex;
+    std::map<SamplerKey, id<MTLSamplerState>> samplers;
+
+    // Resources behind null descriptors, created on first use, by mtlb_null_kind.
+    static constexpr uint32_t kNullKinds = 16;
+    std::mutex null_mutex;
+    id<MTLBuffer> null_buffer = nil;
+    id<MTLTexture> null_textures[kNullKinds] = {};
+
+    void add_resident(id<MTLAllocation> allocation)
+    {
+        [residency addAllocation:allocation];
+        residency_dirty = true;
+    }
+    void remove_resident(id<MTLAllocation> allocation)
+    {
+        [residency removeAllocation:allocation];
+        residency_dirty = true;
+    }
+
     // Buffers sorted by GPU address, for resolving D3D12-style virtual
     // addresses. Lookups far outnumber creations.
     std::shared_mutex buffers_mutex;
@@ -68,6 +94,11 @@ struct Buffer {
     id<MTLBuffer> buffer;
     uint64_t gpu_address;
     uint64_t size;
+
+    // Texture buffer views (typed views and UAV counters), created on first use and kept for the
+    // buffer's life: (byte offset, pixel format, texel count, writable).
+    std::mutex views_mutex;
+    std::map<std::tuple<uint64_t, uint32_t, uint64_t, bool>, id<MTLTexture>> texture_views;
 };
 
 struct Texture {
@@ -79,6 +110,9 @@ struct Texture {
     // (command buffers do not retain what they reference).
     std::mutex views_mutex;
     std::map<uint32_t, id<MTLTexture>> views;
+
+    // Shader-visible views (type, range, format, swizzle), kept for the texture's life.
+    std::map<ViewKey, id<MTLTexture>> sampled_views;
 };
 
 struct RootSignature {
@@ -181,5 +215,10 @@ void encode_present(id<MTLCommandBuffer> command_buffer, Swapchain *swapchain, T
 // for formats with no equivalent.
 MTLPixelFormat to_pixel_format(uint32_t format);
 MTLVertexFormat to_vertex_format(uint32_t format);
+// The pixel format a texture of `format` is created with; `depth_stencil_usage` picks the depth variant
+// of R32_TYPELESS and R16_TYPELESS.
+MTLPixelFormat to_texture_pixel_format(uint32_t format, bool depth_stencil_usage);
+// The pixel format of a view of a texture created as `base`, viewed as `view_format`.
+MTLPixelFormat to_view_pixel_format(MTLPixelFormat base, uint32_t view_format);
 
 } // namespace mtlb

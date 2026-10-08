@@ -42,17 +42,6 @@ void commit_residency(Device *device)
         [device->residency commit];
 }
 
-static void add_resident(Device *device, id<MTLAllocation> allocation)
-{
-    [device->residency addAllocation:allocation];
-    device->residency_dirty = true;
-}
-
-static void remove_resident(Device *device, id<MTLAllocation> allocation)
-{
-    [device->residency removeAllocation:allocation];
-    device->residency_dirty = true;
-}
 
 static id<MTLDevice> find_device(uint64_t registry_id)
 {
@@ -173,7 +162,7 @@ mtlb_result mtlb_buffer_create(mtlb_device handle, uint64_t size, mtlb_storage s
                                    [](const std::pair<uint64_t, Buffer *> &b, uint64_t a) { return b.first < a; });
         device->buffers.insert(at, {buffer->gpu_address, buffer});
     }
-    add_resident(device, mtl_buffer);
+    device->add_resident(mtl_buffer);
 
     if (info) {
         info->cpu_ptr = storage == MTLB_STORAGE_SHARED ? mtl_buffer.contents : nullptr;
@@ -197,7 +186,7 @@ void mtlb_buffer_destroy(mtlb_buffer handle)
         if (at != buffers.end() && at->first == buffer->gpu_address)
             buffers.erase(at);
     }
-    remove_resident(buffer->device, buffer->buffer);
+    buffer->device->remove_resident(buffer->buffer);
     delete buffer;
 }
 
@@ -214,7 +203,8 @@ mtlb_result mtlb_texture_create(mtlb_device handle, const mtlb_texture_desc *des
     if (!device || !desc || !out)
         return MTLB_ERROR_INVALID_ARGUMENT;
 
-    MTLPixelFormat pixel_format = to_pixel_format(desc->format);
+    const bool depth_stencil = desc->usage & MTLB_TEXTURE_USAGE_DEPTH_STENCIL;
+    MTLPixelFormat pixel_format = to_texture_pixel_format(desc->format, depth_stencil);
     if (pixel_format == MTLPixelFormatInvalid)
         return fail(MTLB_ERROR_UNSUPPORTED, "unsupported texture format " + std::to_string(desc->format));
 
@@ -252,7 +242,7 @@ mtlb_result mtlb_texture_create(mtlb_device handle, const mtlb_texture_desc *des
     id<MTLTexture> mtl_texture = [device->device newTextureWithDescriptor:td];
     if (!mtl_texture)
         return fail(MTLB_ERROR_OUT_OF_MEMORY, "newTextureWithDescriptor failed");
-    add_resident(device, mtl_texture);
+    device->add_resident(mtl_texture);
 
     if (info)
         info->resource_id = mtl_texture.gpuResourceID._impl;
@@ -265,7 +255,7 @@ void mtlb_texture_destroy(mtlb_texture handle)
     Texture *texture = from_handle<Texture>(handle);
     if (!texture)
         return;
-    remove_resident(texture->device, texture->texture);
+    texture->device->remove_resident(texture->texture);
     delete texture;
 }
 

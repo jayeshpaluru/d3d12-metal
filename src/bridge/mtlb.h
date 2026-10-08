@@ -66,20 +66,29 @@ typedef uint64_t mtlb_swapchain;
  * converts with a cast; the bridge does not otherwise depend on DXGI. */
 typedef enum mtlb_format {
     MTLB_FORMAT_UNKNOWN = 0,
+    MTLB_FORMAT_R32G32B32A32_TYPELESS = 1,
     MTLB_FORMAT_R32G32B32A32_FLOAT = 2,
     MTLB_FORMAT_R32G32B32A32_UINT = 3,
     MTLB_FORMAT_R32G32B32A32_SINT = 4,
+    MTLB_FORMAT_R32G32B32_TYPELESS = 5,
     MTLB_FORMAT_R32G32B32_FLOAT = 6,
     MTLB_FORMAT_R32G32B32_UINT = 7,
     MTLB_FORMAT_R32G32B32_SINT = 8,
+    MTLB_FORMAT_R16G16B16A16_TYPELESS = 9,
     MTLB_FORMAT_R16G16B16A16_FLOAT = 10,
     MTLB_FORMAT_R16G16B16A16_UNORM = 11,
     MTLB_FORMAT_R16G16B16A16_UINT = 12,
     MTLB_FORMAT_R16G16B16A16_SNORM = 13,
     MTLB_FORMAT_R16G16B16A16_SINT = 14,
+    MTLB_FORMAT_R32G32_TYPELESS = 15,
     MTLB_FORMAT_R32G32_FLOAT = 16,
     MTLB_FORMAT_R32G32_UINT = 17,
     MTLB_FORMAT_R32G32_SINT = 18,
+    MTLB_FORMAT_R32G8X24_TYPELESS = 19,
+    MTLB_FORMAT_D32_FLOAT_S8X24_UINT = 20,
+    MTLB_FORMAT_R32_FLOAT_X8X24_TYPELESS = 21,
+    MTLB_FORMAT_X32_TYPELESS_G8X24_UINT = 22,
+    MTLB_FORMAT_R10G10B10A2_TYPELESS = 23,
     MTLB_FORMAT_R10G10B10A2_UNORM = 24,
     MTLB_FORMAT_R10G10B10A2_UINT = 25,
     MTLB_FORMAT_R11G11B10_FLOAT = 26,
@@ -89,45 +98,64 @@ typedef enum mtlb_format {
     MTLB_FORMAT_R8G8B8A8_UINT = 30,
     MTLB_FORMAT_R8G8B8A8_SNORM = 31,
     MTLB_FORMAT_R8G8B8A8_SINT = 32,
+    MTLB_FORMAT_R16G16_TYPELESS = 33,
     MTLB_FORMAT_R16G16_FLOAT = 34,
     MTLB_FORMAT_R16G16_UNORM = 35,
     MTLB_FORMAT_R16G16_UINT = 36,
     MTLB_FORMAT_R16G16_SNORM = 37,
     MTLB_FORMAT_R16G16_SINT = 38,
+    MTLB_FORMAT_R32_TYPELESS = 39,
     MTLB_FORMAT_D32_FLOAT = 40,
     MTLB_FORMAT_R32_FLOAT = 41,
     MTLB_FORMAT_R32_UINT = 42,
     MTLB_FORMAT_R32_SINT = 43,
+    MTLB_FORMAT_R24G8_TYPELESS = 44,
     MTLB_FORMAT_D24_UNORM_S8_UINT = 45,
+    MTLB_FORMAT_R24_UNORM_X8_TYPELESS = 46,
+    MTLB_FORMAT_X24_TYPELESS_G8_UINT = 47,
+    MTLB_FORMAT_R8G8_TYPELESS = 48,
     MTLB_FORMAT_R8G8_UNORM = 49,
     MTLB_FORMAT_R8G8_UINT = 50,
     MTLB_FORMAT_R8G8_SNORM = 51,
     MTLB_FORMAT_R8G8_SINT = 52,
+    MTLB_FORMAT_R16_TYPELESS = 53,
     MTLB_FORMAT_R16_FLOAT = 54,
     MTLB_FORMAT_D16_UNORM = 55,
     MTLB_FORMAT_R16_UNORM = 56,
     MTLB_FORMAT_R16_UINT = 57,
     MTLB_FORMAT_R16_SNORM = 58,
     MTLB_FORMAT_R16_SINT = 59,
+    MTLB_FORMAT_R8_TYPELESS = 60,
     MTLB_FORMAT_R8_UNORM = 61,
     MTLB_FORMAT_R8_UINT = 62,
     MTLB_FORMAT_R8_SNORM = 63,
     MTLB_FORMAT_R8_SINT = 64,
+    MTLB_FORMAT_A8_UNORM = 65,
+    MTLB_FORMAT_R9G9B9E5_SHAREDEXP = 67,
+    MTLB_FORMAT_BC1_TYPELESS = 70,
     MTLB_FORMAT_BC1_UNORM = 71,
     MTLB_FORMAT_BC1_UNORM_SRGB = 72,
+    MTLB_FORMAT_BC2_TYPELESS = 73,
     MTLB_FORMAT_BC2_UNORM = 74,
     MTLB_FORMAT_BC2_UNORM_SRGB = 75,
+    MTLB_FORMAT_BC3_TYPELESS = 76,
     MTLB_FORMAT_BC3_UNORM = 77,
     MTLB_FORMAT_BC3_UNORM_SRGB = 78,
+    MTLB_FORMAT_BC4_TYPELESS = 79,
     MTLB_FORMAT_BC4_UNORM = 80,
     MTLB_FORMAT_BC4_SNORM = 81,
+    MTLB_FORMAT_BC5_TYPELESS = 82,
     MTLB_FORMAT_BC5_UNORM = 83,
     MTLB_FORMAT_BC5_SNORM = 84,
+    MTLB_FORMAT_B5G6R5_UNORM = 85,
+    MTLB_FORMAT_B5G5R5A1_UNORM = 86,
     MTLB_FORMAT_B8G8R8A8_UNORM = 87,
     MTLB_FORMAT_B8G8R8A8_TYPELESS = 90,
     MTLB_FORMAT_B8G8R8A8_UNORM_SRGB = 91,
+    MTLB_FORMAT_BC6H_TYPELESS = 94,
     MTLB_FORMAT_BC6H_UF16 = 95,
     MTLB_FORMAT_BC6H_SF16 = 96,
+    MTLB_FORMAT_BC7_TYPELESS = 97,
     MTLB_FORMAT_BC7_UNORM = 98,
     MTLB_FORMAT_BC7_UNORM_SRGB = 99,
 } mtlb_format;
@@ -243,6 +271,7 @@ enum {
     MTLB_TEXTURE_USAGE_SHADER_READ = 1u << 0,
     MTLB_TEXTURE_USAGE_SHADER_WRITE = 1u << 1,
     MTLB_TEXTURE_USAGE_RENDER_TARGET = 1u << 2,  /* colour or depth/stencil attachment */
+    MTLB_TEXTURE_USAGE_DEPTH_STENCIL = 1u << 3,  /* with RENDER_TARGET: picks the depth variant of a typeless format */
 };
 
 typedef struct mtlb_texture_desc {
@@ -265,6 +294,88 @@ typedef struct mtlb_texture_info {
 MTLB_EXPORT mtlb_result mtlb_texture_create(mtlb_device device, const mtlb_texture_desc *desc,
                                             mtlb_texture *out, mtlb_texture_info *info);
 MTLB_EXPORT void mtlb_texture_destroy(mtlb_texture texture);
+
+/* ------------------------------------------------------------------------ */
+/* Descriptor contents                                                      */
+/* ------------------------------------------------------------------------ */
+
+/* The shape a shader sees a texture in. 1D textures are 2D textures of height 1. */
+typedef enum mtlb_view_type {
+    MTLB_VIEW_2D = 1,
+    MTLB_VIEW_2D_ARRAY,
+    MTLB_VIEW_2D_MS,
+    MTLB_VIEW_2D_MS_ARRAY,
+    MTLB_VIEW_3D,
+    MTLB_VIEW_CUBE,
+    MTLB_VIEW_CUBE_ARRAY,
+} mtlb_view_type;
+
+typedef struct mtlb_texture_view_desc {
+    uint32_t type;             /* mtlb_view_type */
+    uint32_t format;           /* mtlb_format to view the texture as; 0 = its own */
+    uint32_t first_mip, mip_count;
+    uint32_t first_slice;      /* array slice range; for cube views the count is faces (6 per cube) */
+    uint32_t slice_count;
+    uint32_t component_mapping; /* D3D12 Shader4ComponentMapping; 0 = identity */
+    uint32_t reserved;
+} mtlb_texture_view_desc;
+
+/* The resource id to put in mtlb_descriptor::texture_id for a view of `texture`
+ * (the texture itself when the view changes nothing). Views are cached on the
+ * texture and live as long as it does. */
+MTLB_EXPORT mtlb_result mtlb_texture_view(mtlb_texture texture, const mtlb_texture_view_desc *desc,
+                                          uint64_t *resource_id);
+
+typedef struct mtlb_buffer_view_desc {
+    mtlb_buffer buffer;
+    uint64_t offset;           /* bytes */
+    uint64_t size;             /* bytes covered by the view */
+    uint32_t format;           /* typed views: mtlb_format of an element; 0 = raw or structured */
+    uint32_t num_elements;     /* typed views */
+    mtlb_buffer counter_buffer;  /* UAV counter, or 0 */
+    uint64_t counter_offset;   /* bytes, 4-aligned */
+} mtlb_buffer_view_desc;
+
+/* Fills `out` for a view of a buffer. A typed view whose element count exceeds the
+ * device's texture buffer width is clamped to it (logged once); `out->metadata`
+ * keeps the view's byte size. */
+MTLB_EXPORT mtlb_result mtlb_buffer_view(const mtlb_buffer_view_desc *desc, mtlb_descriptor *out);
+
+typedef enum mtlb_null_kind {
+    MTLB_NULL_TEXTURE_2D = 1,
+    MTLB_NULL_TEXTURE_2D_ARRAY,
+    MTLB_NULL_TEXTURE_2D_MS,
+    MTLB_NULL_TEXTURE_2D_MS_ARRAY,
+    MTLB_NULL_TEXTURE_3D,
+    MTLB_NULL_TEXTURE_CUBE,
+    MTLB_NULL_TEXTURE_CUBE_ARRAY,
+    MTLB_NULL_TYPED_BUFFER,
+    MTLB_NULL_BUFFER,
+    MTLB_NULL_UAV_TEXTURE_2D,
+    MTLB_NULL_UAV_TEXTURE_2D_ARRAY,
+    MTLB_NULL_UAV_TEXTURE_3D,
+    MTLB_NULL_UAV_TYPED_BUFFER,
+} mtlb_null_kind;
+
+/* A descriptor that reads as zero (and swallows writes) for a null view. */
+MTLB_EXPORT mtlb_result mtlb_null_descriptor(mtlb_device device, uint32_t kind, mtlb_descriptor *out);
+
+/* Values equal the D3D12 enumerators. */
+typedef struct mtlb_sampler_desc {
+    uint32_t min_filter;       /* 0 point, 1 linear */
+    uint32_t mag_filter;
+    uint32_t mip_filter;
+    uint32_t address_u, address_v, address_w;  /* D3D12_TEXTURE_ADDRESS_MODE: 1 wrap .. 5 mirror once */
+    float mip_lod_bias;
+    uint32_t max_anisotropy;   /* 1 = off */
+    uint32_t compare_func;     /* mtlb_compare, 0 = no comparison */
+    uint32_t reduction;        /* 0 = weighted average; 1 min, 2 max (not supported: logged, averaged) */
+    float border_color[4];
+    float min_lod, max_lod;
+} mtlb_sampler_desc;
+
+/* Fills `out` (a sampler heap entry). Equal samplers share one Metal sampler. */
+MTLB_EXPORT mtlb_result mtlb_sampler_create(mtlb_device device, const mtlb_sampler_desc *desc, mtlb_descriptor *out);
 
 /* ------------------------------------------------------------------------ */
 /* Pipelines                                                                */
@@ -521,6 +632,9 @@ MTLB_ASSERT_SIZE(mtlb_root_signature_layout, 520);
 MTLB_ASSERT_SIZE(mtlb_pipeline_desc, 2192);
 MTLB_ASSERT_SIZE(mtlb_compute_pipeline_desc, 32);
 MTLB_ASSERT_SIZE(mtlb_swapchain_desc, 24);
+MTLB_ASSERT_SIZE(mtlb_texture_view_desc, 32);
+MTLB_ASSERT_SIZE(mtlb_buffer_view_desc, 48);
+MTLB_ASSERT_SIZE(mtlb_sampler_desc, 64);
 
 #ifdef __cplusplus
 }

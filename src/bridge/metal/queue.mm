@@ -33,7 +33,7 @@ id<MTLTexture> attachment_texture(Texture *texture, uint32_t view_format)
     std::lock_guard<std::mutex> lock(texture->views_mutex);
     auto &view = texture->views[view_format];
     if (!view) {
-        MTLPixelFormat format = to_pixel_format(view_format);
+        MTLPixelFormat format = to_view_pixel_format(texture->texture.pixelFormat, view_format);
         if (format != MTLPixelFormatInvalid)
             view = [texture->texture newTextureViewWithPixelFormat:format];
     }
