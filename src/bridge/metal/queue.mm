@@ -1,4 +1,5 @@
 // Queues and command stream replay.
+#define IR_PRIVATE_IMPLEMENTATION  // generates the runtime header's implementation (internal.h includes it)
 #include "bridge/metal/log.h"
 #include "internal.h"
 
@@ -6,9 +7,6 @@
 #include <cstdio>
 #include <optional>
 #include <vector>
-
-#define IR_PRIVATE_IMPLEMENTATION
-#include <metal_irconverter_runtime/metal_irconverter_runtime.h>
 
 #include "bridge/mtlb_cmd.h"
 
@@ -24,6 +22,45 @@ MTLPrimitiveType to_primitive_type(uint32_t topology)
     case MTLB_TOPOLOGY_LINE_STRIP: return MTLPrimitiveTypeLineStrip;
     case MTLB_TOPOLOGY_TRIANGLE_STRIP: return MTLPrimitiveTypeTriangleStrip;
     default: return MTLPrimitiveTypeTriangle;
+    }
+}
+
+// A zero-filled buffer and the tessellator tables for the emulated pipelines, made on first use.
+id<MTLBuffer> helper_buffer(Device *device, bool tables)
+{
+    std::lock_guard<std::mutex> lock(device->helper_mutex);
+    if (tables ? !device->tess_tables : !device->zero_buffer) {
+        id<MTLBuffer> buffer = [device->device newBufferWithLength:tables ? IRRuntimeTessellatorTablesSize() : 4096
+                                                           options:MTLResourceStorageModeShared];
+        if (tables) {
+            IRRuntimeLoadTessellatorTables(buffer);
+            device->tess_tables = buffer;
+        } else {
+            std::memset(buffer.contents, 0, buffer.length);
+            device->zero_buffer = buffer;
+        }
+    }
+    return tables ? device->tess_tables : device->zero_buffer;
+}
+
+// The runtime's primitive type of a topology for the emulated pipelines; false for what they cannot draw.
+bool to_runtime_primitive(uint32_t topology, IRRuntimePrimitiveType *out)
+{
+    switch (topology) {
+    case MTLB_TOPOLOGY_POINT_LIST: *out = IRRuntimePrimitiveTypePoint; return true;
+    case MTLB_TOPOLOGY_LINE_LIST: *out = IRRuntimePrimitiveTypeLine; return true;
+    case MTLB_TOPOLOGY_LINE_STRIP: *out = IRRuntimePrimitiveTypeLineStrip; return true;
+    case MTLB_TOPOLOGY_TRIANGLE_LIST: *out = IRRuntimePrimitiveTypeTriangle; return true;
+    case MTLB_TOPOLOGY_TRIANGLE_STRIP: *out = IRRuntimePrimitiveTypeTriangleStrip; return true;
+    case MTLB_TOPOLOGY_LINE_LIST_ADJ: *out = IRRuntimePrimitiveTypeLineWithAdj; return true;
+    case MTLB_TOPOLOGY_LINE_STRIP_ADJ: *out = IRRuntimePrimitiveTypeLineStripWithAdj; return true;
+    case MTLB_TOPOLOGY_TRIANGLE_LIST_ADJ: *out = IRRuntimePrimitiveTypeTriangleWithAdj; return true;
+    default:
+        if (topology >= MTLB_TOPOLOGY_PATCH_LIST_1 && topology <= MTLB_TOPOLOGY_PATCH_LIST_32) {
+            *out = IRRuntimePrimitiveTypeTriangle;  // patches: the control point count comes from the pipeline
+            return true;
+        }
+        return false;
     }
 }
 
@@ -298,6 +335,8 @@ private:
     mtlb_result clear_buffer(const mtlb_cmd_clear_buffer &cmd);
     mtlb_result clear_texture_uav(const mtlb_cmd_clear_texture_uav &cmd);
     mtlb_result copy_texture_texture(const mtlb_cmd_copy_texture_texture &cmd);
+    bool emulated_topology_ok(const EmulatedPipeline &emulated, IRRuntimePrimitiveType *primitive);
+    bool plain_topology_ok();
     void bind_heaps(uint32_t stage_mask);
     mtlb_result copy_buffer(const mtlb_cmd_copy_buffer &cmd);
     mtlb_result copy_texture_to_buffer(const mtlb_cmd_copy_texture &cmd);
@@ -406,6 +445,7 @@ private:
     DrawState state_;
     std::vector<PendingClear> clears_;  // waiting for a pass that binds their view
     bool warned_no_targets_ = false;
+    bool bound_emulated_ = false;  // the render encoder's bindings are those of an emulated (mesh) pipeline
     uint32_t dirty_ = kAll;  // state_ pieces the current render encoder has not seen
     uint32_t dirty_compute_ = kAll;  // the same for the compute encoder
     // The next encoder must wait for the one before it: a barrier or the start of a command list (command
@@ -826,6 +866,18 @@ mtlb_result Replay::apply_state()
             return result;
     }
     if (dirty_ & kPipeline) {
+        // Emulated pipelines (mesh shaders) take their bindings on the object and mesh stages, the others on the
+        // vertex stage: bind them again when the kind changes.
+        const bool emulated = state_.pipeline->emulated != nullptr;
+        if (emulated != bound_emulated_) {
+            dirty_ |= kRootArgs | kVertexBuffers | kHeaps;
+            bound_emulated_ = emulated;
+        }
+        if (emulated && state_.pipeline->emulated->tessellation) {
+            id<MTLBuffer> tables = helper_buffer(queue_->device, true);
+            [render_ setObjectBuffer:tables offset:0 atIndex:kIRRuntimeTessellatorTablesBindPoint];
+            [render_ setMeshBuffer:tables offset:0 atIndex:kIRRuntimeTessellatorTablesBindPoint];
+        }
         id<MTLRenderPipelineState> pipeline_state = state_.pipeline->state_for(pass_depth_format_, pass_stencil_format_);
         if (!pipeline_state)
             return MTLB_ERROR_COMPILE_FAILED;
@@ -854,16 +906,36 @@ mtlb_result Replay::apply_state()
         }
         [render_ setScissorRects:rects count:state_.num_scissors];
     }
+    if ((dirty_ & kRootArgs) && !state_.root_args_size && bound_emulated_) {
+        // The converted stages read their argument buffers even when the root signature has no parameters.
+        id<MTLBuffer> zero = helper_buffer(queue_->device, false);
+        for (uint64_t index : {kIRArgumentBufferBindPoint, kIRArgumentBufferHullDomainBindPoint}) {
+            [render_ setObjectBuffer:zero offset:0 atIndex:index];
+            [render_ setMeshBuffer:zero offset:0 atIndex:index];
+        }
+    }
     if ((dirty_ & kRootArgs) && state_.root_args_size) {
-        [render_ setVertexBytes:state_.root_args length:state_.root_args_size atIndex:kIRArgumentBufferBindPoint];
+        if (bound_emulated_) {
+            // The vertex and hull shaders run on the object stage, the domain and geometry shaders on the mesh stage.
+            for (uint64_t index : {kIRArgumentBufferBindPoint, kIRArgumentBufferHullDomainBindPoint}) {
+                [render_ setObjectBytes:state_.root_args length:state_.root_args_size atIndex:index];
+                [render_ setMeshBytes:state_.root_args length:state_.root_args_size atIndex:index];
+            }
+        } else {
+            [render_ setVertexBytes:state_.root_args length:state_.root_args_size atIndex:kIRArgumentBufferBindPoint];
+        }
         [render_ setFragmentBytes:state_.root_args length:state_.root_args_size atIndex:kIRArgumentBufferBindPoint];
     }
     if (dirty_ & kBlendFactor)
         [render_ setBlendColorRed:state_.blend_factor[0] green:state_.blend_factor[1] blue:state_.blend_factor[2] alpha:state_.blend_factor[3]];
     if (dirty_ & kStencilRef)
         [render_ setStencilReferenceValue:state_.stencil_ref];
-    if (dirty_ & kVertexBuffers)
-        [render_ setVertexBytes:state_.vertex_buffers length:sizeof(state_.vertex_buffers) atIndex:kIRVertexBufferBindPoint];
+    if (dirty_ & kVertexBuffers) {
+        if (bound_emulated_)
+            [render_ setObjectBytes:state_.vertex_buffers length:sizeof(state_.vertex_buffers) atIndex:kIRVertexBufferBindPoint];
+        else
+            [render_ setVertexBytes:state_.vertex_buffers length:sizeof(state_.vertex_buffers) atIndex:kIRVertexBufferBindPoint];
+    }
     if (dirty_ & kHeaps)
         bind_heaps(0);
     if ((dirty_ & kQuery) && query_.active)
@@ -891,12 +963,51 @@ mtlb_result Replay::begin_draw(bool *ready)
     return apply_state();
 }
 
+// True when the topology can be drawn with the bound emulated pipeline (geometry shader input, or a patch list
+// of the hull shader's control point count); logs once when it cannot.
+bool Replay::emulated_topology_ok(const EmulatedPipeline &emulated, IRRuntimePrimitiveType *primitive)
+{
+    const bool patches = state_.topology >= MTLB_TOPOLOGY_PATCH_LIST_1 && state_.topology <= MTLB_TOPOLOGY_PATCH_LIST_32;
+    if (to_runtime_primitive(state_.topology, primitive) && patches == emulated.tessellation
+        && (!patches || state_.topology - MTLB_TOPOLOGY_PATCH_LIST_1 + 1 == emulated.patch_control_points))
+        return true;
+    static std::atomic<bool> logged{false};
+    if (!logged.exchange(true))
+        backend_log("draw skipped, topology %u does not fit the geometry/tessellation pipeline", state_.topology);
+    return false;
+}
+
+// Adjacency and patch lists need the emulated pipelines; draws of them with a plain pipeline are skipped.
+bool Replay::plain_topology_ok()
+{
+    if (state_.topology <= MTLB_TOPOLOGY_TRIANGLE_STRIP)
+        return true;
+    static std::atomic<bool> logged{false};
+    if (!logged.exchange(true))
+        backend_log("draw skipped, topology %u needs a geometry or tessellation pipeline", state_.topology);
+    return false;
+}
+
 mtlb_result Replay::draw(const mtlb_cmd_draw &cmd)
 {
     bool ready;
     mtlb_result result = begin_draw(&ready);
     if (result != MTLB_OK || !ready)
         return result;
+    if (const EmulatedPipeline *emulated = state_.pipeline->emulated.get()) {
+        IRRuntimePrimitiveType primitive;
+        if (!emulated_topology_ok(*emulated, &primitive))
+            return MTLB_OK;
+        if (emulated->tessellation)
+            IRRuntimeDrawPatchesTessellationEmulation(render_, primitive, emulated->ts_config, cmd.instance_count, cmd.vertex_count,
+                                                      cmd.start_instance, cmd.start_vertex);
+        else
+            IRRuntimeDrawPrimitivesGeometryEmulation(render_, primitive, emulated->gs_config, cmd.instance_count, cmd.vertex_count,
+                                                     cmd.start_vertex, cmd.start_instance);
+        return MTLB_OK;
+    }
+    if (!plain_topology_ok())
+        return MTLB_OK;
     IRRuntimeDrawPrimitives(render_, to_primitive_type(state_.topology), cmd.start_vertex, cmd.vertex_count,
                             cmd.instance_count, cmd.start_instance);
     return MTLB_OK;
@@ -916,6 +1027,23 @@ mtlb_result Replay::draw_indexed(const mtlb_cmd_draw_indexed &cmd)
             backend_log("indexed draw skipped, it reads past the index buffer view");
         return MTLB_OK;
     }
+    if (const EmulatedPipeline *emulated = state_.pipeline->emulated.get()) {
+        IRRuntimePrimitiveType primitive;
+        if (!emulated_topology_ok(*emulated, &primitive))
+            return MTLB_OK;
+        // The runtime takes the buffer itself: the view's offset becomes part of the first index.
+        const uint32_t first = static_cast<uint32_t>(state_.index_offset / state_.index_size) + cmd.start_index;
+        const MTLIndexType index_type = state_.index_size == 2 ? MTLIndexTypeUInt16 : MTLIndexTypeUInt32;
+        if (emulated->tessellation)
+            IRRuntimeDrawIndexedPatchesTessellationEmulation(render_, primitive, index_type, state_.index_buffer, emulated->ts_config,
+                                                             cmd.instance_count, cmd.index_count, cmd.start_instance, cmd.base_vertex, first);
+        else
+            IRRuntimeDrawIndexedPrimitivesGeometryEmulation(render_, primitive, index_type, state_.index_buffer, emulated->gs_config,
+                                                            cmd.instance_count, cmd.index_count, first, cmd.base_vertex, cmd.start_instance);
+        return MTLB_OK;
+    }
+    if (!plain_topology_ok())
+        return MTLB_OK;
     IRRuntimeDrawIndexedPrimitives(render_, to_primitive_type(state_.topology), cmd.index_count,
                                    state_.index_size == 2 ? MTLIndexTypeUInt16 : MTLIndexTypeUInt32, state_.index_buffer,
                                    state_.index_offset + uint64_t(cmd.start_index) * state_.index_size, cmd.instance_count,
@@ -1099,12 +1227,23 @@ void Replay::bind_heaps(uint32_t compute_stage)
     for (int i = 0; i < 2; ++i) {
         uint64_t offset = 0;
         Buffer *heap = addresses[i] ? find_buffer(queue_->device, addresses[i], &offset) : nullptr;
-        if (!heap)
+        if (!heap) {
+            if (!compute_stage && bound_emulated_) {
+                id<MTLBuffer> zero = helper_buffer(queue_->device, false);
+                [render_ setObjectBuffer:zero offset:0 atIndex:points[i]];
+                [render_ setMeshBuffer:zero offset:0 atIndex:points[i]];
+            }
             continue;
+        }
         if (compute_stage) {
             [compute_ setBuffer:heap->buffer offset:offset atIndex:points[i]];
         } else {
-            [render_ setVertexBuffer:heap->buffer offset:offset atIndex:points[i]];
+            if (bound_emulated_) {
+                [render_ setObjectBuffer:heap->buffer offset:offset atIndex:points[i]];
+                [render_ setMeshBuffer:heap->buffer offset:offset atIndex:points[i]];
+            } else {
+                [render_ setVertexBuffer:heap->buffer offset:offset atIndex:points[i]];
+            }
             [render_ setFragmentBuffer:heap->buffer offset:offset atIndex:points[i]];
         }
     }

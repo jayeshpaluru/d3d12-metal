@@ -481,7 +481,7 @@ typedef enum mtlb_cull_mode { MTLB_CULL_NONE = 1, MTLB_CULL_FRONT = 2, MTLB_CULL
 typedef enum mtlb_fill_mode { MTLB_FILL_WIREFRAME = 2, MTLB_FILL_SOLID = 3 } mtlb_fill_mode;
 
 typedef enum mtlb_topology_type {
-    MTLB_TOPOLOGY_TYPE_POINT = 1, MTLB_TOPOLOGY_TYPE_LINE = 2, MTLB_TOPOLOGY_TYPE_TRIANGLE = 3,
+    MTLB_TOPOLOGY_TYPE_POINT = 1, MTLB_TOPOLOGY_TYPE_LINE = 2, MTLB_TOPOLOGY_TYPE_TRIANGLE = 3, MTLB_TOPOLOGY_TYPE_PATCH = 4,
 } mtlb_topology_type;
 
 typedef enum mtlb_input_class { MTLB_INPUT_PER_VERTEX = 0, MTLB_INPUT_PER_INSTANCE = 1 } mtlb_input_class;
@@ -569,6 +569,13 @@ typedef struct mtlb_pipeline_desc {
 
     uint32_t num_input_elements;
     mtlb_input_element input_elements[MTLB_MAX_INPUT_ELEMENTS];
+
+    /* Geometry, hull and domain shaders (size 0: absent). A pipeline with any of them is emulated through
+     * mesh shaders and must be drawn with the matching topology (adjacency for a geometry shader, a patch list
+     * of the hull shader's control point count for tessellation). Stream output is not supported. */
+    const void *gs_dxil; uint64_t gs_size;
+    const void *hs_dxil; uint64_t hs_size;
+    const void *ds_dxil; uint64_t ds_size;
 } mtlb_pipeline_desc;
 
 typedef struct mtlb_compute_pipeline_desc {
@@ -730,7 +737,7 @@ MTLB_ASSERT_SIZE(mtlb_stencil_face, 16);
 MTLB_ASSERT_SIZE(mtlb_render_target_blend, 32);
 MTLB_ASSERT_SIZE(mtlb_root_parameter_layout, 8);
 MTLB_ASSERT_SIZE(mtlb_root_signature_layout, 520);
-MTLB_ASSERT_SIZE(mtlb_pipeline_desc, 2192);
+MTLB_ASSERT_SIZE(mtlb_pipeline_desc, 2240);
 MTLB_ASSERT_SIZE(mtlb_compute_pipeline_desc, 32);
 MTLB_ASSERT_SIZE(mtlb_swapchain_desc, 24);
 MTLB_ASSERT_SIZE(mtlb_size_align, 16);

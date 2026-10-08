@@ -173,9 +173,17 @@ void CommandList::IASetPrimitiveTopology(D3D12_PRIMITIVE_TOPOLOGY topology)
     case D3D_PRIMITIVE_TOPOLOGY_LINESTRIP:
     case D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST:
     case D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP:
+    case D3D_PRIMITIVE_TOPOLOGY_LINELIST_ADJ:
+    case D3D_PRIMITIVE_TOPOLOGY_LINESTRIP_ADJ:
+    case D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST_ADJ:
+    case D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP_ADJ:
         append<mtlb_cmd_set_topology>(MTLB_CMD_SET_TOPOLOGY)->topology = topology;  // values match mtlb_topology
         break;
     default:
+        if (topology >= D3D_PRIMITIVE_TOPOLOGY_1_CONTROL_POINT_PATCHLIST && topology <= D3D_PRIMITIVE_TOPOLOGY_32_CONTROL_POINT_PATCHLIST) {
+            append<mtlb_cmd_set_topology>(MTLB_CMD_SET_TOPOLOGY)->topology = topology;
+            break;
+        }
         D3D12M_LOG("unsupported primitive topology %d", static_cast<int>(topology));
     }
 }

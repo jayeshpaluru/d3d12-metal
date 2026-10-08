@@ -24,6 +24,7 @@ mtlb_render_target_blend convert(const D3D12_RENDER_TARGET_BLEND_DESC &rt)
             rt.SrcBlendAlpha, rt.DestBlendAlpha, rt.BlendOpAlpha, rt.RenderTargetWriteMask};
 }
 
+static_assert(int(MTLB_TOPOLOGY_TYPE_PATCH) == int(D3D12_PRIMITIVE_TOPOLOGY_TYPE_PATCH), "mtlb topology types mirror the D3D12 enum");
 static_assert(int(MTLB_TOPOLOGY_TYPE_POINT) == int(D3D12_PRIMITIVE_TOPOLOGY_TYPE_POINT)
                   && int(MTLB_TOPOLOGY_TYPE_LINE) == int(D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE)
                   && int(MTLB_TOPOLOGY_TYPE_TRIANGLE) == int(D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE),
@@ -43,9 +44,13 @@ uint64_t pipeline_key(mtlb_pipeline_desc pd)
 {
     const uint64_t vs = hash_bytes(pd.vs_dxil, pd.vs_size);
     const uint64_t ps = pd.ps_dxil ? hash_bytes(pd.ps_dxil, pd.ps_size) : 0;
-    pd.vs_dxil = pd.ps_dxil = nullptr;
+    const uint64_t gs = pd.gs_dxil ? hash_bytes(pd.gs_dxil, pd.gs_size) : 0;
+    const uint64_t hs = pd.hs_dxil ? hash_bytes(pd.hs_dxil, pd.hs_size) : 0;
+    const uint64_t ds = pd.ds_dxil ? hash_bytes(pd.ds_dxil, pd.ds_size) : 0;
+    pd.vs_dxil = pd.ps_dxil = pd.gs_dxil = pd.hs_dxil = pd.ds_dxil = nullptr;
     pd.vs_entry = pd.ps_entry = nullptr;
-    return hash_bytes(&pd, sizeof(pd), hash_bytes(&ps, sizeof(ps), hash_bytes(&vs, sizeof(vs))));
+    const uint64_t stages[5] = {vs, ps, gs, hs, ds};
+    return hash_bytes(&pd, sizeof(pd), hash_bytes(stages, sizeof(stages)));
 }
 
 uint64_t pipeline_key(mtlb_compute_pipeline_desc pd)
@@ -66,16 +71,15 @@ HRESULT PipelineState::create_graphics(Device *device, const D3D12_GRAPHICS_PIPE
     if (!desc.pRootSignature || !desc.VS.pShaderBytecode || !desc.VS.BytecodeLength
         || desc.NumRenderTargets > MTLB_MAX_RENDER_TARGETS || desc.InputLayout.NumElements > MTLB_MAX_INPUT_ELEMENTS)
         return E_INVALIDARG;
-    if (desc.GS.pShaderBytecode || desc.HS.pShaderBytecode || desc.DS.pShaderBytecode
-        || desc.StreamOutput.NumEntries) {
-        // Games ask again every frame: log the first few only (the stages are not supported, see STATUS.md).
+    if (desc.StreamOutput.NumEntries) {
+        // Metal Shader Converter has no public stream-output support; games that need it get this refusal.
         static std::atomic<unsigned> reported{0};
         if (reported.fetch_add(1) < 8)
-            D3D12M_LOG("geometry, tessellation and stream-output stages are not supported (GS %zu bytes, HS %zu, DS %zu, "
-                       "stream-output entries %u)", desc.GS.BytecodeLength, desc.HS.BytecodeLength, desc.DS.BytecodeLength,
-                       desc.StreamOutput.NumEntries);
+            D3D12M_LOG("stream output is not supported (%u entries)", desc.StreamOutput.NumEntries);
         return E_NOTIMPL;
     }
+    if ((desc.HS.BytecodeLength != 0) != (desc.DS.BytecodeLength != 0))
+        return E_INVALIDARG;
 
     // Only RootSignature objects of this layer can be passed in.
     auto *root_signature = ours<RootSignature>(desc.pRootSignature);
@@ -88,6 +92,16 @@ HRESULT PipelineState::create_graphics(Device *device, const D3D12_GRAPHICS_PIPE
     pd.ps_dxil = desc.PS.pShaderBytecode;
     pd.ps_size = desc.PS.BytecodeLength;
     pd.root_signature = root_signature->handle();
+    if (desc.GS.BytecodeLength && desc.GS.pShaderBytecode) {
+        pd.gs_dxil = desc.GS.pShaderBytecode;
+        pd.gs_size = desc.GS.BytecodeLength;
+    }
+    if (desc.HS.BytecodeLength && desc.HS.pShaderBytecode && desc.DS.BytecodeLength && desc.DS.pShaderBytecode) {
+        pd.hs_dxil = desc.HS.pShaderBytecode;
+        pd.hs_size = desc.HS.BytecodeLength;
+        pd.ds_dxil = desc.DS.pShaderBytecode;
+        pd.ds_size = desc.DS.BytecodeLength;
+    }
 
     pd.num_render_targets = desc.NumRenderTargets;
     for (UINT i = 0; i < desc.NumRenderTargets; ++i) {

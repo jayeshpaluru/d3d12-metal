@@ -166,6 +166,12 @@ typedef enum mtlb_topology {
     MTLB_TOPOLOGY_LINE_STRIP = 3,
     MTLB_TOPOLOGY_TRIANGLE_LIST = 4,
     MTLB_TOPOLOGY_TRIANGLE_STRIP = 5,
+    MTLB_TOPOLOGY_LINE_LIST_ADJ = 10,
+    MTLB_TOPOLOGY_LINE_STRIP_ADJ = 11,
+    MTLB_TOPOLOGY_TRIANGLE_LIST_ADJ = 12,
+    MTLB_TOPOLOGY_TRIANGLE_STRIP_ADJ = 13,
+    MTLB_TOPOLOGY_PATCH_LIST_1 = 33,  /* 1 to 32 control points: 33 to 64 */
+    MTLB_TOPOLOGY_PATCH_LIST_32 = 64,
 } mtlb_topology;
 
 typedef struct mtlb_cmd_set_topology {

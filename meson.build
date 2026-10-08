@@ -47,6 +47,8 @@ portable_tests = [
   ['psothreads', ['instanced'], ['fill']],
   ['dxbc', [], []],
   ['rtmismatch', ['rt_mismatch'], []],
+  ['geometry', ['geometry'], []],
+  ['tessellation', ['tessellation'], []],
 ]
 
 bridge_sources = []

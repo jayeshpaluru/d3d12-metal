@@ -12,9 +12,14 @@ endif
 
 # Shader name -> [vs header, ps header], from shaders/<name>.hlsl.
 shader_headers = {}
-foreach shader : ['color', 'vertex_input', 'hello_texture', 'const_buffers', 'instanced', 'rt_mismatch']
+# Stages per shader: the default is a vertex and a pixel shader.
+stages_of = {
+  'geometry': [['vs', 'vs_6_0', 'VSMain'], ['gs', 'gs_6_0', 'GSMain'], ['ps', 'ps_6_0', 'PSMain']],
+  'tessellation': [['vs', 'vs_6_0', 'VSMain'], ['hs', 'hs_6_0', 'HSMain'], ['ds', 'ds_6_0', 'DSMain'], ['ps', 'ps_6_0', 'PSMain']],
+}
+foreach shader : ['color', 'vertex_input', 'hello_texture', 'const_buffers', 'instanced', 'rt_mismatch', 'geometry', 'tessellation']
   headers = []
-  foreach stage : [['vs', 'vs_6_0', 'VSMain'], ['ps', 'ps_6_0', 'PSMain']]
+  foreach stage : stages_of.get(shader, [['vs', 'vs_6_0', 'VSMain'], ['ps', 'ps_6_0', 'PSMain']])
     headers += custom_target(
       shader + '_' + stage[0],
       input: 'shaders/' + shader + '.hlsl',

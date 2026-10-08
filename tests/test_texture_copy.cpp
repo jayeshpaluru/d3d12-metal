@@ -93,6 +93,65 @@ void check_bc1_small_mips(TestContext &ctx)
     readback->Unmap(0, nullptr);
 }
 
+// A compressor writes blocks into an R16G16B16A16_UINT texture (one texel per 8-byte block) and copies it into a
+// BC1 texture a quarter of its size in each direction: the box is in the source's texels, the origin in the
+// destination's, and Metal can only do it through a buffer.
+void check_block_copy(TestContext &ctx)
+{
+    const CD3DX12_HEAP_PROPERTIES heap(D3D12_HEAP_TYPE_DEFAULT);
+    D3D12_RESOURCE_DESC blocks_desc = texture_desc(4, DXGI_FORMAT_R16G16B16A16_UINT, 1);
+    D3D12_RESOURCE_DESC bc1_desc = texture_desc(16, DXGI_FORMAT_BC1_UNORM, 1);
+    ComPtr<ID3D12Resource> blocks, bc1;
+    CHECK_HR(ctx.device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &blocks_desc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+                                                 IID_PPV_ARGS(blocks.GetAddressOf())));
+    CHECK_HR(ctx.device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &bc1_desc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+                                                 IID_PPV_ARGS(bc1.GetAddressOf())));
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT blocks_layout = {}, bc1_layout = {};
+    UINT64 blocks_total = 0, bc1_total = 0;
+    ctx.device->GetCopyableFootprints(&blocks_desc, 0, 1, 0, &blocks_layout, nullptr, nullptr, &blocks_total);
+    ctx.device->GetCopyableFootprints(&bc1_desc, 0, 1, 0, &bc1_layout, nullptr, nullptr, &bc1_total);
+
+    std::vector<uint8_t> data(blocks_total, 0);
+    for (UINT y = 0; y < 4; ++y)
+        for (UINT x = 0; x < 4; ++x)
+            for (UINT b = 0; b < 8; ++b)
+                data[y * blocks_layout.Footprint.RowPitch + x * 8 + b] = static_cast<uint8_t>(y * 64 + x * 8 + b + 1);
+    ComPtr<ID3D12Resource> upload = ctx.create_upload_buffer(data.data(), blocks_total);
+    ComPtr<ID3D12Resource> readback = ctx.create_buffer(D3D12_HEAP_TYPE_READBACK, bc1_total);
+
+    ComPtr<ID3D12GraphicsCommandList> list = ctx.create_list();
+    {
+        const CD3DX12_TEXTURE_COPY_LOCATION dst(blocks.Get(), 0), src(upload.Get(), blocks_layout);
+        list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+    }
+    const D3D12_RESOURCE_BARRIER barrier = CD3DX12_RESOURCE_BARRIER::Transition(blocks.Get(), D3D12_RESOURCE_STATE_COPY_DEST,
+                                                                               D3D12_RESOURCE_STATE_COPY_SOURCE);
+    list->ResourceBarrier(1, &barrier);
+    {
+        const CD3DX12_TEXTURE_COPY_LOCATION dst(bc1.Get(), 0), src(blocks.Get(), 0);
+        list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+    }
+    const D3D12_RESOURCE_BARRIER to_source = CD3DX12_RESOURCE_BARRIER::Transition(bc1.Get(), D3D12_RESOURCE_STATE_COPY_DEST,
+                                                                                 D3D12_RESOURCE_STATE_COPY_SOURCE);
+    list->ResourceBarrier(1, &to_source);
+    {
+        const CD3DX12_TEXTURE_COPY_LOCATION dst(readback.Get(), bc1_layout), src(bc1.Get(), 0);
+        list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+    }
+    CHECK_HR(list->Close());
+    ctx.execute_and_wait(list.Get());
+
+    void *mapped = nullptr;
+    CHECK_HR(readback->Map(0, nullptr, &mapped));
+    for (UINT y = 0; y < 4; ++y) {
+        for (UINT x = 0; x < 4; ++x) {
+            const uint8_t *got = static_cast<uint8_t *>(mapped) + y * bc1_layout.Footprint.RowPitch + x * 8;
+            CHECK(std::memcmp(got, data.data() + y * blocks_layout.Footprint.RowPitch + x * 8, 8) == 0);
+        }
+    }
+    readback->Unmap(0, nullptr);
+}
+
 } // namespace
 
 int main()
@@ -100,6 +159,7 @@ int main()
     TestContext ctx;
     check_footprints(ctx);
     check_bc1_small_mips(ctx);
+    check_block_copy(ctx);
 
     const CD3DX12_HEAP_PROPERTIES default_heap(D3D12_HEAP_TYPE_DEFAULT);
     D3D12_RESOURCE_DESC desc = texture_desc(kSize, DXGI_FORMAT_R8G8B8A8_UNORM, 1);

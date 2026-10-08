@@ -52,12 +52,16 @@ constexpr IRCompatibilityFlags kCompatibilityFlags = static_cast<IRCompatibility
     | IRCompatibilityFlagSampleNanToZero | IRCompatibilityFlagPositionInvariance);
 constexpr uint32_t kCacheRevision = 2;  // bump when the conversion changes in a way the key does not capture
 
-// One compiler per thread: creating one per stage per pipeline is wasteful.
-IRCompiler *thread_compiler()
+// One compiler per thread: creating one per stage per pipeline is wasteful. Pipelines with geometry or
+// tessellation stages need a compiler of their own (the emulation option persists in it).
+IRCompiler *thread_compiler(bool emulation = false)
 {
-    thread_local OwnedCompiler compiler;
+    thread_local OwnedCompiler plain_compiler, emulation_compiler;
+    OwnedCompiler &compiler = emulation ? emulation_compiler : plain_compiler;
     if (!compiler.ptr) {
         compiler.ptr = IRCompilerCreate();
+        if (emulation)
+            IRCompilerEnableGeometryAndTessellationEmulation(compiler.ptr, true);
         // Vertex shaders fetch their inputs through a separate stage-in function
         // (see get_stage_in) instead of Metal vertex fetch.
         IRCompilerSetStageInGenerationMode(compiler.ptr, IRStageInCodeGenerationModeUseSeparateStageInFunction);
@@ -78,9 +82,17 @@ uint64_t hash_bytes(const void *data, uint64_t size)
     return hash;
 }
 
+// How a stage is converted: for the geometry/tessellation emulation (a mesh pipeline made of these stages) the
+// converter needs the option and the topology the pipeline draws with.
+struct StageOptions {
+    bool emulation = false;
+    IRInputTopology topology = IRInputTopologyUndefined;
+    uint32_t key() const { return emulation ? 0x100u | (static_cast<uint32_t>(topology) << 12) : 0; }
+};
+
 // Loads a converted shader's Metal function and reflection into `out`.
 mtlb_result finish_stage(Device *device, dispatch_data_t bytecode, std::shared_ptr<IRShaderReflection> reflection,
-                         IRShaderStage ir_stage, ShaderStage &out)
+                         IRShaderStage ir_stage, bool emulation, ShaderStage &out)
 {
     const char *function_name = IRShaderReflectionGetEntryPointFunctionName(reflection.get());
     if (!function_name)
@@ -90,9 +102,14 @@ mtlb_result finish_stage(Device *device, dispatch_data_t bytecode, std::shared_p
     id<MTLLibrary> library = [device->device newLibraryWithData:bytecode error:&ns_error];
     if (!library)
         return fail(MTLB_ERROR_COMPILE_FAILED, std::string("newLibraryWithData: ") + ns_error.localizedDescription.UTF8String);
-    out.function = [library newFunctionWithName:[NSString stringWithUTF8String:function_name]];
-    if (!out.function)
-        return fail(MTLB_ERROR_COMPILE_FAILED, std::string("function not found in converted library: ") + function_name);
+    out.entry_name = function_name;
+    if (emulation) {
+        out.library = library;  // functions with constants: the runtime instantiates them
+    } else {
+        out.function = [library newFunctionWithName:[NSString stringWithUTF8String:function_name]];
+        if (!out.function)
+            return fail(MTLB_ERROR_COMPILE_FAILED, std::string("function not found in converted library: ") + function_name);
+    }
 
     if (ir_stage == IRShaderStageCompute) {
         IRVersionedCSInfo info;
@@ -106,10 +123,36 @@ mtlb_result finish_stage(Device *device, dispatch_data_t bytecode, std::shared_p
         if (!IRShaderReflectionCopyVertexInfo(reflection.get(), IRReflectionVersion_1_0, &info))
             return fail(MTLB_ERROR_COMPILE_FAILED, "vertex reflection unavailable");
         out.num_vertex_inputs = static_cast<uint32_t>(info.info_1_0.num_vertex_inputs);
+        out.vertex_output_size = info.info_1_0.vertex_output_size_in_bytes;
         IRShaderReflectionReleaseVertexInfo(&info);
         out.reflection = std::move(reflection);
     } else if (ir_stage == IRShaderStageFragment) {
         out.reflection = std::move(reflection);  // the render target output types, at pipeline creation
+    } else if (ir_stage == IRShaderStageGeometry) {
+        IRVersionedGSInfo info;
+        if (!IRShaderReflectionCopyGeometryInfo(reflection.get(), IRReflectionVersion_1_0, &info))
+            return fail(MTLB_ERROR_COMPILE_FAILED, "geometry reflection unavailable");
+        out.gs_max_input_primitives = info.info_1_0.max_input_primitives_per_mesh_threadgroup;
+        out.gs_instance_count = std::max<uint32_t>(info.info_1_0.instance_count, 1);
+        out.gs_input_primitive = static_cast<uint32_t>(info.info_1_0.input_primitive);
+        out.gs_passthrough = info.info_1_0.is_passthrough;
+        IRShaderReflectionReleaseGeometryInfo(&info);
+    } else if (ir_stage == IRShaderStageHull) {
+        IRVersionedHSInfo info;
+        if (!IRShaderReflectionCopyHullInfo(reflection.get(), IRReflectionVersion_1_0, &info))
+            return fail(MTLB_ERROR_COMPILE_FAILED, "hull reflection unavailable");
+        out.hs_max_patches = info.info_1_0.max_patches_per_object_threadgroup;
+        out.hs_max_object_threads = info.info_1_0.max_object_threads_per_patch;
+        out.hs_input_control_points = info.info_1_0.input_control_point_count;
+        out.hs_output_primitive = static_cast<uint32_t>(info.info_1_0.tessellator_output_primitive);
+        out.hs_max_tess_factor = info.info_1_0.max_tessellation_factor;
+        IRShaderReflectionReleaseHullInfo(&info);
+    } else if (ir_stage == IRShaderStageDomain) {
+        IRVersionedDSInfo info;
+        if (!IRShaderReflectionCopyDomainInfo(reflection.get(), IRReflectionVersion_1_0, &info))
+            return fail(MTLB_ERROR_COMPILE_FAILED, "domain reflection unavailable");
+        out.ds_max_input_prims = info.info_1_0.max_input_prims_per_mesh_threadgroup;
+        IRShaderReflectionReleaseDomainInfo(&info);
     }
     return MTLB_OK;
 }
@@ -120,7 +163,8 @@ dispatch_data_t bytecode_data(const std::vector<uint8_t> &bytes)
 }
 
 // The disk cache key of a converted shader: everything its conversion depends on.
-CacheKey stage_key(RootSignature *root_signature, const void *dxil, uint64_t size, const char *entry, IRShaderStage ir_stage)
+CacheKey stage_key(RootSignature *root_signature, const void *dxil, uint64_t size, const char *entry, IRShaderStage ir_stage,
+                   const StageOptions &options)
 {
     Hasher h;
     h.update(std::string("stage"));
@@ -128,6 +172,8 @@ CacheKey stage_key(RootSignature *root_signature, const void *dxil, uint64_t siz
     h.update_value(kCacheRevision);
     h.update_value(static_cast<uint32_t>(kCompatibilityFlags));
     h.update_value(static_cast<uint32_t>(ir_stage));
+    if (options.emulation)  // (the keys of the other stages stay as they were)
+        h.update_value(options.key());
     h.update(std::string(entry ? entry : ""));
     h.update_value('\0');
     h.update(root_signature->blob_hash.data(), root_signature->blob_hash.size());
@@ -139,18 +185,18 @@ CacheKey stage_key(RootSignature *root_signature, const void *dxil, uint64_t siz
 // Converts one DXIL shader against `root_signature` and loads its Metal function, or loads the converter's
 // earlier output from the disk cache.
 mtlb_result convert_stage(Device *device, RootSignature *root_signature, const void *dxil, uint64_t size,
-                          const char *entry, IRShaderStage ir_stage, ShaderStage &out)
+                          const char *entry, IRShaderStage ir_stage, const StageOptions &options, ShaderStage &out)
 {
     DiskCache &cache = DiskCache::instance();
     const bool use_cache = cache.enabled();
     CacheKey key{};
     if (use_cache) {
-        key = stage_key(root_signature, dxil, size, entry, ir_stage);
+        key = stage_key(root_signature, dxil, size, entry, ir_stage, options);
         std::vector<uint8_t> metallib;
         std::string json;
         if (cache.load(CacheKind::Stage, key, metallib, json)) {
             std::shared_ptr<IRShaderReflection> reflection(IRShaderReflectionCreateFromJSON(json.c_str()), IRShaderReflectionDestroy);
-            if (reflection && finish_stage(device, bytecode_data(metallib), reflection, ir_stage, out) == MTLB_OK) {
+            if (reflection && finish_stage(device, bytecode_data(metallib), reflection, ir_stage, options.emulation, out) == MTLB_OK) {
                 out.cache_key = key;
                 return MTLB_OK;
             }
@@ -172,7 +218,9 @@ mtlb_result convert_stage(Device *device, RootSignature *root_signature, const v
         source_size = converted.size();
     }
 
-    IRCompiler *compiler = thread_compiler();
+    IRCompiler *compiler = thread_compiler(options.emulation);
+    if (options.emulation)
+        IRCompilerSetInputTopology(compiler, options.topology);
     IRCompilerSetGlobalRootSignature(compiler, root_signature->ir);
 
     OwnedObject input(IRObjectCreateFromDXIL(static_cast<const uint8_t *>(source), source_size, IRBytecodeOwnershipNone));
@@ -200,7 +248,7 @@ mtlb_result convert_stage(Device *device, RootSignature *root_signature, const v
     if (!IRObjectGetReflection(output.ptr, ir_stage, reflection.get()))
         return fail(MTLB_ERROR_COMPILE_FAILED, "shader reflection unavailable");
     out.cache_key = key;
-    mtlb_result result = finish_stage(device, IRMetalLibGetBytecodeData(metallib.ptr), reflection, ir_stage, out);
+    mtlb_result result = finish_stage(device, IRMetalLibGetBytecodeData(metallib.ptr), reflection, ir_stage, options.emulation, out);
     if (result == MTLB_OK && use_cache) {
         std::vector<uint8_t> bytes(IRMetalLibGetBytecodeSize(metallib.ptr));
         IRMetalLibGetBytecode(metallib.ptr, bytes.data());
@@ -215,9 +263,10 @@ mtlb_result convert_stage(Device *device, RootSignature *root_signature, const v
 
 // Returns the converted stage from the device cache, converting it on a miss.
 mtlb_result get_stage(Device *device, RootSignature *root_signature, const void *dxil, uint64_t size,
-                      const char *entry, IRShaderStage ir_stage, std::shared_ptr<const ShaderStage> &out)
+                      const char *entry, IRShaderStage ir_stage, std::shared_ptr<const ShaderStage> &out,
+                      const StageOptions &options = {})
 {
-    const ShaderKey key{hash_bytes(dxil, size), size, root_signature->id, static_cast<uint32_t>(ir_stage),
+    const ShaderKey key{hash_bytes(dxil, size), size, root_signature->id, static_cast<uint32_t>(ir_stage) | options.key(),
                         entry ? entry : ""};
     {
         std::lock_guard<std::mutex> lock(device->shaders_mutex);
@@ -228,7 +277,7 @@ mtlb_result get_stage(Device *device, RootSignature *root_signature, const void 
         }
     }
     auto stage = std::make_shared<ShaderStage>();
-    mtlb_result result = convert_stage(device, root_signature, dxil, size, entry, ir_stage, *stage);
+    mtlb_result result = convert_stage(device, root_signature, dxil, size, entry, ir_stage, options, *stage);
     if (result != MTLB_OK)
         return result;
     std::lock_guard<std::mutex> lock(device->shaders_mutex);
@@ -407,7 +456,8 @@ id<MTLDepthStencilState> get_depth_stencil(Device *device, const mtlb_pipeline_d
 // feeds the vertex shader from the D3D12 input layout. The function reads the
 // vertex buffers and their strides at draw time from the IRRuntimeVertexBuffers
 // table the replay binds, so strides stay dynamic.
-mtlb_result get_stage_in(Device *device, ShaderStage &vs, const mtlb_pipeline_desc &desc, id<MTLFunction> *out)
+mtlb_result get_stage_in(Device *device, ShaderStage &vs, const mtlb_pipeline_desc &desc, id<MTLFunction> *out,
+                         bool emulation = false, id<MTLLibrary> *out_library = nullptr)
 {
     IRVersionedInputLayoutDescriptor layout = {};
     layout.version = IRInputLayoutDescriptorVersion_1;
@@ -428,10 +478,18 @@ mtlb_result get_stage_in(Device *device, ShaderStage &vs, const mtlb_pipeline_de
     }
 
     std::lock_guard<std::mutex> lock(vs.stage_in_mutex);
-    auto it = vs.stage_ins.find(key);
-    if (it != vs.stage_ins.end()) {
-        *out = it->second;
-        return MTLB_OK;
+    if (emulation) {
+        auto emulated = vs.emulation_stage_ins.find(key);
+        if (emulated != vs.emulation_stage_ins.end()) {
+            *out_library = emulated->second;
+            return MTLB_OK;
+        }
+    } else {
+        auto it = vs.stage_ins.find(key);
+        if (it != vs.stage_ins.end()) {
+            *out = it->second;
+            return MTLB_OK;
+        }
     }
     DiskCache &cache = DiskCache::instance();
     const bool use_cache = cache.enabled();
@@ -444,6 +502,7 @@ mtlb_result get_stage_in(Device *device, ShaderStage &vs, const mtlb_pipeline_de
         h.update(DiskCache::converter_identity());
         h.update_value(kCacheRevision);
         h.update(vs.cache_key.data(), vs.cache_key.size());
+        h.update_value(emulation);
         h.update(key);  // the layout
         disk_key = h.finish();
         std::vector<uint8_t> cached;
@@ -453,6 +512,7 @@ mtlb_result get_stage_in(Device *device, ShaderStage &vs, const mtlb_pipeline_de
     }
     // A cached entry that Metal rejects (intact on disk, but not a usable library) is discarded and rebuilt.
     id<MTLFunction> function = nil;
+    id<MTLLibrary> stage_in_library = nil;
     bool from_cache = false;
     NSError *ns_error = nil;
     if (bytecode != nil) {
@@ -460,13 +520,14 @@ mtlb_result get_stage_in(Device *device, ShaderStage &vs, const mtlb_pipeline_de
         function = library ? [library newFunctionWithName:library.functionNames.firstObject] : nil;
         if (function) {
             from_cache = true;
+            stage_in_library = library;
         } else {
             cache.discard(CacheKind::StageIn, disk_key);
             ns_error = nil;
         }
     }
     if (!function) {
-        if (!IRMetalLibSynthesizeStageInFunction(thread_compiler(), vs.reflection.get(), &layout, metallib.ptr))
+        if (!IRMetalLibSynthesizeStageInFunction(thread_compiler(emulation), vs.reflection.get(), &layout, metallib.ptr))
             return fail(MTLB_ERROR_COMPILE_FAILED, "stage-in function synthesis failed for the input layout");
         id<MTLLibrary> library = [device->device newLibraryWithData:IRMetalLibGetBytecodeData(metallib.ptr) error:&ns_error];
         if (!library)
@@ -474,11 +535,17 @@ mtlb_result get_stage_in(Device *device, ShaderStage &vs, const mtlb_pipeline_de
         function = [library newFunctionWithName:library.functionNames.firstObject];
         if (!function)
             return fail(MTLB_ERROR_COMPILE_FAILED, "stage-in function missing from its library");
+        stage_in_library = library;
     }
     if (use_cache && !from_cache) {
         std::vector<uint8_t> bytes(IRMetalLibGetBytecodeSize(metallib.ptr));
         IRMetalLibGetBytecode(metallib.ptr, bytes.data());
         cache.store(CacheKind::StageIn, disk_key, bytes.data(), bytes.size(), std::string());
+    }
+    if (emulation) {
+        *out_library = stage_in_library;
+        vs.emulation_stage_ins.emplace(std::move(key), stage_in_library);
+        return MTLB_OK;
     }
     vs.stage_ins.emplace(std::move(key), function);
     *out = function;
@@ -494,7 +561,224 @@ MTLPrimitiveTopologyClass to_topology_class(uint32_t type)
     }
 }
 
+// The attachment formats and blend state of a pipeline, shared by plain and emulated (mesh) pipelines.
+struct Attachments {
+    std::array<MTLPixelFormat, MTLB_MAX_RENDER_TARGETS> color_view_formats{};
+    MTLPixelFormat depth_format = MTLPixelFormatInvalid, stencil_format = MTLPixelFormatInvalid;
+};
+
+mtlb_result fill_attachments(const mtlb_pipeline_desc &desc, const ShaderStage *ps,
+                             MTLRenderPipelineColorAttachmentDescriptorArray *color_attachments, Attachments *out)
+{
+    const mtlb_pipeline_desc *const d = &desc;
+    // Bit i is set when the fragment shader writes integers to render target i.
+    uint32_t integer_outputs = 0;
+    if (ps) {
+        IRVersionedFSInfo info;
+        if (IRShaderReflectionCopyFragmentInfo(ps->reflection.get(), IRReflectionVersion_1_0, &info)) {
+            integer_outputs = info.info_1_0.rt_index_int;
+            IRShaderReflectionReleaseFragmentInfo(&info);
+        }
+    }
+    auto &color_view_formats = out->color_view_formats;
+    for (uint32_t i = 0; i < d->num_render_targets; ++i) {
+        if (d->rtv_formats[i] == MTLB_FORMAT_UNKNOWN)
+            continue;
+        MTLPixelFormat format = to_pixel_format(d->rtv_formats[i]);
+        if (format == MTLPixelFormatInvalid)
+            return fail(MTLB_ERROR_UNSUPPORTED, "unsupported render target format " + std::to_string(d->rtv_formats[i]));
+        // D3D12 tolerates a shader output of another type than the render target (the result is undefined, and
+        // games do it with the output masked); Metal refuses the pipeline. The target is written through a view of
+        // the other kind instead (the bits land as they are); where no such view exists, the pipeline is refused.
+        if (ps && ((integer_outputs >> i) & 1) != (is_integer_pixel_format(format) ? 1u : 0u)) {
+            const MTLPixelFormat other = opposite_kind_format(format);
+            if (other != MTLPixelFormatInvalid) {
+                color_view_formats[i] = other;
+                format = other;
+            }
+        }
+        const mtlb_render_target_blend &blend = d->blend[d->independent_blend ? i : 0];
+        MTLRenderPipelineColorAttachmentDescriptor *ca = color_attachments[i];
+        ca.pixelFormat = format;
+        ca.writeMask = to_write_mask(blend.write_mask);
+        ca.blendingEnabled = blend.blend_enable != 0;
+        ca.sourceRGBBlendFactor = to_blend_factor(blend.src_blend);
+        ca.destinationRGBBlendFactor = to_blend_factor(blend.dest_blend);
+        ca.rgbBlendOperation = to_blend_op(blend.blend_op);
+        ca.sourceAlphaBlendFactor = to_blend_factor(blend.src_blend_alpha);
+        ca.destinationAlphaBlendFactor = to_blend_factor(blend.dest_blend_alpha);
+        ca.alphaBlendOperation = to_blend_op(blend.blend_op_alpha);
+    }
+
+    // D24_UNORM_S8_UINT is a 32-bit depth with 8-bit stencil here (docs/STATUS.md).
+    if (d->dsv_format != MTLB_FORMAT_UNKNOWN) {
+        out->depth_format = to_texture_pixel_format(d->dsv_format, true);
+        if (out->depth_format == MTLPixelFormatInvalid)
+            return fail(MTLB_ERROR_UNSUPPORTED, "unsupported depth-stencil format " + std::to_string(d->dsv_format));
+        if (out->depth_format == MTLPixelFormatDepth32Float_Stencil8)
+            out->stencil_format = out->depth_format;
+    }
+    return MTLB_OK;
+}
+
+IRInputTopology to_input_topology(uint32_t type)
+{
+    switch (type) {
+    case MTLB_TOPOLOGY_TYPE_POINT: return IRInputTopologyPoint;
+    case MTLB_TOPOLOGY_TYPE_LINE: return IRInputTopologyLine;
+    case MTLB_TOPOLOGY_TYPE_PATCH: return IRInputTopologyPatch;
+    default: return IRInputTopologyTriangle;
+    }
+}
+
+// Builds the pipeline of a description with geometry and/or tessellation stages out of mesh shaders.
+mtlb_result create_emulated_pipeline(Device *device, RootSignature *root_signature, const mtlb_pipeline_desc &desc,
+                                     mtlb_pipeline *out)
+{
+    const bool tessellation = desc.hs_size != 0;
+    if (desc.topology_type == MTLB_TOPOLOGY_TYPE_PATCH && !tessellation)
+        return fail(MTLB_ERROR_UNSUPPORTED, "a patch topology without a hull shader");
+    if (tessellation && desc.topology_type != MTLB_TOPOLOGY_TYPE_PATCH)
+        return fail(MTLB_ERROR_UNSUPPORTED, "a hull shader needs the patch topology type");
+    const StageOptions options{true, to_input_topology(desc.topology_type)};
+
+    std::shared_ptr<const ShaderStage> vs, ps, gs, hs, ds;
+    mtlb_result result = get_stage(device, root_signature, desc.vs_dxil, desc.vs_size, desc.vs_entry, IRShaderStageVertex, vs, options);
+    if (result == MTLB_OK && desc.ps_size)
+        result = get_stage(device, root_signature, desc.ps_dxil, desc.ps_size, desc.ps_entry, IRShaderStageFragment, ps, options);
+    if (result == MTLB_OK && desc.gs_size)
+        result = get_stage(device, root_signature, desc.gs_dxil, desc.gs_size, nullptr, IRShaderStageGeometry, gs, options);
+    if (result == MTLB_OK && tessellation) {
+        result = get_stage(device, root_signature, desc.hs_dxil, desc.hs_size, nullptr, IRShaderStageHull, hs, options);
+        if (result == MTLB_OK)
+            result = get_stage(device, root_signature, desc.ds_dxil, desc.ds_size, nullptr, IRShaderStageDomain, ds, options);
+    }
+    if (result != MTLB_OK)
+        return result;
+    if (!ps)
+        return fail(MTLB_ERROR_UNSUPPORTED, "a pipeline with geometry or tessellation stages needs a pixel shader");
+
+    auto emulated = std::make_unique<EmulatedPipeline>();
+    emulated->tessellation = tessellation;
+    emulated->vertex = vs->library;
+    emulated->vertex_name = vs->entry_name;
+    emulated->fragment = ps->library;
+    emulated->fragment_name = ps->entry_name;
+    if (gs) {
+        emulated->geometry = gs->library;
+        emulated->geometry_name = gs->entry_name;
+    }
+    if (tessellation) {
+        emulated->hull = hs->library;
+        emulated->domain = ds->library;
+    }
+    if (!vs->num_vertex_inputs)
+        return fail(MTLB_ERROR_UNSUPPORTED, "geometry/tessellation emulation without vertex inputs");
+    id<MTLFunction> unused = nil;
+    id<MTLLibrary> stage_in = nil;
+    result = get_stage_in(device, const_cast<ShaderStage &>(*vs), desc, &unused, true, &stage_in);
+    if (result != MTLB_OK)
+        return result;
+    emulated->stage_in = stage_in;
+
+    if (tessellation) {
+        const uint32_t output_primitive = hs->hs_output_primitive;
+        IRRuntimeTessellationPipelineConfig &c = emulated->ts_config;
+        c.outputPrimitiveType = static_cast<IRRuntimeTessellatorOutputPrimitive>(output_primitive);
+        c.vsOutputSizeInBytes = vs->vertex_output_size;
+        c.gsMaxInputPrimitivesPerMeshThreadgroup = gs ? gs->gs_max_input_primitives : ds->ds_max_input_prims;
+        c.hsMaxPatchesPerObjectThreadgroup = hs->hs_max_patches;
+        c.hsInputControlPointCount = hs->hs_input_control_points;
+        c.hsMaxObjectThreadsPerThreadgroup = hs->hs_max_object_threads;
+        c.hsMaxTessellationFactor = hs->hs_max_tess_factor;
+        c.gsInstanceCount = gs ? gs->gs_instance_count : 1;
+        emulated->patch_control_points = hs->hs_input_control_points;
+        if (!gs) {  // the domain library's own pass-through geometry shader
+            emulated->geometry_name = output_primitive == IRRuntimeTessellatorOutputPoint ? kIRPointPassthroughGeometryShader
+                                      : output_primitive == IRRuntimeTessellatorOutputLine ? kIRLinePassthroughGeometryShader
+                                                                                           : kIRTrianglePassthroughGeometryShader;
+        }
+    } else {
+        emulated->gs_config = {vs->vertex_output_size, gs->gs_max_input_primitives};
+    }
+
+    MTLMeshRenderPipelineDescriptor *md = [MTLMeshRenderPipelineDescriptor new];
+    md.rasterSampleCount = desc.sample_count ? desc.sample_count : 1;
+    Attachments attachments;
+    result = fill_attachments(desc, ps.get(), md.colorAttachments, &attachments);
+    if (result != MTLB_OK)
+        return result;
+    if (attachments.depth_format != MTLPixelFormatInvalid)
+        md.depthAttachmentPixelFormat = attachments.depth_format;
+    if (attachments.stencil_format != MTLPixelFormatInvalid)
+        md.stencilAttachmentPixelFormat = attachments.stencil_format;
+
+    NSError *ns_error = nil;
+    id<MTLRenderPipelineState> state = build_emulated_state(device, *emulated, md, &ns_error);
+    if (!state)
+        return fail(MTLB_ERROR_COMPILE_FAILED, std::string("emulated pipeline: ") + (ns_error ? ns_error.localizedDescription.UTF8String : "failed"));
+
+    id<MTLDepthStencilState> depth_stencil = get_depth_stencil(device, desc, true);
+    id<MTLDepthStencilState> depth_stencil_off = get_depth_stencil(device, desc, false);
+    if (!depth_stencil || !depth_stencil_off)
+        return fail(MTLB_ERROR_COMPILE_FAILED, "newDepthStencilState failed");
+    auto *pipeline = new Pipeline();
+    pipeline->device = device;
+    pipeline->state = state;
+    pipeline->emulated = std::move(emulated);
+    pipeline->mesh_descriptor = md;
+    pipeline->depth_format = attachments.depth_format;
+    pipeline->stencil_format = attachments.stencil_format;
+    pipeline->color_view_formats = attachments.color_view_formats;
+    pipeline->depth_stencil = depth_stencil;
+    pipeline->depth_stencil_off = depth_stencil_off;
+    pipeline->cull_mode = desc.cull_mode == MTLB_CULL_FRONT ? MTLCullModeFront
+                          : desc.cull_mode == MTLB_CULL_BACK ? MTLCullModeBack : MTLCullModeNone;
+    pipeline->winding = desc.front_counter_clockwise ? MTLWindingCounterClockwise : MTLWindingClockwise;
+    pipeline->fill_mode = desc.fill_mode == MTLB_FILL_WIREFRAME ? MTLTriangleFillModeLines : MTLTriangleFillModeFill;
+    pipeline->depth_clip = desc.depth_clip_enable ? MTLDepthClipModeClip : MTLDepthClipModeClamp;
+    pipeline->depth_bias = static_cast<float>(desc.depth_bias);
+    pipeline->slope_scaled_depth_bias = desc.slope_scaled_depth_bias;
+    pipeline->depth_bias_clamp = desc.depth_bias_clamp;
+    *out = to_handle(pipeline);
+    return MTLB_OK;
+}
+
 } // namespace
+
+id<MTLRenderPipelineState> mtlb::build_emulated_state(Device *device, const EmulatedPipeline &e,
+                                                      MTLMeshRenderPipelineDescriptor *descriptor, NSError **error)
+{
+    MTLMeshRenderPipelineDescriptor *base = [descriptor copy];
+    if (e.tessellation) {
+        IRGeometryTessellationEmulationPipelineDescriptor d = {};
+        d.stageInLibrary = e.stage_in;
+        d.vertexLibrary = e.vertex;
+        d.vertexFunctionName = e.vertex_name.c_str();
+        d.hullLibrary = e.hull;
+        d.hullFunctionName = "irconverter_hull_shader";
+        d.domainLibrary = e.domain;
+        d.domainFunctionName = "irconverter_dxil_domain_shader";
+        d.geometryLibrary = e.geometry;
+        d.geometryFunctionName = e.geometry_name.c_str();
+        d.fragmentLibrary = e.fragment;
+        d.fragmentFunctionName = e.fragment_name.c_str();
+        d.basePipelineDescriptor = base;
+        d.pipelineConfig = e.ts_config;
+        return IRRuntimeNewGeometryTessellationEmulationPipeline(device->device, &d, error);
+    }
+    IRGeometryEmulationPipelineDescriptor d = {};
+    d.stageInLibrary = e.stage_in;
+    d.vertexLibrary = e.vertex;
+    d.vertexFunctionName = e.vertex_name.c_str();
+    d.geometryLibrary = e.geometry;
+    d.geometryFunctionName = e.geometry_name.c_str();
+    d.fragmentLibrary = e.fragment;
+    d.fragmentFunctionName = e.fragment_name.c_str();
+    d.basePipelineDescriptor = base;
+    d.pipelineConfig = e.gs_config;
+    return IRRuntimeNewGeometryEmulationPipeline(device->device, &d, error);
+}
 
 extern "C" mtlb_result mtlb_pipeline_create(mtlb_device handle, const mtlb_pipeline_desc *desc, mtlb_pipeline *out)
 {
@@ -508,6 +792,8 @@ extern "C" mtlb_result mtlb_pipeline_create(mtlb_device handle, const mtlb_pipel
     RootSignature *root_signature = from_handle<RootSignature>(desc->root_signature);
     if (!root_signature)
         return MTLB_ERROR_INVALID_ARGUMENT;
+    if (desc->gs_size || desc->hs_size)
+        return create_emulated_pipeline(device, root_signature, *desc, out);
 
     std::shared_ptr<const ShaderStage> vs, ps;
     mtlb_result result = get_stage(device, root_signature, desc->vs_dxil, desc->vs_size, desc->vs_entry,
@@ -539,57 +825,15 @@ extern "C" mtlb_result mtlb_pipeline_create(mtlb_device handle, const mtlb_pipel
         pd.vertexLinkedFunctions = linked;
     }
 
-    // Bit i is set when the fragment shader writes integers to render target i.
-    uint32_t integer_outputs = 0;
-    if (ps) {
-        IRVersionedFSInfo info;
-        if (IRShaderReflectionCopyFragmentInfo(ps->reflection.get(), IRReflectionVersion_1_0, &info)) {
-            integer_outputs = info.info_1_0.rt_index_int;
-            IRShaderReflectionReleaseFragmentInfo(&info);
-        }
-    }
-    std::array<MTLPixelFormat, MTLB_MAX_RENDER_TARGETS> color_view_formats{};
-    for (uint32_t i = 0; i < desc->num_render_targets; ++i) {
-        if (desc->rtv_formats[i] == MTLB_FORMAT_UNKNOWN)
-            continue;
-        MTLPixelFormat format = to_pixel_format(desc->rtv_formats[i]);
-        if (format == MTLPixelFormatInvalid)
-            return fail(MTLB_ERROR_UNSUPPORTED, "unsupported render target format " + std::to_string(desc->rtv_formats[i]));
-        // D3D12 tolerates a shader output of another type than the render target (the result is undefined, and
-        // games do it with the output masked); Metal refuses the pipeline. The target is written through a view of
-        // the other kind instead (the bits land as they are); where no such view exists, the pipeline is refused.
-        if (ps && ((integer_outputs >> i) & 1) != (is_integer_pixel_format(format) ? 1u : 0u)) {
-            const MTLPixelFormat other = opposite_kind_format(format);
-            if (other != MTLPixelFormatInvalid) {
-                color_view_formats[i] = other;
-                format = other;
-            }
-        }
-        const mtlb_render_target_blend &blend = desc->blend[desc->independent_blend ? i : 0];
-        MTLRenderPipelineColorAttachmentDescriptor *ca = pd.colorAttachments[i];
-        ca.pixelFormat = format;
-        ca.writeMask = to_write_mask(blend.write_mask);
-        ca.blendingEnabled = blend.blend_enable != 0;
-        ca.sourceRGBBlendFactor = to_blend_factor(blend.src_blend);
-        ca.destinationRGBBlendFactor = to_blend_factor(blend.dest_blend);
-        ca.rgbBlendOperation = to_blend_op(blend.blend_op);
-        ca.sourceAlphaBlendFactor = to_blend_factor(blend.src_blend_alpha);
-        ca.destinationAlphaBlendFactor = to_blend_factor(blend.dest_blend_alpha);
-        ca.alphaBlendOperation = to_blend_op(blend.blend_op_alpha);
-    }
-
-    // D24_UNORM_S8_UINT is a 32-bit depth with 8-bit stencil here (docs/STATUS.md).
-    MTLPixelFormat depth_format = MTLPixelFormatInvalid, stencil_format = MTLPixelFormatInvalid;
-    if (desc->dsv_format != MTLB_FORMAT_UNKNOWN) {
-        depth_format = to_texture_pixel_format(desc->dsv_format, true);
-        if (depth_format == MTLPixelFormatInvalid)
-            return fail(MTLB_ERROR_UNSUPPORTED, "unsupported depth-stencil format " + std::to_string(desc->dsv_format));
-        pd.depthAttachmentPixelFormat = depth_format;
-        if (depth_format == MTLPixelFormatDepth32Float_Stencil8) {
-            stencil_format = depth_format;
-            pd.stencilAttachmentPixelFormat = stencil_format;
-        }
-    }
+    Attachments attachments;
+    result = fill_attachments(*desc, ps.get(), pd.colorAttachments, &attachments);
+    if (result != MTLB_OK)
+        return result;
+    if (attachments.depth_format != MTLPixelFormatInvalid)
+        pd.depthAttachmentPixelFormat = attachments.depth_format;
+    if (attachments.stencil_format != MTLPixelFormatInvalid)
+        pd.stencilAttachmentPixelFormat = attachments.stencil_format;
+    const MTLPixelFormat depth_format = attachments.depth_format, stencil_format = attachments.stencil_format;
 
     NSError *ns_error = nil;
     id<MTLRenderPipelineState> state = [device->device newRenderPipelineStateWithDescriptor:pd error:&ns_error];
@@ -607,7 +851,7 @@ extern "C" mtlb_result mtlb_pipeline_create(mtlb_device handle, const mtlb_pipel
     pipeline->descriptor = pd;
     pipeline->depth_format = depth_format;
     pipeline->stencil_format = stencil_format;
-    pipeline->color_view_formats = color_view_formats;
+    pipeline->color_view_formats = attachments.color_view_formats;
     pipeline->depth_stencil = depth_stencil;
     pipeline->depth_stencil_off = depth_stencil_off;
     pipeline->cull_mode = desc->cull_mode == MTLB_CULL_FRONT ? MTLCullModeFront
@@ -631,11 +875,19 @@ id<MTLRenderPipelineState> mtlb::Pipeline::state_for(MTLPixelFormat depth, MTLPi
     auto it = variants.find(key);
     if (it != variants.end())
         return it->second;
-    MTLRenderPipelineDescriptor *copy = [descriptor copy];
-    copy.depthAttachmentPixelFormat = depth;
-    copy.stencilAttachmentPixelFormat = stencil;
     NSError *error = nil;
-    id<MTLRenderPipelineState> variant = [device->device newRenderPipelineStateWithDescriptor:copy error:&error];
+    id<MTLRenderPipelineState> variant;
+    if (emulated) {
+        MTLMeshRenderPipelineDescriptor *copy = [mesh_descriptor copy];
+        copy.depthAttachmentPixelFormat = depth;
+        copy.stencilAttachmentPixelFormat = stencil;
+        variant = build_emulated_state(device, *emulated, copy, &error);
+    } else {
+        MTLRenderPipelineDescriptor *copy = [descriptor copy];
+        copy.depthAttachmentPixelFormat = depth;
+        copy.stencilAttachmentPixelFormat = stencil;
+        variant = [device->device newRenderPipelineStateWithDescriptor:copy error:&error];
+    }
     if (!variant) {
         fail(MTLB_ERROR_COMPILE_FAILED, std::string("pipeline variant for another depth-stencil format: ") + error.localizedDescription.UTF8String);
         return nil;

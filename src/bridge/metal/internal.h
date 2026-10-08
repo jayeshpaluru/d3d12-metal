@@ -17,6 +17,7 @@
 #include <vector>
 
 #include <metal_irconverter/metal_irconverter.h>
+#include <metal_irconverter_runtime/metal_irconverter_runtime.h>
 
 #include "bridge/mtlb.h"
 #include "disk_cache.h"
@@ -39,6 +40,17 @@ using SamplerKey = std::array<uint32_t, 11>;
 // A converted shader stage: its Metal function and its reflection.
 struct ShaderStage {
     id<MTLFunction> function = nil;
+    // Stages converted for geometry/tessellation emulation keep their library: the runtime builds the functions
+    // (with function constants) when it assembles the mesh pipeline.
+    id<MTLLibrary> library = nil;
+    std::string entry_name;
+    // Emulation reflection (scalars of IRVSInfo / IRGSInfo / IRHSInfo / IRDSInfo).
+    uint32_t vertex_output_size = 0;
+    uint32_t gs_max_input_primitives = 0, gs_instance_count = 1, gs_input_primitive = 0;
+    bool gs_passthrough = false;
+    uint32_t hs_max_patches = 0, hs_max_object_threads = 0, hs_input_control_points = 0, hs_output_primitive = 0;
+    float hs_max_tess_factor = 0;
+    uint32_t ds_max_input_prims = 0;
     std::shared_ptr<IRShaderReflection> reflection;  // kept for stage-in synthesis
     uint32_t num_vertex_inputs = 0;
     uint32_t threadgroup_size[3] = {1, 1, 1};  // compute stages
@@ -47,6 +59,7 @@ struct ShaderStage {
     // Vertex stage-in functions synthesized for this shader, by serialized input layout.
     std::mutex stage_in_mutex;
     std::map<std::string, id<MTLFunction>> stage_ins;
+    std::map<std::string, id<MTLLibrary>> emulation_stage_ins;  // the same for emulated pipelines
 };
 
 // (hash of the DXIL, DXIL size, root signature id, IRShaderStage, entry point)
@@ -78,6 +91,11 @@ struct Device {
     // Samplers shared by equal descriptions.
     std::mutex sampler_mutex;
     std::map<SamplerKey, id<MTLSamplerState>> samplers;
+
+    // Buffers the emulated pipelines need bound whatever the application did (see queue.mm).
+    std::mutex helper_mutex;
+    id<MTLBuffer> zero_buffer = nil;   // stands in for descriptor heaps and root arguments that were not set
+    id<MTLBuffer> tess_tables = nil;   // the tessellator lookup tables
 
     // Resources behind null descriptors, created on first use, by mtlb_null_kind.
     static constexpr uint32_t kNullKinds = 16;
@@ -176,6 +194,20 @@ struct RootSignature {
     std::array<uint8_t, 32> blob_hash;  // SHA-256 of the serialized root signature the converter was given
 };
 
+// What the runtime needs to (re)build the mesh pipeline of a pipeline with geometry or tessellation stages.
+struct EmulatedPipeline {
+    id<MTLLibrary> stage_in = nil, vertex = nil, hull = nil, domain = nil, geometry = nil, fragment = nil;
+    std::string vertex_name, geometry_name, fragment_name;
+    bool tessellation = false;
+    IRRuntimeGeometryPipelineConfig gs_config = {};
+    IRRuntimeTessellationPipelineConfig ts_config = {};
+    uint32_t patch_control_points = 0;  // tessellation: the hull shader's input control point count
+};
+
+// The mesh render pipeline of an emulated pipeline for `descriptor`'s attachments; nil with `error` set on failure.
+id<MTLRenderPipelineState> build_emulated_state(Device *device, const EmulatedPipeline &emulated,
+                                                MTLMeshRenderPipelineDescriptor *descriptor, NSError **error);
+
 struct Pipeline {
     // A compute pipeline has `compute` set and none of the render state.
     id<MTLComputePipelineState> compute = nil;
@@ -195,6 +227,9 @@ struct Pipeline {
     // The pipeline is built for the depth-stencil format of its description. A pass with another (or
     // no) depth-stencil attachment gets a variant, built when first needed.
     MTLRenderPipelineDescriptor *descriptor = nil;
+    // Geometry/tessellation emulation: a mesh pipeline instead (`descriptor` stays nil).
+    std::unique_ptr<EmulatedPipeline> emulated;
+    MTLMeshRenderPipelineDescriptor *mesh_descriptor = nil;
     MTLPixelFormat depth_format = MTLPixelFormatInvalid;
     MTLPixelFormat stencil_format = MTLPixelFormatInvalid;
     // Color targets the fragment shader writes with another type than the target's format (integers to a

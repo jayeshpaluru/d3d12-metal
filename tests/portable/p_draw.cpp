@@ -1,5 +1,5 @@
 // Draw variations: primitive topologies, per-instance data with step rates, StartInstanceLocation,
-// BaseVertexLocation, adjacency topologies (refused) and bundles.
+// BaseVertexLocation, adjacency topologies (skipped without a geometry shader) and bundles.
 #include "color_ps.h"
 #include "color_vs.h"
 #include "instanced_ps.h"
@@ -226,14 +226,14 @@ int main()
         expect_colour("point list: nothing between", point_list, 0.0f, 0.0f, kBlack);
     }
 
-    // ---- An adjacency topology is refused: the draw that follows it uses the previous topology -------------------
+    // ---- An adjacency topology needs a geometry shader: a plain pipeline draws nothing with it -------------------
     {
         const Image image = f.render(triangles.Get(), D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP, [&](ID3D12GraphicsCommandList *list) {
             list->IASetVertexBuffers(0, 2, both);
             list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_LINELIST_ADJ);
             list->DrawInstanced(4, 1, 0, 0);
         });
-        expect_colour("adjacency topology ignored", image, -0.5f, 0.5f, kRed);
+        expect_colour("adjacency topology skipped", image, -0.5f, 0.5f, kBlack);
     }
 
     // ---- Bundles: recorded once, executed twice with different targets state ------------------------------------
