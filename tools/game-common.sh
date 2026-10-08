@@ -8,12 +8,13 @@
 #   GAME_DIR           the folder holding the game's exe [steamapps/common/*/Spider-Man.exe in the Steam prefix]
 #   GAME_EXE           the exe's name [Spider-Man.exe]
 #   GAME_APPID         Steam app id [1817070]
+#   GAME_OUT           the build to install [build-wine/out] (install-game.sh; an older build for comparisons)
 
 game_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WINE_ROOT="${WINE_ROOT:-/Users/jsp/code/deps/wine/Wine Devel.app/Contents/Resources/wine}"
 GAME_EXE="${GAME_EXE:-Spider-Man.exe}"
 GAME_APPID="${GAME_APPID:-1817070}"
-game_out="$game_root/build-wine/out"
+game_out="${GAME_OUT:-$game_root/build-wine/out}"
 game_logs="$game_root/build-wine/game-logs"
 game_screens="$game_root/build-wine/game-screens"
 # Per-app overrides: HKCU\Software\Wine\AppDefaults\<exe>\DllOverrides
