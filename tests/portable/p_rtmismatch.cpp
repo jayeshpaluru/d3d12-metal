@@ -54,5 +54,8 @@ int main()
     });
     const Image image = gpu.read_texture(targets[0].Get(), 0, 4);
     expect_pixel("target 0", image.pixel(kSize / 2, kSize / 2), {64, 128, 255, 255}, 2);
+    // The integer output lands in the target as bits.
+    const Image ids = gpu.read_texture(targets[1].Get(), 0, 4);
+    expect_pixel("target 1", ids.pixel(kSize / 2, kSize / 2), {1, 2, 3, 4}, 0);
     return 0;
 }

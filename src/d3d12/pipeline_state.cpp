@@ -1,5 +1,6 @@
 #include "d3d12/pipeline_state.h"
 
+#include <atomic>
 #include <cstring>
 
 #include "common/log.h"
@@ -67,7 +68,12 @@ HRESULT PipelineState::create_graphics(Device *device, const D3D12_GRAPHICS_PIPE
         return E_INVALIDARG;
     if (desc.GS.pShaderBytecode || desc.HS.pShaderBytecode || desc.DS.pShaderBytecode
         || desc.StreamOutput.NumEntries) {
-        D3D12M_LOG("geometry, tessellation and stream-output stages are not supported");
+        // Games ask again every frame: log the first few only (the stages are not supported, see STATUS.md).
+        static std::atomic<unsigned> reported{0};
+        if (reported.fetch_add(1) < 8)
+            D3D12M_LOG("geometry, tessellation and stream-output stages are not supported (GS %zu bytes, HS %zu, DS %zu, "
+                       "stream-output entries %u)", desc.GS.BytecodeLength, desc.HS.BytecodeLength, desc.DS.BytecodeLength,
+                       desc.StreamOutput.NumEntries);
         return E_NOTIMPL;
     }
 

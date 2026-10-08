@@ -103,17 +103,25 @@ struct Device {
 };
 
 constexpr uint32_t kQuerySlots = 8;
+constexpr uint32_t kSamplesPerBuffer = 4096;  // 32 KB, the limit of a MTLCounterSampleBuffer
 
 struct QueryHeap {
     Device *device;
     uint32_t kind;
     uint32_t count;
     id<MTLBuffer> results;                    // occlusion counts, 8 bytes per query
-    id<MTLCounterSampleBuffer> samples;       // timestamps (nil where the GPU cannot sample them)
+    // Timestamps (empty where the GPU cannot sample them): Metal limits a counter sample buffer to
+    // kSamplesPerBuffer samples, so a large heap is several buffers, made when first used; query i is sample
+    // i % kSamplesPerBuffer of buffer i / kSamplesPerBuffer. Use sample_buffer().
+    std::vector<id<MTLCounterSampleBuffer>> samples;
+    std::mutex samples_mutex;
     // Occlusion: a query that spans several render passes keeps one result slot per pass (kQuerySlots of them,
     // `results` holds count * kQuerySlots counts); resolving sums the slots used since the query began.
     std::vector<uint32_t> slots_used;
 };
+
+// The counter sample buffer of query `index` (nil when it cannot be made).
+id<MTLCounterSampleBuffer> sample_buffer(QueryHeap *heap, uint32_t index);
 
 struct Heap {
     Device *device;
@@ -151,9 +159,11 @@ struct Texture {
     bool placed = false;
 
     // Pixel-format views, created on first use and kept for the texture's life
-    // (command buffers do not retain what they reference).
+    // (command buffers do not retain what they reference). Keys are mtlb formats, or the MTLPixelFormat with
+    // kRawViewKey set (views of another type, see Pipeline::color_view_formats).
     std::mutex views_mutex;
     std::map<uint32_t, id<MTLTexture>> views;
+    static constexpr uint32_t kRawViewKey = 0x80000000u;
 
     // Shader-visible views (type, range, format, swizzle), kept for the texture's life.
     std::map<ViewKey, id<MTLTexture>> sampled_views;
@@ -187,6 +197,10 @@ struct Pipeline {
     MTLRenderPipelineDescriptor *descriptor = nil;
     MTLPixelFormat depth_format = MTLPixelFormatInvalid;
     MTLPixelFormat stencil_format = MTLPixelFormatInvalid;
+    // Color targets the fragment shader writes with another type than the target's format (integers to a
+    // normalised target, or floats to an integer one): the pipeline writes the target through a view of this
+    // same-size format of the other type, and passes bind that view (Invalid: the target as it is).
+    std::array<MTLPixelFormat, MTLB_MAX_RENDER_TARGETS> color_view_formats{};
     std::mutex variants_mutex;
     std::map<uint64_t, id<MTLRenderPipelineState>> variants;
     Device *device = nullptr;

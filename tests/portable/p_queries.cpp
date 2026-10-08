@@ -223,6 +223,30 @@ int main()
         // The GPU clock of the calibration is later than the timestamps taken before it.
         CHECK(gpu_clock >= t1);
 
+        // A heap larger than one counter sample buffer (Metal allows 4096 samples) is split transparently: timestamps
+        // either side of the boundary resolve in one call.
+        {
+            D3D12_QUERY_HEAP_DESC large_desc = {D3D12_QUERY_HEAP_TYPE_TIMESTAMP, 1u << 20, 0};
+            ComPtr<ID3D12QueryHeap> large;
+            CHECK_HR(gpu.device->CreateQueryHeap(&large_desc, IID_PPV_ARGS(large.GetAddressOf())));
+            ComPtr<ID3D12Resource> large_results = gpu.buffer(D3D12_HEAP_TYPE_READBACK, 4 * 8);
+            gpu.run([&](ID3D12GraphicsCommandList *list) {
+                list->EndQuery(large.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 4094);
+                list->EndQuery(large.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 4095);
+                list->EndQuery(large.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 4096);
+                list->EndQuery(large.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 4097);
+                list->ResolveQueryData(large.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 4094, 4, large_results.Get(), 0);
+            });
+            uint8_t *large_mapped = nullptr;
+            CHECK_HR(large_results->Map(0, nullptr, reinterpret_cast<void **>(&large_mapped)));
+            std::vector<uint8_t> large_bytes(large_mapped, large_mapped + 32);
+            large_results->Unmap(0, nullptr);
+            for (int i = 0; i < 4; ++i)
+                CHECK(read_u64(large_bytes, i) != 0);
+            for (int i = 1; i < 4; ++i)
+                CHECK(read_u64(large_bytes, i) >= read_u64(large_bytes, i - 1));
+        }
+
         // Pipeline statistics: no data, zeros of the right size.
         D3D12_QUERY_HEAP_DESC stats_desc = {D3D12_QUERY_HEAP_TYPE_PIPELINE_STATISTICS, 2, 0};
         ComPtr<ID3D12QueryHeap> stats;

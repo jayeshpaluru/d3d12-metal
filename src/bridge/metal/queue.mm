@@ -42,6 +42,18 @@ id<MTLTexture> attachment_texture(Texture *texture, uint32_t view_format)
     return view;
 }
 
+// A view of `texture` in exactly `format` (a Metal pixel format); nil when Metal refuses it.
+id<MTLTexture> raw_view(Texture *texture, MTLPixelFormat format)
+{
+    if (texture->texture.pixelFormat == format)
+        return texture->texture;
+    std::lock_guard<std::mutex> lock(texture->views_mutex);
+    auto &view = texture->views[Texture::kRawViewKey | static_cast<uint32_t>(format)];
+    if (!view)
+        view = [texture->texture newTextureViewWithPixelFormat:format];
+    return view;
+}
+
 // True when `count` trailing elements of type E fit in the record `cmd`.
 template <class E, class T>
 bool array_fits(const T &cmd, uint64_t count)
@@ -413,6 +425,8 @@ private:
     NSUInteger target_width_ = 0, target_height_ = 0;
     MTLPixelFormat pass_depth_format_ = MTLPixelFormatInvalid;    // attachments of the open pass
     MTLPixelFormat pass_stencil_format_ = MTLPixelFormatInvalid;
+    // Pipeline::color_view_formats of the pipeline the open pass was opened for.
+    std::array<MTLPixelFormat, MTLB_MAX_RENDER_TARGETS> pass_color_views_{};
 };
 
 void Replay::note_error(mtlb_result result)
@@ -715,6 +729,23 @@ mtlb_result Replay::open_render_pass()
     if (result != MTLB_OK)
         return result;
 
+    // Targets the pipeline writes through a view of another type: their pending clears run first, on the target as it is.
+    pass_color_views_ = state_.pipeline ? state_.pipeline->color_view_formats : decltype(pass_color_views_){};
+    for (uint32_t i = 0; i < state_.num_targets; ++i) {
+        if (pass_color_views_[i] == MTLPixelFormatInvalid || !state_.targets[i].texture)
+            continue;
+        for (auto it = clears_.begin(); it != clears_.end();) {
+            if (it->target == state_.targets[i] && !it->depth_stencil) {
+                result = clear_only_pass(*it);
+                it = clears_.erase(it);
+                if (result != MTLB_OK)
+                    return result;
+            } else {
+                ++it;
+            }
+        }
+    }
+
     MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
     target_width_ = target_height_ = 0;
     pass_depth_format_ = pass_stencil_format_ = MTLPixelFormatInvalid;
@@ -732,6 +763,8 @@ mtlb_result Replay::open_render_pass()
         if (!t.texture)
             continue;
         id<MTLTexture> view = attachment_texture(t.texture, t.view_format);
+        if (view && pass_color_views_[i] != MTLPixelFormatInvalid)
+            view = raw_view(t.texture, pass_color_views_[i]);
         if (!view)
             return fail(MTLB_ERROR_UNSUPPORTED, "unsupported attachment view format");
         MTLRenderPassColorAttachmentDescriptor *ca = pass.colorAttachments[i];
@@ -785,6 +818,13 @@ mtlb_result Replay::apply_state()
             return result;
     }
 
+    if ((dirty_ & kPipeline) && state_.pipeline->color_view_formats != pass_color_views_) {
+        // The open pass binds the targets as an earlier pipeline needed them: start one with the views this one wants.
+        end_render();
+        mtlb_result result = open_render_pass();
+        if (result != MTLB_OK)
+            return result;
+    }
     if (dirty_ & kPipeline) {
         id<MTLRenderPipelineState> pipeline_state = state_.pipeline->state_for(pass_depth_format_, pass_stencil_format_);
         if (!pipeline_state)
@@ -1114,7 +1154,8 @@ mtlb_result Replay::end_query(const mtlb_cmd_query &cmd)
 // are sampled at the boundaries of encoders only).
 mtlb_result Replay::timestamp(QueryHeap *heap, uint32_t index)
 {
-    if (!heap->samples)
+    id<MTLCounterSampleBuffer> samples = sample_buffer(heap, index);
+    if (!samples)
         return MTLB_OK;
     end_blit();
     end_compute();
@@ -1125,9 +1166,9 @@ mtlb_result Replay::timestamp(QueryHeap *heap, uint32_t index)
     if (!kernel)
         return MTLB_ERROR_COMPILE_FAILED;
     MTLComputePassDescriptor *pass = [MTLComputePassDescriptor computePassDescriptor];
-    pass.sampleBufferAttachments[0].sampleBuffer = heap->samples;
+    pass.sampleBufferAttachments[0].sampleBuffer = samples;
     pass.sampleBufferAttachments[0].startOfEncoderSampleIndex = MTLCounterDontSample;
-    pass.sampleBufferAttachments[0].endOfEncoderSampleIndex = index;
+    pass.sampleBufferAttachments[0].endOfEncoderSampleIndex = index % kSamplesPerBuffer;
     id<MTLComputeCommandEncoder> enc = [cb_ computeCommandEncoderWithDescriptor:pass];
     if (queue_->fence_pending) {
         [enc waitForFence:queue_->fence];
@@ -1158,8 +1199,17 @@ mtlb_result Replay::resolve_query(const mtlb_cmd_resolve_query &cmd)
     // A blit in the same command buffer reads zeros for samples written by earlier passes (Apple GPUs flush
     // counters lazily), so timestamps are copied on the CPU when this command buffer completes. Work that
     // follows on the queue waits for that copy through an event, without blocking here (see finish()).
-    if (cmd.type == MTLB_QUERY_TIMESTAMP && heap->samples && dst->buffer.contents) {
-        timestamp_resolves_.push_back({heap->samples, dst->buffer, cmd.dst_offset, cmd.start, cmd.count});
+    if (cmd.type == MTLB_QUERY_TIMESTAMP && !heap->samples.empty() && dst->buffer.contents) {
+        // One resolve per sample buffer the range touches.
+        for (uint32_t done = 0; done < cmd.count;) {
+            const uint32_t query = cmd.start + done;
+            const uint32_t piece = std::min(cmd.count - done, kSamplesPerBuffer - query % kSamplesPerBuffer);
+            if (id<MTLCounterSampleBuffer> samples = sample_buffer(heap, query)) {
+                timestamp_resolves_.push_back({samples, dst->buffer, cmd.dst_offset + uint64_t(done) * 8,
+                                               query % kSamplesPerBuffer, piece});
+            }
+            done += piece;
+        }
         return MTLB_OK;
     }
     if ((cmd.type == MTLB_QUERY_OCCLUSION || cmd.type == MTLB_QUERY_BINARY_OCCLUSION) && heap->results)

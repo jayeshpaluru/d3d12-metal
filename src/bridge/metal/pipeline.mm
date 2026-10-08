@@ -236,6 +236,35 @@ mtlb_result get_stage(Device *device, RootSignature *root_signature, const void 
     return MTLB_OK;
 }
 
+// The format of the same size and channels with the other kind of shader output (integer for float and normalised
+// formats, float or normalised for integer ones); Invalid where there is none.
+MTLPixelFormat opposite_kind_format(MTLPixelFormat f)
+{
+    switch (f) {
+    case MTLPixelFormatR8Unorm: return MTLPixelFormatR8Uint;
+    case MTLPixelFormatRG8Unorm: return MTLPixelFormatRG8Uint;
+    case MTLPixelFormatRGBA8Unorm: case MTLPixelFormatRGBA8Unorm_sRGB: return MTLPixelFormatRGBA8Uint;
+    case MTLPixelFormatRGB10A2Unorm: return MTLPixelFormatRGB10A2Uint;
+    case MTLPixelFormatR16Float: case MTLPixelFormatR16Unorm: return MTLPixelFormatR16Uint;
+    case MTLPixelFormatRG16Float: case MTLPixelFormatRG16Unorm: return MTLPixelFormatRG16Uint;
+    case MTLPixelFormatRGBA16Float: case MTLPixelFormatRGBA16Unorm: return MTLPixelFormatRGBA16Uint;
+    case MTLPixelFormatR32Float: return MTLPixelFormatR32Uint;
+    case MTLPixelFormatRG32Float: return MTLPixelFormatRG32Uint;
+    case MTLPixelFormatRGBA32Float: return MTLPixelFormatRGBA32Uint;
+    case MTLPixelFormatR8Uint: case MTLPixelFormatR8Sint: return MTLPixelFormatR8Unorm;
+    case MTLPixelFormatRG8Uint: case MTLPixelFormatRG8Sint: return MTLPixelFormatRG8Unorm;
+    case MTLPixelFormatRGBA8Uint: case MTLPixelFormatRGBA8Sint: return MTLPixelFormatRGBA8Unorm;
+    case MTLPixelFormatRGB10A2Uint: return MTLPixelFormatRGB10A2Unorm;
+    case MTLPixelFormatR16Uint: case MTLPixelFormatR16Sint: return MTLPixelFormatR16Float;
+    case MTLPixelFormatRG16Uint: case MTLPixelFormatRG16Sint: return MTLPixelFormatRG16Float;
+    case MTLPixelFormatRGBA16Uint: case MTLPixelFormatRGBA16Sint: return MTLPixelFormatRGBA16Float;
+    case MTLPixelFormatR32Uint: case MTLPixelFormatR32Sint: return MTLPixelFormatR32Float;
+    case MTLPixelFormatRG32Uint: case MTLPixelFormatRG32Sint: return MTLPixelFormatRG32Float;
+    case MTLPixelFormatRGBA32Uint: case MTLPixelFormatRGBA32Sint: return MTLPixelFormatRGBA32Float;
+    default: return MTLPixelFormatInvalid;
+    }
+}
+
 // True for the pixel formats whose shader outputs are integers (uint4 / int4).
 bool is_integer_pixel_format(MTLPixelFormat f)
 {
@@ -519,6 +548,7 @@ extern "C" mtlb_result mtlb_pipeline_create(mtlb_device handle, const mtlb_pipel
             IRShaderReflectionReleaseFragmentInfo(&info);
         }
     }
+    std::array<MTLPixelFormat, MTLB_MAX_RENDER_TARGETS> color_view_formats{};
     for (uint32_t i = 0; i < desc->num_render_targets; ++i) {
         if (desc->rtv_formats[i] == MTLB_FORMAT_UNKNOWN)
             continue;
@@ -526,9 +556,15 @@ extern "C" mtlb_result mtlb_pipeline_create(mtlb_device handle, const mtlb_pipel
         if (format == MTLPixelFormatInvalid)
             return fail(MTLB_ERROR_UNSUPPORTED, "unsupported render target format " + std::to_string(desc->rtv_formats[i]));
         // D3D12 tolerates a shader output of another type than the render target (the result is undefined, and
-        // games do it with the output masked); Metal refuses the pipeline. That target gets no attachment here.
-        if (ps && ((integer_outputs >> i) & 1) != (is_integer_pixel_format(format) ? 1u : 0u))
-            continue;
+        // games do it with the output masked); Metal refuses the pipeline. The target is written through a view of
+        // the other kind instead (the bits land as they are); where no such view exists, the pipeline is refused.
+        if (ps && ((integer_outputs >> i) & 1) != (is_integer_pixel_format(format) ? 1u : 0u)) {
+            const MTLPixelFormat other = opposite_kind_format(format);
+            if (other != MTLPixelFormatInvalid) {
+                color_view_formats[i] = other;
+                format = other;
+            }
+        }
         const mtlb_render_target_blend &blend = desc->blend[desc->independent_blend ? i : 0];
         MTLRenderPipelineColorAttachmentDescriptor *ca = pd.colorAttachments[i];
         ca.pixelFormat = format;
@@ -571,6 +607,7 @@ extern "C" mtlb_result mtlb_pipeline_create(mtlb_device handle, const mtlb_pipel
     pipeline->descriptor = pd;
     pipeline->depth_format = depth_format;
     pipeline->stencil_format = stencil_format;
+    pipeline->color_view_formats = color_view_formats;
     pipeline->depth_stencil = depth_stencil;
     pipeline->depth_stencil_off = depth_stencil_off;
     pipeline->cull_mode = desc->cull_mode == MTLB_CULL_FRONT ? MTLCullModeFront

@@ -4,7 +4,37 @@
 
 #include <mach/mach_time.h>
 
+#include <algorithm>
+
 using namespace mtlb;
+
+namespace mtlb {
+
+id<MTLCounterSampleBuffer> sample_buffer(QueryHeap *heap, uint32_t index)
+{
+    const uint32_t chunk = index / kSamplesPerBuffer;
+    if (chunk >= heap->samples.size())
+        return nil;
+    std::lock_guard<std::mutex> lock(heap->samples_mutex);
+    if (!heap->samples[chunk]) {
+        id<MTLCounterSet> timestamp_set = nil;
+        for (id<MTLCounterSet> set in heap->device->device.counterSets) {
+            if ([set.name isEqualToString:MTLCommonCounterSetTimestamp])
+                timestamp_set = set;
+        }
+        MTLCounterSampleBufferDescriptor *descriptor = [MTLCounterSampleBufferDescriptor new];
+        descriptor.counterSet = timestamp_set;
+        descriptor.storageMode = MTLStorageModeShared;
+        descriptor.sampleCount = std::min(heap->count - chunk * kSamplesPerBuffer, kSamplesPerBuffer);
+        NSError *error = nil;
+        heap->samples[chunk] = [heap->device->device newCounterSampleBufferWithDescriptor:descriptor error:&error];
+        if (!heap->samples[chunk])
+            backend_log("timestamp queries unavailable: %s", error.localizedDescription.UTF8String);
+    }
+    return heap->samples[chunk];
+}
+
+} // namespace mtlb
 
 extern "C" {
 
@@ -13,7 +43,7 @@ mtlb_result mtlb_query_heap_create(mtlb_device handle, uint32_t kind, uint32_t c
     Device *device = from_handle<Device>(handle);
     if (!device || !out || count == 0)
         return MTLB_ERROR_INVALID_ARGUMENT;
-    auto *heap = new QueryHeap{device, kind, count, nil, nil, {}};
+    auto *heap = new QueryHeap{device, kind, count, nil, {}, {}, {}};
     if (kind == MTLB_QUERY_OCCLUSION || kind == MTLB_QUERY_BINARY_OCCLUSION) {
         // The visibility result buffer of render passes: result slots of 8 bytes per query.
         heap->slots_used.assign(count, 0);
@@ -30,16 +60,9 @@ mtlb_result mtlb_query_heap_create(mtlb_device handle, uint32_t kind, uint32_t c
             if ([set.name isEqualToString:MTLCommonCounterSetTimestamp])
                 timestamp_set = set;
         }
-        if (timestamp_set && [device->device supportsCounterSampling:MTLCounterSamplingPointAtStageBoundary]) {
-            MTLCounterSampleBufferDescriptor *descriptor = [MTLCounterSampleBufferDescriptor new];
-            descriptor.counterSet = timestamp_set;
-            descriptor.storageMode = MTLStorageModeShared;
-            descriptor.sampleCount = count;
-            NSError *error = nil;
-            heap->samples = [device->device newCounterSampleBufferWithDescriptor:descriptor error:&error];
-            if (!heap->samples)
-                backend_log("timestamp queries unavailable: %s", error.localizedDescription.UTF8String);
-        } else {
+        if (timestamp_set && [device->device supportsCounterSampling:MTLCounterSamplingPointAtStageBoundary])
+            heap->samples.resize((count + kSamplesPerBuffer - 1) / kSamplesPerBuffer);  // made by sample_buffer()
+        else {
             static std::atomic<bool> logged{false};
             if (!logged.exchange(true))
                 backend_log("this GPU cannot sample timestamps at encoder boundaries; timestamp queries read zero");
