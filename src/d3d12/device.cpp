@@ -354,13 +354,17 @@ HRESULT Device::query_removed_extended_data(REFIID riid, void **out)
     return dred_data()->QueryInterface(riid, out);
 }
 
+// Generations are unique across devices, so a thread-local heap cache can never match a device (or a heap)
+// that reuses the address of an older one.
+static std::atomic<uint64_t> g_heap_generations{1};
+
 void Device::register_heap(DescriptorHeap *heap)
 {
     if (!heap->storage())
         return;
     std::unique_lock lock(heaps_mutex_);
     heaps_[reinterpret_cast<uintptr_t>(heap->storage())] = heap;
-    heap_generation_.fetch_add(1, std::memory_order_release);
+    heap_generation_.store(++g_heap_generations, std::memory_order_release);
 }
 
 void Device::unregister_heap(DescriptorHeap *heap)
@@ -369,7 +373,7 @@ void Device::unregister_heap(DescriptorHeap *heap)
         return;
     std::unique_lock lock(heaps_mutex_);
     heaps_.erase(reinterpret_cast<uintptr_t>(heap->storage()));
-    heap_generation_.fetch_add(1, std::memory_order_release);
+    heap_generation_.store(++g_heap_generations, std::memory_order_release);
 }
 
 DescriptorHeap *Device::validate_cpu_range(D3D12_CPU_DESCRIPTOR_HANDLE handle, UINT count, D3D12_DESCRIPTOR_HEAP_TYPE type,

@@ -214,7 +214,7 @@ private:
     bool resource_size_align(const D3D12_RESOURCE_DESC &desc, mtlb_size_align *out) const;
     std::shared_mutex heaps_mutex_;
     std::map<uintptr_t, DescriptorHeap *> heaps_;
-    std::atomic<uint64_t> heap_generation_{1};  // changes whenever a heap is registered or unregistered
+    std::atomic<uint64_t> heap_generation_{0};  // changes whenever a heap is registered or unregistered
     std::shared_mutex attachments_mutex_;
     std::unordered_map<uint64_t, Resource *> attachments_;
     std::atomic<uint64_t> next_attachment_id_{1};
