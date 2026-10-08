@@ -129,6 +129,17 @@ HRESULT fail(std::string *error, const char *message)
     return E_INVALIDARG;
 }
 
+// Reads an enum-typed field of application data as its raw value. Applications
+// may pass out-of-range values, and loading those as enums is undefined.
+template <typename T>
+uint32_t raw(const T &field)
+{
+    static_assert(sizeof(T) == sizeof(uint32_t));
+    uint32_t value;
+    std::memcpy(&value, &field, sizeof(value));
+    return value;
+}
+
 bool valid_parameter_type(uint32_t type) { return type <= D3D12_ROOT_PARAMETER_TYPE_UAV; }
 bool valid_visibility(uint32_t visibility) { return visibility <= D3D12_SHADER_VISIBILITY_MESH; }
 bool valid_range_type(uint32_t type) { return type <= D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER; }
@@ -242,16 +253,16 @@ HRESULT adopt(const Desc &desc, D3D_ROOT_SIGNATURE_VERSION version, ParsedRootSi
 
     for (UINT i = 0; i < desc.NumParameters; i++) {
         const auto &p = desc.pParameters[i];
-        if (!valid_parameter_type(p.ParameterType))
+        if (!valid_parameter_type(raw(p.ParameterType)))
             return fail(error, "invalid root parameter type");
-        if (!valid_visibility(p.ShaderVisibility))
+        if (!valid_visibility(raw(p.ShaderVisibility)))
             return fail(error, "invalid root parameter shader visibility");
         if (p.ParameterType == D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE) {
             const auto &table = p.DescriptorTable;
             if (table.NumDescriptorRanges && !table.pDescriptorRanges)
                 return fail(error, "NumDescriptorRanges is non-zero but pDescriptorRanges is null");
             for (UINT j = 0; j < table.NumDescriptorRanges; j++) {
-                if (!valid_range_type(table.pDescriptorRanges[j].RangeType))
+                if (!valid_range_type(raw(table.pDescriptorRanges[j].RangeType)))
                     return fail(error, "invalid descriptor range type");
                 rs.ranges11.push_back(to_range1(table.pDescriptorRanges[j]));
             }
@@ -260,7 +271,7 @@ HRESULT adopt(const Desc &desc, D3D_ROOT_SIGNATURE_VERSION version, ParsedRootSi
     }
 
     for (UINT i = 0; i < desc.NumStaticSamplers; i++) {
-        if (!valid_visibility(desc.pStaticSamplers[i].ShaderVisibility))
+        if (!valid_visibility(raw(desc.pStaticSamplers[i].ShaderVisibility)))
             return fail(error, "invalid static sampler shader visibility");
         rs.samplers.push_back(desc.pStaticSamplers[i]);
     }
@@ -529,7 +540,7 @@ HRESULT find_rts0_part(const uint8_t *data, size_t size, const uint8_t *&part, s
 } // namespace
 
 HRESULT serialize_root_signature(const D3D12_VERSIONED_ROOT_SIGNATURE_DESC &desc,
-                                 D3D_ROOT_SIGNATURE_VERSION target_version,
+                                 uint32_t target_version,
                                  std::vector<uint8_t> &out, std::string *error)
 {
     if (target_version != D3D_ROOT_SIGNATURE_VERSION_1_0 && target_version != D3D_ROOT_SIGNATURE_VERSION_1_1)
@@ -538,7 +549,7 @@ HRESULT serialize_root_signature(const D3D12_VERSIONED_ROOT_SIGNATURE_DESC &desc
     try {
         ParsedRootSignature rs;
         HRESULT hr;
-        switch (desc.Version) {
+        switch (raw(desc.Version)) {
         case D3D_ROOT_SIGNATURE_VERSION_1_0:
             hr = adopt(desc.Desc_1_0, desc.Version, rs, error);
             break;

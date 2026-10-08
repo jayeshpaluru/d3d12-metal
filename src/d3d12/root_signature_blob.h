@@ -46,7 +46,7 @@ struct ParsedRootSignature {
 // description or unsupported version, with a short message in `error` when it
 // is non-null.
 HRESULT serialize_root_signature(const D3D12_VERSIONED_ROOT_SIGNATURE_DESC &desc,
-                                 D3D_ROOT_SIGNATURE_VERSION target_version,
+                                 uint32_t target_version,
                                  std::vector<uint8_t> &out, std::string *error);
 
 // Parses a DXBC container holding an RTS0 part, or a bare RTS0 payload. A

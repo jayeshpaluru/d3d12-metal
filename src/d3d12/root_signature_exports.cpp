@@ -1,4 +1,5 @@
 // Exported root signature entry points of d3d12.dll.
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -12,7 +13,7 @@ namespace {
 // Serializes `desc` into *blob; on failure stores the message in *error_blob
 // (when requested) and leaves *blob null.
 HRESULT serialize_to_blobs(const D3D12_VERSIONED_ROOT_SIGNATURE_DESC &desc,
-                           D3D_ROOT_SIGNATURE_VERSION target_version, ID3DBlob **blob,
+                           uint32_t target_version, ID3DBlob **blob,
                            ID3DBlob **error_blob)
 {
     std::vector<uint8_t> bytes;
@@ -47,7 +48,7 @@ D3D12M_EXPORT HRESULT WINAPI D3D12SerializeRootSignature(const D3D12_ROOT_SIGNAT
     D3D12_VERSIONED_ROOT_SIGNATURE_DESC desc{};
     desc.Version = D3D_ROOT_SIGNATURE_VERSION_1_0;
     desc.Desc_1_0 = *root_signature;
-    return serialize_to_blobs(desc, version, blob, error_blob);
+    return serialize_to_blobs(desc, static_cast<uint32_t>(version), blob, error_blob);
 }
 
 D3D12M_EXPORT HRESULT WINAPI D3D12SerializeVersionedRootSignature(
@@ -56,7 +57,9 @@ D3D12M_EXPORT HRESULT WINAPI D3D12SerializeVersionedRootSignature(
     clear_outputs(blob, error_blob);
     if (!root_signature || !blob)
         return E_INVALIDARG;
-    return serialize_to_blobs(*root_signature, root_signature->Version, blob, error_blob);
+    uint32_t version;
+    std::memcpy(&version, &root_signature->Version, sizeof(version));  // may hold an invalid enum value
+    return serialize_to_blobs(*root_signature, version, blob, error_blob);
 }
 
 D3D12M_EXPORT HRESULT WINAPI D3D12CreateRootSignatureDeserializer(const void *data, SIZE_T size,
