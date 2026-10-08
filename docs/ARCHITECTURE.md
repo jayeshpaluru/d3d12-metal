@@ -124,16 +124,22 @@
   overloads), reading the count buffer on the GPU and writing zero-instance draws for
   unused slots; constants, root views and vertex buffer views in the signature are applied by
   the same kernel into a per-command argument buffer.
+- **Render passes.** `BeginRenderPass` records `SET_RENDER_TARGETS` (read-only depth from the flags), clears for
+  CLEAR beginning accesses, and remembers the RESOLVE ending accesses; `EndRenderPass` records them as
+  `ResolveSubresource`. The backend builds Metal passes from those records as for any other list.
+- **Buffer lookup.** GPU addresses resolve through a sorted table of committed buffers and one buffer per heap
+  covering the whole heap, so placed buffers that overlap never need a search among overlaps.
 - **MSAA.** Multisampled textures and render targets with sample counts the device reports
   (`mtlb_device_caps::sample_counts`), `ResolveSubresource` through a render pass resolve or a
   blit for non-resolvable formats, multisample SRVs.
-- **Queries.** Occlusion queries use the render pass visibility buffer (`setVisibilityResultMode`
-  at `BeginQuery`/`EndQuery`). A timestamp is a one-dispatch compute pass of its own with a
-  counter sample at its end (Apple GPUs sample counters only at encoder boundaries).
-  `ResolveQueryData` of timestamps commits and waits for the command buffer so far, because
-  a blit in the same command buffer read zeros for samples written by earlier passes; the
-  cost is a CPU stall per resolve. GPU timestamps use the `mach_absolute_time` scale, which
-  `GetClockCalibration` pairs with `QueryPerformanceCounter`.
+- **Queries.** Occlusion queries use the render pass visibility buffer (`setVisibilityResultMode` at
+  `BeginQuery`/`EndQuery`); a query that spans several render passes gets one result slot per pass (8 per
+  query), and `ResolveQueryData` sums them on the GPU (`resolve_occlusion`). A timestamp is a one-dispatch compute
+  pass of its own with a counter sample at its end (Apple GPUs sample counters only at encoder boundaries).
+  A blit in the same command buffer reads zeros for those samples, so `ResolveQueryData` of timestamps is
+  performed by the command buffer's completion handler (a CPU copy from the sample buffer), which then signals
+  an `MTLSharedEvent` that the queue's next command buffer waits for: nothing blocks the CPU or the queue lock.
+  GPU timestamps use the `mach_absolute_time` scale, which `GetClockCalibration` pairs with `QueryPerformanceCounter`.
 - **Markers.** `BeginEvent`/`EndEvent`/`SetMarker` become Metal debug groups.
   `WriteBufferImmediate` is an internal one-thread kernel after the preceding work.
 - **Bundles.** A bundle is recorded like a direct list (without pipeline or root-signature

@@ -38,7 +38,7 @@ mesh shaders, video, tiled mapping) return `E_NOTIMPL`/do nothing and log once.
 |---|---|
 | `ID3D12Device` .. `Device10` | queues (direct, compute, copy), allocators, lists (`CreateCommandList`/`1`, bundles), graphics PSOs (descs and `CreatePipelineState` streams, including depth-stencil 1/2 and rasterizer 1/2 subobjects), compute PSOs, root signatures (static samplers are emulated), descriptor heaps (CBV/SRV/UAV, sampler, RTV, DSV, per-type increments), `CreateConstantBufferView`, `CreateShaderResourceView` (buffer, typed buffer, texture 1D/2D/3D/cube/arrays/MS, mip and plane ranges, min LOD clamp on `Sample`), `CreateUnorderedAccessView` (buffer, typed buffer, textures; counter resources rejected), `CreateRenderTargetView`, `CreateDepthStencilView` (read-only flags), `CreateSampler`, `CopyDescriptors`/`Simple`, committed resources (`CreateCommittedResource`/`1`/`2`/`3`), heaps (`CreateHeap`/`1`), placed resources (`CreatePlacedResource`/`1`/`2`), `GetResourceAllocationInfo`/`1`/`2`, `GetCopyableFootprints`/`1`, `CreateCommandSignature`, `CreateQueryHeap`, fences, `CheckFeatureSupport` (options 0..22, architecture, feature levels up to 12_0, format support, multisample quality levels, shader model up to 6.6, root signature 1.1, GPU VA, existing heap, serialization, command queue priority, ...), `EnqueueMakeResident`, `SetStablePrivateData`, `GetDeviceRemovedReason`, residency, private data, `SetName` |
 | `ID3D12CommandQueue` | `ExecuteCommandLists`, `Signal`, `Wait` (several queues, cross-queue ordering through shared events), `GetDesc`, `GetTimestampFrequency`, `GetClockCalibration`, `SetMarker`/`BeginEvent`/`EndEvent` |
-| `ID3D12GraphicsCommandList` .. `7` | everything for rendering and compute: clears (RTV, DSV, UAV float/uint), `OMSetRenderTargets` with DSV, depth bounds ignored, stencil ref, viewports/scissors, vertex/index buffers, topologies (point, line, line strip, triangle, triangle strip), root arguments for graphics and compute (constants, CBV/SRV/UAV views, tables), `SetDescriptorHeaps`, draws and dispatches, `ExecuteIndirect` (draw, indexed, dispatch, constants, CBV/SRV/UAV views, vertex buffers, count buffer), all copies (buffer, texture, texture to buffer and back, `CopyResource`), `ResolveSubresource`/`ResolveSubresourceRegion` (full-subresource resolves), `ResourceBarrier` (transition, UAV, aliasing; see ARCHITECTURE.md), `BeginQuery`/`EndQuery`/`ResolveQueryData` (occlusion, binary occlusion, timestamp; pipeline and stream-output statistics resolve to zeros), `SetMarker`/`BeginEvent`/`EndEvent`, `WriteBufferImmediate`, `ExecuteBundle`, `OMSetDepthBounds`/`SetPredication` (accepted, no effect) |
+| `ID3D12GraphicsCommandList` .. `7` | everything for rendering and compute: clears (RTV, DSV, UAV float/uint), `OMSetRenderTargets` with DSV, depth bounds ignored, stencil ref, viewports/scissors, vertex/index buffers, topologies (point, line, line strip, triangle, triangle strip), root arguments for graphics and compute (constants, CBV/SRV/UAV views, tables), `SetDescriptorHeaps`, draws and dispatches, `ExecuteIndirect` (draw, indexed, dispatch, constants, CBV/SRV/UAV views, vertex buffers, count buffer), all copies (buffer, texture, texture to buffer and back, `CopyResource`), `ResolveSubresource`/`ResolveSubresourceRegion` (full-subresource resolves), `ResourceBarrier` (transition, UAV, aliasing; see ARCHITECTURE.md), `BeginQuery`/`EndQuery`/`ResolveQueryData` (occlusion, binary occlusion, timestamp; pipeline and stream-output statistics resolve to zeros), `SetMarker`/`BeginEvent`/`EndEvent`, `WriteBufferImmediate`, `ExecuteBundle`, `BeginRenderPass`/`EndRenderPass` (clear by beginning access, suspend/resume, colour resolve at the end; no depth resolve; tier 0), `OMSetDepthBounds`/`SetPredication` (accepted, no effect) |
 | `ID3D12Resource`/`1`/`2` | `Map`, `Unmap`, `GetGPUVirtualAddress`, `GetDesc`/`GetDesc1`, `GetHeapProperties` |
 | `ID3D12Heap`/`1` | placed resources, all heap types, `GetDesc` |
 | `ID3D12QueryHeap` | occlusion, binary occlusion, timestamp, pipeline statistics, stream-output statistics |
@@ -49,8 +49,8 @@ mesh shaders, video, tiled mapping) return `E_NOTIMPL`/do nothing and log once.
 Stubbed (log once, `E_NOTIMPL` or no effect): reserved/tiled resources and tile mappings, ray tracing,
 mesh/amplification shaders, video, work graphs, pipeline libraries, shared handles, `WriteToSubresource`/`ReadFromSubresource`,
 `CopyTiles`, `SOSetTargets` (stream output), `SetSamplePositions`, `AtomicCopyBufferUINT*`, `SetViewInstanceMask`,
-variable rate shading, enhanced barriers (`Barrier`), `ClearState`, `SetEventOnMultipleFenceCompletion`, render passes
-(`BeginRenderPass`/`EndRenderPass`), `SetProtectedResourceSession`, `GetCachedBlob`.
+variable rate shading, enhanced barriers (`Barrier`), `ClearState`, `SetEventOnMultipleFenceCompletion`,
+`SetProtectedResourceSession`, `GetCachedBlob`.
 
 ## Bridge and backend
 
@@ -111,8 +111,8 @@ variable rate shading, enhanced barriers (`Barrier`), `ClearState`, `SetEventOnM
 - `ResolveSubresourceRegion` resolves whole subresources; rectangles are ignored.
 - Only one occlusion query is active at a time (D3D12 allows nesting only for different
   types); timestamps are sampled at the boundary of a compute pass of their own, and
-  `ResolveQueryData` of timestamps finishes the command buffer so far (a CPU wait during
-  the submit). Pipeline-statistics and stream-output queries resolve to zeros.
+  `ResolveQueryData` of timestamps is a CPU copy in the command buffer's completion handler, which the queue's next buffer
+  waits for through an event (nothing blocks; a copy or draw in the same list that reads the destination sees stale data).
 - Predication, depth bounds, `SetSamplePositions`, adjacency and patch topologies (the call is
   ignored and logged) are not supported.
 - Reserved (tiled) resources are refused; shared handles, pipeline libraries, ray tracing,
@@ -144,9 +144,8 @@ Known hardening gaps (found by review, not yet fixed; the layer trusts a well-be
 - Copy, resolve and clear records are bounds-checked by the front-end only partly; the backend does not re-check buffer and texture ranges of `copy_buffer`, `copy_texture`, resolves and UAV clears.
 - CPU descriptor handles are dereferenced as pointers (RTV/DSV, descriptor copies) without a heap lookup.
 - RTV/DSV mip and slice are not validated against the resource.
+- Occlusion queries keep 8 result slots per query: a query spanning more render passes undercounts.
 - Command lists hold bare handles to pipeline states and query heaps (no reference), so releasing one between `Close` and execution is undefined.
-- Timestamp `ResolveQueryData` waits for the command buffer under the queue lock; a wait on a fence signalled later by another thread in the same buffer would deadlock it.
-- A placed-resource pending-init entry holds no reference (a race with the last release).
 - Samplers are not range-checked; the sampler cache is unbounded.
 
 Wine notes:
