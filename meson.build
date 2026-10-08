@@ -30,7 +30,7 @@ if not directx_headers.found()
   )
 endif
 metal_frameworks = [
-  dependency('appleframeworks', modules: ['Metal', 'Foundation']),
+  dependency('appleframeworks', modules: ['Metal', 'Foundation', 'QuartzCore']),
 ]
 irconverter = cxx.find_library('metalirconverter', dirs: ['/usr/local/lib'])
 irconverter_inc = include_directories('/usr/local/include')

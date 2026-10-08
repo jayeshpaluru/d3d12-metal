@@ -4,4 +4,5 @@ bridge_sources += files(
   'metal/notify.mm',
   'metal/pipeline.mm',
   'metal/queue.mm',
+  'metal/swapchain.mm',
 )

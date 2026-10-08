@@ -4,7 +4,7 @@
 #include <climits>
 #include <cstring>
 
-#include <directx/d3dx12_resource_helpers.h>
+
 
 namespace d3d12m {
 
@@ -53,8 +53,10 @@ Extent subresource_extent(const D3D12_RESOURCE_DESC &desc, UINT mip)
 
 void decompose_subresource(const D3D12_RESOURCE_DESC &desc, UINT subresource, UINT *mip, UINT *array_slice)
 {
-    UINT plane;  // single-plane formats only
-    D3D12DecomposeSubresource(subresource, resolve_mip_levels(desc), array_size(desc), *mip, *array_slice, plane);
+    // Single-plane formats only.
+    const UINT mip_levels = resolve_mip_levels(desc);
+    *mip = subresource % mip_levels;
+    *array_slice = (subresource / mip_levels) % array_size(desc);
 }
 
 bool compute_copyable_footprints(const D3D12_RESOURCE_DESC &desc, UINT first_subresource,

@@ -30,11 +30,14 @@ public:
         return query_interfaces<IUnknown, ID3D12Object, ID3D12DeviceChild, ID3D12Pageable, ID3D12DescriptorHeap>(this, riid, out);
     }
 
-    D3D12_DESCRIPTOR_HEAP_DESC STDMETHODCALLTYPE GetDesc() override { return desc_; }
-    D3D12_CPU_DESCRIPTOR_HANDLE STDMETHODCALLTYPE GetCPUDescriptorHandleForHeapStart() override;
-    D3D12_GPU_DESCRIPTOR_HANDLE STDMETHODCALLTYPE GetGPUDescriptorHandleForHeapStart() override;
+    D3D12M_AGGREGATE_RETURN(D3D12_DESCRIPTOR_HEAP_DESC, GetDesc, desc_)
+    D3D12M_AGGREGATE_RETURN(D3D12_CPU_DESCRIPTOR_HANDLE, GetCPUDescriptorHandleForHeapStart, cpu_start())
+    D3D12M_AGGREGATE_RETURN(D3D12_GPU_DESCRIPTOR_HANDLE, GetGPUDescriptorHandleForHeapStart, gpu_start())
 
 private:
+    D3D12_CPU_DESCRIPTOR_HANDLE cpu_start() const;
+    D3D12_GPU_DESCRIPTOR_HANDLE gpu_start() const;
+
     explicit DescriptorHeap(Device *device) : ChildImpl(device) {}
     ~DescriptorHeap() override;
 

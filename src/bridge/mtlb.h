@@ -56,6 +56,7 @@ typedef uint64_t mtlb_root_signature;
 typedef uint64_t mtlb_queue;
 typedef uint64_t mtlb_event;
 typedef uint64_t mtlb_notify;
+typedef uint64_t mtlb_swapchain;
 
 /* ------------------------------------------------------------------------ */
 /* Formats                                                                  */
@@ -431,6 +432,35 @@ MTLB_EXPORT void mtlb_event_signal_cpu(mtlb_event event, uint64_t value);
 MTLB_EXPORT mtlb_result mtlb_event_wait_cpu(mtlb_event event, uint64_t value, uint64_t timeout_ms);
 
 /* ------------------------------------------------------------------------ */
+/* Swap chains                                                              */
+/* ------------------------------------------------------------------------ */
+
+typedef struct mtlb_swapchain_desc {
+    uint64_t window;           /* top-level window handle (a Wine HWND) */
+    uint32_t width;            /* drawable size in pixels */
+    uint32_t height;
+    uint32_t format;           /* mtlb_format of the application's back buffers */
+    uint32_t buffer_count;     /* drawables the layer may hand out at once (2 or 3) */
+} mtlb_swapchain_desc;
+
+/* Attaches a Metal layer to the window and configures it for `desc`. Fails with
+ * MTLB_ERROR_UNSUPPORTED where windows cannot be resolved to a layer (the native
+ * headless build) and with MTLB_ERROR_DEVICE when the window has none. */
+MTLB_EXPORT mtlb_result mtlb_swapchain_create(mtlb_device device, const mtlb_swapchain_desc *desc,
+                                              mtlb_swapchain *out);
+MTLB_EXPORT void mtlb_swapchain_destroy(mtlb_swapchain swapchain);
+/* Changes drawable size and format (the buffer count stays). */
+MTLB_EXPORT mtlb_result mtlb_swapchain_resize(mtlb_swapchain swapchain, uint32_t width, uint32_t height,
+                                              uint32_t format);
+
+/* Encodes the presentation of `texture` (a back buffer of the swap chain's size
+ * or any other, it is scaled; any format the swap chain accepts, it is
+ * converted) after the queue's earlier work, then commits. `sync_interval` 0
+ * presents without waiting for the display. */
+MTLB_EXPORT mtlb_result mtlb_queue_present(mtlb_queue queue, mtlb_swapchain swapchain, mtlb_texture texture,
+                                           uint32_t sync_interval);
+
+/* ------------------------------------------------------------------------ */
 /* Completion notifications                                                 */
 /* ------------------------------------------------------------------------ */
 
@@ -475,6 +505,7 @@ MTLB_ASSERT_SIZE(mtlb_render_target_blend, 32);
 MTLB_ASSERT_SIZE(mtlb_root_parameter_layout, 8);
 MTLB_ASSERT_SIZE(mtlb_root_signature_layout, 520);
 MTLB_ASSERT_SIZE(mtlb_pipeline_desc, 2192);
+MTLB_ASSERT_SIZE(mtlb_swapchain_desc, 24);
 
 #ifdef __cplusplus
 }

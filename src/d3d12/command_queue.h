@@ -27,7 +27,7 @@ public:
     HRESULT STDMETHODCALLTYPE Wait(ID3D12Fence *fence, UINT64 value) override;
     HRESULT STDMETHODCALLTYPE GetTimestampFrequency(UINT64 *frequency) override;
     HRESULT STDMETHODCALLTYPE GetClockCalibration(UINT64 *, UINT64 *) override { D3D12M_STUB_HR(); }
-    D3D12_COMMAND_QUEUE_DESC STDMETHODCALLTYPE GetDesc() override { return desc_; }
+    D3D12M_AGGREGATE_RETURN(D3D12_COMMAND_QUEUE_DESC, GetDesc, desc_)
 
 private:
     explicit CommandQueue(Device *device) : ChildImpl(device) {}

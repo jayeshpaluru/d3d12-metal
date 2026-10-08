@@ -38,12 +38,12 @@ DescriptorHeap::~DescriptorHeap()
         mtlb_buffer_destroy(buffer_);
 }
 
-D3D12_CPU_DESCRIPTOR_HANDLE DescriptorHeap::GetCPUDescriptorHandleForHeapStart()
+D3D12_CPU_DESCRIPTOR_HANDLE DescriptorHeap::cpu_start() const
 {
     return {reinterpret_cast<SIZE_T>(storage_)};
 }
 
-D3D12_GPU_DESCRIPTOR_HANDLE DescriptorHeap::GetGPUDescriptorHandleForHeapStart()
+D3D12_GPU_DESCRIPTOR_HANDLE DescriptorHeap::gpu_start() const
 {
     return {gpu_address_};
 }

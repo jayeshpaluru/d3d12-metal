@@ -739,6 +739,23 @@ uint64_t mtlb_queue_render_pass_count(mtlb_queue handle)
     return queue ? queue->render_passes.load() : 0;
 }
 
+// Appends the presentation to the open buffer and commits it.
+mtlb_result mtlb_queue_present(mtlb_queue handle, mtlb_swapchain swapchain_handle, mtlb_texture texture_handle,
+                               uint32_t sync_interval)
+{
+    Queue *queue = from_handle<Queue>(handle);
+    Swapchain *swapchain = from_handle<Swapchain>(swapchain_handle);
+    Texture *texture = from_handle<Texture>(texture_handle);
+    if (!queue || !swapchain || !texture)
+        return MTLB_ERROR_INVALID_ARGUMENT;
+    if (texture->texture.sampleCount != 1)
+        return fail(MTLB_ERROR_INVALID_ARGUMENT, "cannot present a multisampled texture");
+    std::lock_guard<std::mutex> lock(queue->mutex);
+    mtlb_result result = encode_present(open_command_buffer(queue), swapchain, texture, sync_interval);
+    commit_open(queue);
+    return result;
+}
+
 // Appends a signal to the open buffer and commits it, so a signal after
 // ExecuteCommandLists costs one commit for both.
 mtlb_result mtlb_queue_signal(mtlb_queue handle, mtlb_event event_handle, uint64_t value)

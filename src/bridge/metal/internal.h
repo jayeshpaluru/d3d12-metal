@@ -3,6 +3,7 @@
 #pragma once
 
 #import <Metal/Metal.h>
+#import <QuartzCore/CAMetalLayer.h>
 
 #include <array>
 #include <atomic>
@@ -108,6 +109,17 @@ struct Queue {
     std::atomic<uint64_t> render_passes{0};
 };
 
+// A CAMetalLayer attached to an application window, and what it takes to put a
+// back buffer on it (swapchain.mm).
+struct Swapchain {
+    Device *device;
+    CAMetalLayer *layer;
+    id<MTLLibrary> library;               // present_vs / present_fs
+    id<MTLRenderPipelineState> pipeline;  // fullscreen triangle sampling the back buffer
+    mtlb_format format;                   // of the application's back buffers
+    std::atomic<bool> display_sync{true};
+};
+
 struct Event {
     Device *device;
     id<MTLSharedEvent> event;
@@ -133,6 +145,11 @@ Buffer *find_buffer(Device *device, uint64_t address, uint64_t *offset);
 
 // Commits pending residency set changes; call before submitting work.
 void commit_residency(Device *device);
+
+// Encodes drawing `texture` onto the swap chain's next drawable and presenting
+// it into `command_buffer`. A missing drawable (a hidden window) skips the frame.
+mtlb_result encode_present(id<MTLCommandBuffer> command_buffer, Swapchain *swapchain, Texture *texture,
+                           uint32_t sync_interval);
 
 // Format mapping (formats.mm). Return MTLPixelFormatInvalid / MTLVertexFormatInvalid
 // for formats with no equivalent.

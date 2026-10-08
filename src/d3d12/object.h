@@ -28,6 +28,22 @@ public:
     }
 };
 
+// Declares a method of an interface that returns the aggregate `T` (GetDesc and
+// friends). The Windows x64 ABI of the MinGW headers passes the result through
+// an explicit pointer (`T *Name(T *ret)`) where GCC would pick another
+// convention for a by-value return.
+#ifdef _WIN32
+#define D3D12M_AGGREGATE_RETURN(T, name, expr) \
+    T *STDMETHODCALLTYPE name(T *ret) override  \
+    {                                           \
+        *ret = (expr);                          \
+        return ret;                             \
+    }
+#else
+#define D3D12M_AGGREGATE_RETURN(T, name, expr) \
+    T STDMETHODCALLTYPE name() override { return (expr); }
+#endif
+
 // The HRESULT for a failed bridge call.
 inline HRESULT to_hresult(mtlb_result result)
 {

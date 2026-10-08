@@ -23,7 +23,7 @@ public:
 
     HRESULT STDMETHODCALLTYPE Map(UINT subresource, const D3D12_RANGE *read_range, void **data) override;
     void STDMETHODCALLTYPE Unmap(UINT subresource, const D3D12_RANGE *written_range) override;
-    D3D12_RESOURCE_DESC STDMETHODCALLTYPE GetDesc() override { return desc_; }
+    D3D12M_AGGREGATE_RETURN(D3D12_RESOURCE_DESC, GetDesc, desc_)
     D3D12_GPU_VIRTUAL_ADDRESS STDMETHODCALLTYPE GetGPUVirtualAddress() override { return gpu_address_; }
     HRESULT STDMETHODCALLTYPE WriteToSubresource(UINT, const D3D12_BOX *, const void *, UINT, UINT) override { D3D12M_STUB_HR(); }
     HRESULT STDMETHODCALLTYPE ReadFromSubresource(void *, UINT, UINT, UINT, const D3D12_BOX *) override { D3D12M_STUB_HR(); }

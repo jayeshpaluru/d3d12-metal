@@ -246,7 +246,7 @@ void Device::CopyDescriptorsSimple(UINT count, D3D12_CPU_DESCRIPTOR_HANDLE dest,
 
 // ---- Resources -------------------------------------------------------------
 
-D3D12_RESOURCE_ALLOCATION_INFO Device::GetResourceAllocationInfo(UINT, UINT count, const D3D12_RESOURCE_DESC *descs)
+D3D12_RESOURCE_ALLOCATION_INFO Device::allocation_info(UINT count, const D3D12_RESOURCE_DESC *descs) const
 {
     D3D12_RESOURCE_ALLOCATION_INFO info{0, kResourceAlignment};
     for (UINT i = 0; i < count; ++i) {
@@ -281,7 +281,7 @@ HRESULT Device::GetDeviceRemovedReason()
     return S_OK;
 }
 
-LUID Device::GetAdapterLuid()
+LUID Device::adapter_luid() const
 {
     return luid_from_registry_id(caps_.registry_id);
 }
