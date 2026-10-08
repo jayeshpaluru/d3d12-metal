@@ -101,11 +101,10 @@ struct Queue {
     Device *device = nullptr;
     id<MTLCommandQueue> queue;
 
-    // Guards the open command buffer: submits, signals and waits append to it
-    // and it is committed lazily (see queue.mm).
+    // Guards the open command buffer: a wait is encoded into it and submits and
+    // signals append to it and commit it (see queue.mm).
     std::mutex mutex;
     id<MTLCommandBuffer> open = nil;
-    uint32_t open_submits = 0;
     std::atomic<uint64_t> render_passes{0};
 };
 

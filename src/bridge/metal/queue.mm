@@ -648,11 +648,9 @@ mtlb_result Replay::execute(const mtlb_cmd_header *header)
     }
 }
 
-// Bounds how much work a lazily committed command buffer may accumulate.
-constexpr uint32_t kMaxOpenSubmits = 32;
-
-// The queue's open command buffer, created on first use. Work stays in it until
-// something needs the GPU to see it (a signal, enough submits, queue teardown).
+// The queue's open command buffer, created on first use. A wait is encoded into
+// it and stays there, ahead of the work of the next submit or signal, which
+// commit it.
 // The buffer retains what it references: an application may release a pipeline
 // or fence as soon as it sees a fence signalled, which can be before the buffer
 // retires, and Metal's validation layer rejects that for unretained buffers.
@@ -676,7 +674,6 @@ void commit_open(Queue *queue)
     commit_residency(queue->device);
     [queue->open commit];
     queue->open = nil;
-    queue->open_submits = 0;
 }
 
 } // namespace
@@ -724,8 +721,7 @@ mtlb_result mtlb_queue_submit(mtlb_queue handle, const mtlb_span *spans, uint32_
             replay.run(spans[i].data, spans[i].size);
     }
     replay.finish();
-    if (++queue->open_submits >= kMaxOpenSubmits)
-        commit_open(queue);
+    commit_open(queue);
     return replay.error() == MTLB_OK ? MTLB_OK : fail(replay.error(), replay.error_message());
 }
 

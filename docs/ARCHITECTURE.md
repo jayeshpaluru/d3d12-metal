@@ -35,16 +35,12 @@
   copy arrives or the submit ends. Clears that never meet a draw run as
   clear-only passes. `mtlb_queue_render_pass_count` exposes the number of
   encoders for tests.
-- **One queue synchronisation mechanism.** A queue keeps one open, uncommitted
-  `MTLCommandBuffer` (retaining its references: applications release objects as
-  soon as a fence is signalled, possibly before the buffer retires, and
-  `commandBufferWithUnretainedReferences` trips Metal's validation layer then). Submits and `Wait` append to it; `Signal` appends and
-  commits, so Execute followed by Signal costs one commit. It is also committed
-  after 32 submits and when the queue is destroyed.
-- **GPU virtual addresses are Metal `gpuAddress`.** `D3D12_GPU_VIRTUAL_ADDRESS`
-  for buffers is the backing `MTLBuffer.gpuAddress` (+offset). Shader-visible
-  descriptor heaps are `MTLBuffer`s of `IRDescriptorTableEntry`, so
-  `D3D12_GPU_DESCRIPTOR_HANDLE.ptr` is a GPU address too.
+- **One queue synchronisation mechanism.** Submits, `Signal` and `Wait` all
+  encode into the queue's open `MTLCommandBuffer` (retaining its references:
+  applications release objects as soon as a fence is signalled, possibly before
+  the buffer retires, and `commandBufferWithUnretainedReferences` trips Metal's
+  validation layer then). A submit and a `Signal` commit it; a `Wait` stays in
+  it, ahead of the work of whatever commits next.
 - **Root signatures** are built once in the backend (`mtlb_root_signature_create`),
   which also reports each parameter's offset and size in the top-level argument
   buffer (from `IRRootSignatureGetResourceLocations`). The front-end uses those

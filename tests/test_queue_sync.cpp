@@ -1,7 +1,9 @@
 // Queue-side Signal and Wait, batched with submits: a signal needs no submit to
 // flush, a signal after ExecuteCommandLists covers the work before it, and a
 // queue wait holds back later signals until the fence is reached.
+#include <chrono>
 #include <cstring>
+#include <thread>
 
 #include "common/platform.h"
 #include "test_context.h"
@@ -32,6 +34,23 @@ int main()
     CHECK_HR(readback->Map(0, nullptr, &mapped));
     CHECK(static_cast<uint8_t *>(mapped)[255] == 0x5a);
     readback->Unmap(0, nullptr);
+
+    // Submitted work starts without any Signal: no fence involved, just poll.
+    ComPtr<ID3D12Resource> poll_readback = ctx.create_buffer(D3D12_HEAP_TYPE_READBACK, 256);
+    ComPtr<ID3D12GraphicsCommandList> poll_list = ctx.create_list();
+    poll_list->CopyBufferRegion(poll_readback.Get(), 0, upload.Get(), 0, 256);
+    CHECK_HR(poll_list->Close());
+    ID3D12CommandList *poll_lists[] = {poll_list.Get()};
+    ctx.queue->ExecuteCommandLists(1, poll_lists);
+    CHECK_HR(poll_readback->Map(0, nullptr, &mapped));
+    bool arrived = false;
+    for (int i = 0; i < 500 && !arrived; ++i) {
+        arrived = static_cast<uint8_t *>(mapped)[255] == 0x5a;
+        if (!arrived)
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    poll_readback->Unmap(0, nullptr);
+    CHECK(arrived);
 
     // Wait holds back everything after it, including a later Signal.
     ComPtr<ID3D12Fence> gate, done;
