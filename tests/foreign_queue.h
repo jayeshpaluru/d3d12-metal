@@ -5,7 +5,7 @@
 
 #include "test_util.h"
 
-struct ForeignQueue : ID3D12CommandQueue {
+struct ForeignQueue final : ID3D12CommandQueue {
     ComPtr<ID3D12CommandQueue> inner;
     bool forward_qi;
     ULONG refs = 1;

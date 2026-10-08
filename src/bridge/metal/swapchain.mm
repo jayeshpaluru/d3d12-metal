@@ -93,7 +93,7 @@ void write_png(id<MTLTexture> texture, const std::string &path)
     [texture getBytes:pixels.mutableBytes bytesPerRow:pitch fromRegion:MTLRegionMake2D(0, 0, width, height) mipmapLevel:0];
     CGColorSpaceRef color_space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
     CGContextRef context = CGBitmapContextCreate(pixels.mutableBytes, width, height, 8, pitch, color_space,
-                                                 kCGImageAlphaNoneSkipFirst | kCGBitmapByteOrder32Little);
+                                                 static_cast<uint32_t>(kCGImageAlphaNoneSkipFirst) | static_cast<uint32_t>(kCGBitmapByteOrder32Little));
     CGImageRef image = context ? CGBitmapContextCreateImage(context) : nullptr;
     // A path that is not valid UTF-8 would make NSURL's convenience constructors throw.
     CFURLRef url = CFURLCreateFromFileSystemRepresentation(nullptr, reinterpret_cast<const UInt8 *>(path.c_str()),
