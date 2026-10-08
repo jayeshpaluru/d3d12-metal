@@ -297,6 +297,21 @@ int main()
         CHECK_EQ(words[5], 0xBBBB0002u);
         CHECK_EQ(words[15], 0xCCCC0003u);
         CHECK_EQ(words[14], 0x11111111u);
+
+        // A destination that is not 4-byte aligned is refused and nothing is written.
+        ComPtr<ID3D12GraphicsCommandList> again = gpu.list();
+        ComPtr<ID3D12GraphicsCommandList2> again2;
+        CHECK_HR(again.As(&again2));
+        const D3D12_WRITEBUFFERIMMEDIATE_PARAMETER odd[2] = {{buffer->GetGPUVirtualAddress() + 10, 0xDEADBEEFu},
+                                                             {buffer->GetGPUVirtualAddress() + 8, 0x0BADF00Du}};
+        again2->WriteBufferImmediate(2, odd, nullptr);
+        again->CopyBufferRegion(readback.Get(), 0, buffer.Get(), 0, 64);
+        gpu.run(again.Get());
+        CHECK_HR(readback->Map(0, nullptr, &mapped));
+        std::memcpy(words, mapped, 64);
+        readback->Unmap(0, nullptr);
+        CHECK_EQ(words[2], 0x0BADF00Du);
+        CHECK_EQ(words[3], 0x11111111u);
     }
 
     std::printf("p_queries: PASS\n");

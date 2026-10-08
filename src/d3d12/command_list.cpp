@@ -1,4 +1,5 @@
 #include "d3d12/command_list.h"
+#include "d3d12/command_stream.h"
 
 #include <algorithm>
 #include <cstring>
@@ -59,12 +60,7 @@ CommandList::~CommandList()
 template <typename T>
 T *CommandList::append(mtlb_cmd_type type, size_t extra_bytes)
 {
-    const size_t size = mtlb_cmd_align(static_cast<uint32_t>(sizeof(T) + extra_bytes));
-    const size_t at = stream_.size();
-    stream_.resize(at + size);  // zero-filled
-    auto *cmd = reinterpret_cast<T *>(stream_.data() + at);
-    cmd->header = {static_cast<uint32_t>(type), static_cast<uint32_t>(size)};
-    return cmd;
+    return append_record<T>(stream_, type, extra_bytes);
 }
 
 void CommandList::reset_state()
@@ -220,8 +216,12 @@ void CommandList::IASetIndexBuffer(const D3D12_INDEX_BUFFER_VIEW *view)
 void CommandList::OMSetRenderTargets(UINT count, const D3D12_CPU_DESCRIPTOR_HANDLE *rtvs,
                                      BOOL single_handle_to_range, const D3D12_CPU_DESCRIPTOR_HANDLE *dsv)
 {
-    if (count > MTLB_MAX_RENDER_TARGETS || (count && !rtvs))
+    if (closed_ || count > MTLB_MAX_RENDER_TARGETS || (count && !rtvs) || (dsv && !dsv->ptr))
         return;
+    for (UINT i = 0; i < count; ++i) {
+        if (!rtvs[single_handle_to_range ? 0 : i].ptr)
+            return;
+    }
     auto *cmd = append<mtlb_cmd_set_render_targets>(MTLB_CMD_SET_RENDER_TARGETS, count * sizeof(mtlb_render_target));
     cmd->count = count;
     if (dsv) {
@@ -240,8 +240,10 @@ void CommandList::OMSetRenderTargets(UINT count, const D3D12_CPU_DESCRIPTOR_HAND
 void CommandList::ClearRenderTargetView(D3D12_CPU_DESCRIPTOR_HANDLE view, const FLOAT color[4], UINT num_rects,
                                         const D3D12_RECT *)
 {
+    if (closed_ || !view.ptr || !color)
+        return;
     const RenderTargetDescriptor &rtv = rtv_from_handle(view);
-    if (!rtv.texture || !color)
+    if (!rtv.texture)
         return;
     if (num_rects)
         D3D12M_LOG("ClearRenderTargetView: clear rectangles are ignored, the whole view is cleared");
@@ -253,8 +255,10 @@ void CommandList::ClearRenderTargetView(D3D12_CPU_DESCRIPTOR_HANDLE view, const 
 void CommandList::ClearDepthStencilView(D3D12_CPU_DESCRIPTOR_HANDLE view, D3D12_CLEAR_FLAGS flags, FLOAT depth,
                                         UINT8 stencil, UINT num_rects, const D3D12_RECT *)
 {
+    if (closed_ || !view.ptr || !(flags & (D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL)))
+        return;
     const RenderTargetDescriptor &dsv = dsv_from_handle(view);
-    if (!dsv.texture || !(flags & (D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL)))
+    if (!dsv.texture)
         return;
     if (num_rects)
         D3D12M_LOG("ClearDepthStencilView: clear rectangles are ignored, the whole view is cleared");
@@ -670,10 +674,7 @@ void CommandList::clear_uav(D3D12_CPU_DESCRIPTOR_HANDLE view_handle, ID3D12Resou
 
     if (resource->is_buffer())
         return;
-    mtlb_format_info info;
     DXGI_FORMAT format = view->format == DXGI_FORMAT_UNKNOWN ? resource->desc().Format : view->format;
-    const bool known = get_format_info(format, &info);
-    (void)known;
     uint32_t converted_values[4];
     // The value is written through a typed texture: float formats take floats, integer formats integers.
     uint32_t kind = from_float ? MTLB_CLEAR_FLOAT : MTLB_CLEAR_UINT;

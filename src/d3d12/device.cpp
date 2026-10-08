@@ -1,3 +1,4 @@
+#include "d3d12/command_stream.h"
 #include "d3d12/device.h"
 
 #include <algorithm>
@@ -362,9 +363,9 @@ void Device::unregister_heap(DescriptorHeap *heap)
     heaps_.erase(reinterpret_cast<uintptr_t>(heap->storage()));
 }
 
-ViewInfo *Device::view_info(D3D12_CPU_DESCRIPTOR_HANDLE handle)
+// The CBV/SRV/UAV heap that holds a CPU handle and the index of the handle in it. The caller holds heaps_mutex_.
+DescriptorHeap *Device::locate_view_heap(D3D12_CPU_DESCRIPTOR_HANDLE handle, size_t *index) const
 {
-    std::shared_lock lock(heaps_mutex_);
     auto it = heaps_.upper_bound(handle.ptr);
     if (it == heaps_.begin())
         return nullptr;
@@ -372,15 +373,30 @@ ViewInfo *Device::view_info(D3D12_CPU_DESCRIPTOR_HANDLE handle)
     DescriptorHeap *heap = it->second;
     if (heap->type() != D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV)
         return nullptr;
-    const size_t index = (handle.ptr - it->first) / kDescriptorSize;
-    return heap->shadow(static_cast<uint32_t>(index));
+    *index = (handle.ptr - it->first) / kDescriptorSize;
+    return heap;
 }
 
+ViewInfo *Device::view_info(D3D12_CPU_DESCRIPTOR_HANDLE handle)
+{
+    std::shared_lock lock(heaps_mutex_);
+    size_t index;
+    DescriptorHeap *heap = locate_view_heap(handle, &index);
+    return heap ? heap->shadow(static_cast<uint32_t>(index)) : nullptr;
+}
+
+// Both ranges are located once; the descriptors in between are consecutive in their heaps.
 void Device::copy_view_info(D3D12_CPU_DESCRIPTOR_HANDLE dest, D3D12_CPU_DESCRIPTOR_HANDLE src, UINT count)
 {
+    std::shared_lock lock(heaps_mutex_);
+    size_t to_index, from_index;
+    DescriptorHeap *to_heap = locate_view_heap(dest, &to_index);
+    if (!to_heap)
+        return;
+    DescriptorHeap *from_heap = locate_view_heap(src, &from_index);
     for (UINT i = 0; i < count; ++i) {
-        ViewInfo *to = view_info({dest.ptr + size_t(i) * kDescriptorSize});
-        ViewInfo *from = view_info({src.ptr + size_t(i) * kDescriptorSize});
+        ViewInfo *to = to_heap->shadow(static_cast<uint32_t>(to_index + i));
+        ViewInfo *from = from_heap ? from_heap->shadow(static_cast<uint32_t>(from_index + i)) : nullptr;
         if (to)
             *to = from ? *from : ViewInfo{};
     }
@@ -399,21 +415,6 @@ void Device::remove_pending_init(Resource *resource)
     std::lock_guard<std::mutex> lock(init_mutex_);
     pending_init_.erase(std::remove(pending_init_.begin(), pending_init_.end(), resource), pending_init_.end());
 }
-
-namespace {
-
-template <class T>
-T *append_record(std::vector<uint8_t> &stream, mtlb_cmd_type type)
-{
-    const size_t size = mtlb_cmd_align(sizeof(T));
-    const size_t at = stream.size();
-    stream.resize(at + size);
-    auto *cmd = reinterpret_cast<T *>(stream.data() + at);
-    cmd->header = {static_cast<uint32_t>(type), static_cast<uint32_t>(size)};
-    return cmd;
-}
-
-} // namespace
 
 std::vector<Resource *> Device::take_pending_init(std::vector<uint8_t> &stream)
 {

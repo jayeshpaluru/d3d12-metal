@@ -40,6 +40,7 @@ public:
     void unregister_heap(DescriptorHeap *heap);
     // The shadow view info (see ViewInfo) of the CBV/SRV/UAV descriptor at `handle`, or null.
     ViewInfo *view_info(D3D12_CPU_DESCRIPTOR_HANDLE handle);
+    DescriptorHeap *locate_view_heap(D3D12_CPU_DESCRIPTOR_HANDLE handle, size_t *index) const;
     void copy_view_info(D3D12_CPU_DESCRIPTOR_HANDLE dest, D3D12_CPU_DESCRIPTOR_HANDLE src, UINT count);
     FenceWaiter &fence_waiter() { return fence_waiter_; }
 
