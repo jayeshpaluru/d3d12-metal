@@ -227,6 +227,8 @@ void CommandList::ClearRenderTargetView(D3D12_CPU_DESCRIPTOR_HANDLE view, const 
 void CommandList::SetGraphicsRootSignature(ID3D12RootSignature *signature)
 {
     auto *rs = static_cast<RootSignature *>(signature);
+    if (rs == root_signature_)
+        return;  // the same signature keeps its bindings
     if (rs)
         rs->AddRef();
     safe_release(root_signature_);

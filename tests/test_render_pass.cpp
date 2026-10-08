@@ -110,6 +110,22 @@ int main()
     }
 
     {
+        // Setting the same root signature again keeps the root arguments.
+        Scene scene;
+        D3D12_CPU_DESCRIPTOR_HANDLE rtv = scene.ctx.rtv();
+        scene.list->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
+        scene.list->ClearRenderTargetView(rtv, blue, 0, nullptr);
+        scene.list->SetGraphicsRoot32BitConstants(0, 4, green, 0);
+        scene.list->SetGraphicsRootSignature(scene.signature.Get());
+        scene.list->DrawInstanced(3, 1, 3, 0);
+
+        ComPtr<ID3D12Resource> readback;
+        UINT row_pitch = 0;
+        CHECK(scene.run(&readback, &row_pitch) == 1);
+        check_pixel("kept constants", read_pixel(readback.Get(), row_pitch, 48, 32), {0, 255, 0, 255});
+    }
+
+    {
         // Indexed draw through an index buffer view that starts inside its buffer.
         Scene scene;
         const uint32_t indices[] = {0, 0, 0, 3, 4, 5};
