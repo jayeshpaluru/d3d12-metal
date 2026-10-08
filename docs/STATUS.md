@@ -139,6 +139,16 @@ Deferred on purpose:
 - Render pass API (`BeginRenderPass`), tiled resources, predication, depth bounds, DXR, mesh shaders, VRS.
 - Device-removed detection (a failed command buffer is logged, `GetDeviceRemovedReason` stays `S_OK`).
 
+Known hardening gaps (found by review, not yet fixed; the layer trusts a well-behaved D3D12 application):
+
+- Copy, resolve and clear records are bounds-checked by the front-end only partly; the backend does not re-check buffer and texture ranges of `copy_buffer`, `copy_texture`, resolves and UAV clears.
+- CPU descriptor handles are dereferenced as pointers (RTV/DSV, descriptor copies) without a heap lookup.
+- RTV/DSV mip and slice are not validated against the resource.
+- Command lists hold bare handles to pipeline states and query heaps (no reference), so releasing one between `Close` and execution is undefined.
+- Timestamp `ResolveQueryData` waits for the command buffer under the queue lock; a wait on a fence signalled later by another thread in the same buffer would deadlock it.
+- A placed-resource pending-init entry holds no reference (a race with the last release).
+- Samplers are not range-checked; the sampler cache is unbounded.
+
 Wine notes:
 
 - `FenceWaiter::run` runs on a Windows thread (a `std::thread` built for the PE target is one), never on a Metal callback thread. The listener blocks in `notify.mm` only lock a mutex, queue a record and notify a condition variable.

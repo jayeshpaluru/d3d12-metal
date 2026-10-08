@@ -37,7 +37,7 @@ private:
 };
 
 // Bytes an argument takes in the argument buffer (zero for arguments that read nothing from it).
-inline UINT indirect_argument_size(const D3D12_INDIRECT_ARGUMENT_DESC &argument)
+inline uint64_t indirect_argument_size(const D3D12_INDIRECT_ARGUMENT_DESC &argument)
 {
     switch (argument.Type) {
     case D3D12_INDIRECT_ARGUMENT_TYPE_DRAW: return 16;
@@ -45,7 +45,7 @@ inline UINT indirect_argument_size(const D3D12_INDIRECT_ARGUMENT_DESC &argument)
     case D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH: return 12;
     case D3D12_INDIRECT_ARGUMENT_TYPE_VERTEX_BUFFER_VIEW:
     case D3D12_INDIRECT_ARGUMENT_TYPE_INDEX_BUFFER_VIEW: return 16;
-    case D3D12_INDIRECT_ARGUMENT_TYPE_CONSTANT: return argument.Constant.Num32BitValuesToSet * 4;
+    case D3D12_INDIRECT_ARGUMENT_TYPE_CONSTANT: return uint64_t(argument.Constant.Num32BitValuesToSet) * 4;
     case D3D12_INDIRECT_ARGUMENT_TYPE_CONSTANT_BUFFER_VIEW:
     case D3D12_INDIRECT_ARGUMENT_TYPE_SHADER_RESOURCE_VIEW:
     case D3D12_INDIRECT_ARGUMENT_TYPE_UNORDERED_ACCESS_VIEW: return 8;

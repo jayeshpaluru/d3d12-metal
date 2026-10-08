@@ -36,6 +36,8 @@ CommandQueue::~CommandQueue()
 
 void CommandQueue::ExecuteCommandLists(UINT count, ID3D12CommandList *const *lists)
 {
+    if (count && !lists)
+        return;
     // All lists go to the backend in a single submit, one span per list.
     // Placed render targets and depth-stencils created since the last submission are cleared first.
     std::vector<uint8_t> init_stream;

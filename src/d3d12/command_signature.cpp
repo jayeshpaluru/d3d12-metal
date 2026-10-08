@@ -9,10 +9,10 @@ HRESULT CommandSignature::create(Device *device, const D3D12_COMMAND_SIGNATURE_D
 {
     if (!out)
         return E_POINTER;
-    if (desc.NumArgumentDescs == 0 || !desc.pArgumentDescs || desc.ByteStride == 0)
+    if (desc.NumArgumentDescs == 0 || !desc.pArgumentDescs || desc.ByteStride == 0 || desc.ByteStride % 4)
         return E_INVALIDARG;
 
-    UINT argument_bytes = 0;
+    uint64_t argument_bytes = 0;
     bool needs_root_signature = false;
     for (UINT i = 0; i < desc.NumArgumentDescs; ++i) {
         const D3D12_INDIRECT_ARGUMENT_DESC &a = desc.pArgumentDescs[i];

@@ -81,7 +81,7 @@ HRESULT Resource::init_buffer(Heap *heap, UINT64 offset)
     mtlb_buffer_info info;
     mtlb_result result;
     if (heap) {
-        if (heap->handle() == 0 || offset + desc_.Width > heap->desc().SizeInBytes)
+        if (heap->handle() == 0 || offset > heap->desc().SizeInBytes || desc_.Width > heap->desc().SizeInBytes - offset)
             return E_INVALIDARG;
         result = mtlb_buffer_create_in_heap(heap->handle(), offset, desc_.Width, &buffer_, &info);
     } else {
@@ -117,7 +117,7 @@ HRESULT Resource::init_texture(Heap *heap, UINT64 offset)
         if (offset >= heap->desc().SizeInBytes)
             return E_INVALIDARG;
         result = mtlb_texture_size_align(device()->handle(), &td, &size_align);
-        if (result == MTLB_OK && (offset % size_align.align != 0 || offset + size_align.size > heap->desc().SizeInBytes)) {
+        if (result == MTLB_OK && (offset % size_align.align != 0 || size_align.size > heap->desc().SizeInBytes - offset)) {
             D3D12M_LOG("placed texture at offset %llu: needs alignment %llu and %llu bytes, the heap has %llu",
                        static_cast<unsigned long long>(offset), static_cast<unsigned long long>(size_align.align),
                        static_cast<unsigned long long>(size_align.size),

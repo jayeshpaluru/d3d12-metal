@@ -562,6 +562,10 @@ void CommandList::WriteBufferImmediate(UINT count, const D3D12_WRITEBUFFERIMMEDI
 {
     // Every write happens in order with the commands around it, which satisfies all the modes.
     for (UINT i = 0; i < count && params; ++i) {
+        if (params[i].Dest % 4) {
+            D3D12M_LOG("WriteBufferImmediate: unaligned destination");
+            continue;
+        }
         auto *cmd = append<mtlb_cmd_write_immediate>(MTLB_CMD_WRITE_IMMEDIATE);
         cmd->address = params[i].Dest;
         cmd->value = params[i].Value;
@@ -579,6 +583,9 @@ void CommandList::ExecuteBundle(ID3D12GraphicsCommandList *bundle_ptr)
         D3D12M_LOG("ExecuteBundle needs a closed bundle of this layer on a direct or compute list");
         return;
     }
+    // Arguments the list has set but not yet recorded must precede the bundle's commands.
+    flush_root_args(graphics_, MTLB_CMD_SET_GRAPHICS_ROOT_ARGS);
+    flush_root_args(compute_, MTLB_CMD_SET_COMPUTE_ROOT_ARGS);
     // The stream starts with a RESET_STATE record, which would wipe the state the bundle inherits.
     const size_t skip = mtlb_cmd_align(sizeof(mtlb_cmd_reset_state));
     const std::vector<uint8_t> &source = bundle->stream_;
@@ -667,6 +674,7 @@ void CommandList::clear_uav(D3D12_CPU_DESCRIPTOR_HANDLE view_handle, ID3D12Resou
     const DXGI_FORMAT format = view->format == DXGI_FORMAT_UNKNOWN ? resource->desc().Format : view->format;
     const bool known = get_format_info(format, &info);
     (void)known;
+    uint32_t converted_values[4];
     // The value is written through a typed texture: float formats take floats, integer formats integers.
     uint32_t kind = from_float ? MTLB_CLEAR_FLOAT : MTLB_CLEAR_UINT;
     switch (format) {
@@ -688,7 +696,8 @@ void CommandList::clear_uav(D3D12_CPU_DESCRIPTOR_HANDLE view_handle, ID3D12Resou
             for (int i = 0; i < 4; ++i)
                 converted[i] = static_cast<float>(values[i]);
             D3D12M_LOG("ClearUnorderedAccessViewUint on a non-integer texture format converts the values to float");
-            std::memcpy(const_cast<uint32_t *>(values), converted, sizeof(converted));
+            std::memcpy(converted_values, converted, sizeof(converted));
+            values = converted_values;
         }
         kind = MTLB_CLEAR_FLOAT;
     }
@@ -783,7 +792,7 @@ void CommandList::ExecuteIndirect(ID3D12CommandSignature *signature_ptr, UINT ma
         switch (a.Type) {
         case D3D12_INDIRECT_ARGUMENT_TYPE_CONSTANT: {
             const RootSignature::Slot *slot = find_slot(root, a.Constant.RootParameterIndex, D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS);
-            if (!slot || (a.Constant.DestOffsetIn32BitValues + a.Constant.Num32BitValuesToSet) * 4 > slot->size)
+            if (!slot || (uint64_t(a.Constant.DestOffsetIn32BitValues) + a.Constant.Num32BitValuesToSet) * 4 > slot->size)
                 return;
             arg.type = MTLB_INDIRECT_ARG_CONSTANT;
             arg.dst_offset = slot->offset + a.Constant.DestOffsetIn32BitValues * 4;

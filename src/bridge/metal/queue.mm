@@ -1156,6 +1156,13 @@ mtlb_result Replay::execute_indirect(const mtlb_cmd_execute_indirect &cmd)
     Buffer *count = cmd.count_address ? find_buffer(queue_->device, cmd.count_address, &count_offset) : nullptr;
     if (!arguments || (cmd.count_address && !count))
         return fail(MTLB_ERROR_INVALID_ARGUMENT, "indirect argument or count buffer not found");
+    // The commands must lie inside the argument buffer, and so must what the translation writes into the records.
+    const uint32_t action_bytes = cmd.action == MTLB_INDIRECT_DRAW_INDEXED ? 20 : cmd.action == MTLB_INDIRECT_DRAW ? 16 : 12;
+    const uint64_t first_end = arg_offset + cmd.action_src_offset + action_bytes;
+    if (first_end > arguments->size || cmd.stride % 4)
+        return fail(MTLB_ERROR_INVALID_ARGUMENT, "indirect commands do not fit the argument buffer");
+    const uint32_t max_count = static_cast<uint32_t>(
+        std::min<uint64_t>(cmd.max_count, (arguments->size - first_end) / cmd.stride + 1));
     const bool graphics = cmd.action != MTLB_INDIRECT_DISPATCH;
     const bool direct = cmd.num_args == 0 && !cmd.count_address;
     if (graphics && !state_.pipeline)
@@ -1166,10 +1173,22 @@ mtlb_result Replay::execute_indirect(const mtlb_cmd_execute_indirect &cmd)
     if (!direct) {
         const uint8_t *root = graphics ? state_.root_args : state_.compute_root_args;
         root_size = graphics ? state_.root_args_size : state_.compute_root_args_size;
+        for (uint32_t k = 0; k < cmd.num_args; ++k) {
+            const mtlb_indirect_arg &arg = cmd.args[k];
+            const uint64_t size = arg.type == MTLB_INDIRECT_ARG_CONSTANT ? arg.size
+                                  : arg.type == MTLB_INDIRECT_ARG_POINTER ? 8
+                                  : arg.type == MTLB_INDIRECT_ARG_VERTEX_BUFFER ? 16 : 4;
+            const uint64_t source_size = arg.type == MTLB_INDIRECT_ARG_COMMAND_INDEX ? 0 : size;
+            const bool to_root = arg.type != MTLB_INDIRECT_ARG_VERTEX_BUFFER;
+            if (arg.type < MTLB_INDIRECT_ARG_CONSTANT || arg.type > MTLB_INDIRECT_ARG_COMMAND_INDEX
+                || uint64_t(arg.src_offset) + source_size > cmd.stride
+                || (to_root ? uint64_t(arg.dst_offset) + size > root_size : arg.dst_offset >= MTLB_MAX_VERTEX_BUFFERS))
+                return fail(MTLB_ERROR_INVALID_ARGUMENT, "indirect argument outside its destination");
+        }
         vb_offset = (root_size + 15) & ~15u;
         action_offset = vb_offset + sizeof(state_.vertex_buffers);  // 496 bytes, a multiple of 16
         record_size = (action_offset + 32 + 15) & ~15u;
-        scratch = [queue_->device->device newBufferWithLength:uint64_t(record_size) * cmd.max_count
+        scratch = [queue_->device->device newBufferWithLength:uint64_t(record_size) * max_count
                                                       options:MTLResourceStorageModePrivate | MTLResourceHazardTrackingModeUntracked];
         if (!scratch)
             return fail(MTLB_ERROR_OUT_OF_MEMORY, "indirect scratch buffer");
@@ -1183,7 +1202,7 @@ mtlb_result Replay::execute_indirect(const mtlb_cmd_execute_indirect &cmd)
         struct Params {
             uint32_t action, max_count, stride, action_src, num_args, root_size, vb_offset, action_offset, record_size,
                 has_count, pad[2];
-        } params = {cmd.action, cmd.max_count, cmd.stride, cmd.action_src_offset, cmd.num_args, root_size, vb_offset,
+        } params = {cmd.action, max_count, cmd.stride, cmd.action_src_offset, cmd.num_args, root_size, vb_offset,
                     action_offset, record_size, cmd.count_address ? 1u : 0u, {}};
         const uint64_t base[2] = {arg_offset, count_offset};
         const uint8_t zeros[16] = {};
@@ -1199,7 +1218,7 @@ mtlb_result Replay::execute_indirect(const mtlb_cmd_execute_indirect &cmd)
         [enc setBytes:&params length:sizeof(params) atIndex:5];
         [enc setBytes:base length:sizeof(base) atIndex:6];
         [enc setBuffer:(count ? count : arguments)->buffer offset:0 atIndex:7];
-        [enc dispatchThreads:MTLSizeMake(cmd.max_count, 1, 1) threadsPerThreadgroup:MTLSizeMake(std::min<NSUInteger>(cmd.max_count, 64), 1, 1)];
+        [enc dispatchThreads:MTLSizeMake(max_count, 1, 1) threadsPerThreadgroup:MTLSizeMake(std::min<NSUInteger>(max_count, 64), 1, 1)];
         dirty_compute_ = kAll;
         if (graphics) {
             end_compute();       // the draws below wait for the kernel
@@ -1222,7 +1241,7 @@ mtlb_result Replay::execute_indirect(const mtlb_cmd_execute_indirect &cmd)
         id<MTLComputeCommandEncoder> enc = prepare_dispatch();
         if (!enc)
             return MTLB_ERROR_DEVICE;
-        for (uint32_t i = 0; i < cmd.max_count; ++i) {
+        for (uint32_t i = 0; i < max_count; ++i) {
             uint64_t offset;
             id<MTLBuffer> buffer = source(i, &offset);
             if (!direct && root_size)
@@ -1240,7 +1259,7 @@ mtlb_result Replay::execute_indirect(const mtlb_cmd_execute_indirect &cmd)
         return result;
     if (cmd.action == MTLB_INDIRECT_DRAW_INDEXED && (!state_.index_buffer || (state_.index_size != 2 && state_.index_size != 4)))
         return fail(MTLB_ERROR_INVALID_ARGUMENT, "indexed indirect draw without a valid index buffer");
-    for (uint32_t i = 0; i < cmd.max_count; ++i) {
+    for (uint32_t i = 0; i < max_count; ++i) {
         uint64_t offset;
         id<MTLBuffer> buffer = source(i, &offset);
         if (!direct) {
@@ -1323,7 +1342,7 @@ mtlb_result Replay::clear_texture_uav(const mtlb_cmd_clear_texture_uav &cmd)
     if (!kernel)
         return MTLB_ERROR_COMPILE_FAILED;
     const uint32_t width = cmd.width ? cmd.width : static_cast<uint32_t>(view.width) - std::min<uint32_t>(cmd.x, static_cast<uint32_t>(view.width));
-    const uint32_t height = cmd.width ? cmd.height : static_cast<uint32_t>(view.height) - std::min<uint32_t>(cmd.y, static_cast<uint32_t>(view.height));
+    const uint32_t height = cmd.height ? cmd.height : static_cast<uint32_t>(view.height) - std::min<uint32_t>(cmd.y, static_cast<uint32_t>(view.height));
     const uint32_t region[4] = {cmd.x, cmd.y, width, height};
     const NSUInteger depth = view.textureType == MTLTextureType3D ? view.depth
                              : view.textureType == MTLTextureType2DArray ? view.arrayLength : 1;
