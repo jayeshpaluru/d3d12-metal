@@ -194,3 +194,16 @@ Wine notes:
 - `FenceWaiter::run` runs on a Windows thread (a `std::thread` built for the PE target is one), never on a Metal callback thread. The listener blocks in `notify.mm` only lock a mutex, queue a record and notify a condition variable.
 - `platform_set_event` calls `SetEvent` in `_WIN32` builds; the native build uses the small event object in `src/common/platform.cpp`.
 - Every bridge call is a unix call: a trivial one (`ID3D12Fence::GetCompletedValue`) costs about 350 ns round trip under Rosetta, measured over 200000 calls. The triangle sample makes a handful per frame. A busy game will want `mtlb_format_get_info` and similar pure lookups answered on the PE side, and descriptor writes batched.
+
+## Spider-Man Remastered (milestone 5, in progress)
+
+- Boots to a window and renders frames (black so far). Findings on the way:
+  - The "hang" was a modal `MessageBoxW` ("No installed graphics card has been detected"), invisible while the display slept.
+    The game finds the driver through `HKLM\System\CurrentControlSet\Enum\PCI\VEN_x&DEV_x&SUBSYS_x&REV_x` (`DriverVersion`),
+    so the adapter now reports the PCI ids Wine registered (`EnumDisplayDevices` DeviceID) instead of device id 0.
+    `vendor_id` / `device_id` in d3d12metal.conf override them.
+  - The AMD GPU Services library reads dxgi.dll's export table itself; a forwarder RVA crashed it (jump into the string table).
+    dxgi.dll now exports real functions (`tests/wine/exports_test.cpp`).
+  - crs-video.exe (crash reporter helper) crashes on Wine's `ApiInformation` stub; harmless, ignore.
+- Next blocker: 32 small DXBC (SM4/5) shaders (Bink 2 video) are refused by the converter (`IRErrorCodeUnrecognizedDXILHeader`).
+  Failed pipeline creation is not cached, so it is retried every frame.

@@ -55,6 +55,4 @@ if [ "$dry_run" = 0 ] && wine_cmd reg query "$override_key" >/dev/null 2>&1 \
    && ! wine_cmd reg query "$override_key" 2>/dev/null | grep -q REG_; then
     wine_cmd reg delete "$override_key" /f >/dev/null
 fi
-echo "registry:     ApiInformation -> $apiinfo_builtin"
-run wine_cmd reg add "$apiinfo_key" /v DllPath /t REG_SZ /d "$apiinfo_builtin" /f >/dev/null
 echo "done."

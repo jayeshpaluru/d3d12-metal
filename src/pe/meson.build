@@ -19,11 +19,3 @@ dxgi_dll = shared_library(
   vs_module_defs: 'dxgi.def',
   link_with: d3d12_dll,
 )
-
-winrt_shim_dll = shared_library(
-  'winrt_shim',
-  'winrt_shim.c',
-  name_prefix: '',
-  vs_module_defs: 'winrt_shim.def',
-  c_args: ['-Wno-unused-parameter'],
-)
