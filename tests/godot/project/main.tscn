@@ -1,0 +1,71 @@
+[gd_scene load_steps=12 format=3]
+
+[ext_resource type="Script" path="res://main.gd" id="1"]
+
+[sub_resource type="ProceduralSkyMaterial" id="sky_mat"]
+sky_top_color = Color(0.2, 0.45, 0.9, 1)
+sky_horizon_color = Color(0.65, 0.78, 0.95, 1)
+
+[sub_resource type="Sky" id="sky"]
+sky_material = SubResource("sky_mat")
+
+[sub_resource type="Environment" id="env"]
+background_mode = 2
+sky = SubResource("sky")
+ambient_light_source = 3
+tonemap_mode = 2
+
+[sub_resource type="StandardMaterial3D" id="mat_red"]
+albedo_color = Color(0.9, 0.2, 0.15, 1)
+metallic = 0.2
+roughness = 0.4
+
+[sub_resource type="StandardMaterial3D" id="mat_floor"]
+albedo_color = Color(0.7, 0.7, 0.7, 1)
+
+[sub_resource type="BoxMesh" id="box"]
+size = Vector3(1.5, 1.5, 1.5)
+
+[sub_resource type="SphereMesh" id="sphere"]
+radius = 0.8
+height = 1.6
+
+[sub_resource type="PlaneMesh" id="plane"]
+size = Vector2(12, 12)
+
+[node name="Main" type="Node3D"]
+script = ExtResource("1")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("env")
+
+[node name="Sun" type="DirectionalLight3D" parent="."]
+transform = Transform3D(0.866, -0.25, 0.433, 0, 0.866, 0.5, -0.5, -0.433, 0.75, 0, 5, 0)
+shadow_enabled = true
+
+[node name="Camera" type="Camera3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 0.9, 0.436, 0, -0.436, 0.9, 0, 3.2, 5.5)
+current = true
+fov = 60.0
+
+[node name="Floor" type="MeshInstance3D" parent="."]
+mesh = SubResource("plane")
+surface_material_override/0 = SubResource("mat_floor")
+
+[node name="Box" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1.4, 0.75, 0)
+mesh = SubResource("box")
+surface_material_override/0 = SubResource("mat_red")
+
+[node name="Sphere" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1.4, 0.8, 0)
+mesh = SubResource("sphere")
+
+[node name="UI" type="CanvasLayer" parent="."]
+
+[node name="Label" type="Label" parent="UI"]
+offset_left = 10.0
+offset_top = 8.0
+offset_right = 300.0
+offset_bottom = 34.0
+text = "d3d12-metal Godot test"
