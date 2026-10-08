@@ -18,6 +18,9 @@ set -euo pipefail
 WINE_ROOT="${WINE_ROOT:-/Users/jsp/code/deps/wine/Wine Devel.app/Contents/Resources/wine}"
 export WINEPREFIX="${STEAM_WINEPREFIX:-/Users/jsp/code/deps/wineprefix-steam}"
 export WINEDEBUG="${WINEDEBUG:--all}"
+# Rosetta hides AVX/AVX2/FMA/F16C from x86 code unless asked; Spider-Man 2
+# requires AVX2 and F16C. Games launched by Steam inherit this.
+export ROSETTA_ADVERTISE_AVX="${ROSETTA_ADVERTISE_AVX:-1}"
 if [ "${1:-}" = "--restart" ]; then
     shift
     "$WINE_ROOT/bin/wineserver" -k || true
