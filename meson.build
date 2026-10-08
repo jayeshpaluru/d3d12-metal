@@ -44,6 +44,7 @@ portable_tests = [
   ['sdk', [], []],
   ['renderpass', ['color'], []],
   ['descbench', [], []],
+  ['psothreads', ['instanced'], ['fill']],
 ]
 
 bridge_sources = []

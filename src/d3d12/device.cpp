@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "common/luid.h"
+#include "common/platform.h"
 #include "d3d12/command_allocator.h"
 #include "d3d12/command_list.h"
 #include "d3d12/command_queue.h"
@@ -165,6 +166,7 @@ HRESULT Device::create(IUnknown *adapter, ID3D12Device10 **out)
     }
 
     auto *device = new Device();
+    mtlb_cache_configure(platform_executable_name().c_str());
     if (mtlb_device_create(registry_id, &device->device_) != MTLB_OK || mtlb_device_get_caps(device->device_, &device->caps_) != MTLB_OK) {
         D3D12M_LOG("no usable Metal device: %s", mtlb_last_error());
         device->Release();

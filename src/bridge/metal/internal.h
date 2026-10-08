@@ -19,6 +19,7 @@
 #include <metal_irconverter/metal_irconverter.h>
 
 #include "bridge/mtlb.h"
+#include "disk_cache.h"
 
 namespace mtlb {
 
@@ -35,6 +36,7 @@ struct ShaderStage {
     std::shared_ptr<IRShaderReflection> reflection;  // kept for stage-in synthesis
     uint32_t num_vertex_inputs = 0;
     uint32_t threadgroup_size[3] = {1, 1, 1};  // compute stages
+    CacheKey cache_key{};                      // identifies the converted shader in the disk cache
 
     // Vertex stage-in functions synthesized for this shader, by serialized input layout.
     std::mutex stage_in_mutex;
@@ -155,6 +157,7 @@ struct RootSignature {
     Device *device;
     uint64_t id;  // unique for the process lifetime, so cache keys never see a reused address
     IRRootSignature *ir;
+    std::array<uint8_t, 32> blob_hash;  // SHA-256 of the serialized root signature the converter was given
 };
 
 struct Pipeline {

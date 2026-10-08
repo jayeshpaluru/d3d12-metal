@@ -216,6 +216,21 @@ MTLB_EXPORT mtlb_result mtlb_query_caps(uint64_t registry_id, mtlb_device_caps *
 MTLB_EXPORT mtlb_result mtlb_enum_devices(uint32_t index, mtlb_device_caps *out);
 MTLB_EXPORT mtlb_result mtlb_device_get_caps(mtlb_device device, mtlb_device_caps *out);
 
+/* The on-disk cache of converted shaders. It lives in ~/Library/Caches/d3d12metal/<app_name>
+ * (D3D12METAL_CACHE_DIR replaces the whole path, D3D12METAL_CACHE=0 turns it off,
+ * D3D12METAL_CACHE_MAX_MB sets the size limit, 1024 by default). `app_name` is the
+ * executable's name; call this before the first pipeline is created (later calls are ignored). */
+MTLB_EXPORT void mtlb_cache_configure(const char *app_name);
+
+typedef struct mtlb_cache_stats {
+    uint64_t hits, misses;     /* lookups: found, not found */
+    uint64_t writes;           /* entries stored */
+    uint64_t corrupt;          /* entries rejected (damaged, wrong version) and rebuilt */
+    uint64_t evicted;          /* files deleted to stay under the size limit */
+    uint64_t bytes_on_disk;    /* current size of the cache directory */
+} mtlb_cache_stats;
+MTLB_EXPORT void mtlb_cache_get_stats(mtlb_cache_stats *out);
+
 /* ------------------------------------------------------------------------ */
 /* Buffers                                                                  */
 /* ------------------------------------------------------------------------ */
@@ -671,6 +686,7 @@ MTLB_ASSERT_SIZE(mtlb_span, 16);
 MTLB_ASSERT_OFFSET(mtlb_span, size, 8);
 MTLB_ASSERT_SIZE(mtlb_format_info, 16);
 MTLB_ASSERT_SIZE(mtlb_device_caps, 304);
+MTLB_ASSERT_SIZE(mtlb_cache_stats, 48);
 MTLB_ASSERT_SIZE(mtlb_buffer_info, 24);
 MTLB_ASSERT_OFFSET(mtlb_buffer_info, gpu_address, 8);
 MTLB_ASSERT_SIZE(mtlb_descriptor, 24);

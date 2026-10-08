@@ -2,6 +2,7 @@
 
 #ifndef _WIN32
 #include <mach/mach_time.h>
+#include <stdlib.h>
 #endif
 
 #ifdef _WIN32
@@ -33,6 +34,20 @@ HWND platform_root_window(HWND window)
 HANDLE platform_create_event(bool signaled)
 {
     return CreateEventW(nullptr, TRUE, signaled ? TRUE : FALSE, nullptr);
+}
+
+std::string platform_executable_name()
+{
+    char path[MAX_PATH];
+    const DWORD length = GetModuleFileNameA(nullptr, path, MAX_PATH);
+    std::string name(path, length < MAX_PATH ? length : 0);
+    const size_t slash = name.find_last_of("\\/");
+    if (slash != std::string::npos)
+        name.erase(0, slash + 1);
+    const size_t dot = name.rfind('.');
+    if (dot != std::string::npos && dot > 0)
+        name.erase(dot);
+    return name;
 }
 
 uint64_t platform_performance_counter()
@@ -102,6 +117,11 @@ HWND platform_root_window(HWND window)
 HANDLE platform_create_event(bool)
 {
     return nullptr;
+}
+
+std::string platform_executable_name()
+{
+    return getprogname();
 }
 
 uint64_t platform_performance_counter()

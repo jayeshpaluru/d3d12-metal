@@ -1,4 +1,6 @@
 test_deps = [directx_headers]
+# Tests share one throwaway shader cache instead of filling the user's.
+test_env = {'D3D12METAL_CACHE_DIR': meson.current_build_dir() / 'shader-cache'}
 test_inc = include_directories('.', '../src')
 
 # HLSL -> DXIL header arrays, one per shader stage.
@@ -45,6 +47,7 @@ tests = [
   ['test_queue_sync', []],
   ['test_rootsig', []],
   ['test_descriptors', []],
+  ['test_shader_cache', ['instanced'], ['fill']],
   ['test_triangle', ['color']],
   ['test_cbv_table', ['color']],
   ['test_render_pass', ['color']],
@@ -64,7 +67,13 @@ foreach t : tests
     dependencies: test_deps,
     link_with: d3d12_metal,
   )
-  test(t[0], exe, timeout: 60)
+  test(t[0], exe, timeout: 60, env: test_env)
+  if t[0] == 'test_shader_cache'
+    shader_cache_exe = exe
+    foreach mode : ['disabled', 'evict']  # the same program in two more modes (see its header)
+      test('test_shader_cache_' + mode, exe, args: [mode], timeout: 120, env: test_env)
+    endforeach
+  endif
 endforeach
 
 foreach t : portable_tests
@@ -81,7 +90,7 @@ foreach t : portable_tests
     dependencies: test_deps,
     link_with: d3d12_metal,
   )
-  test('p_' + t[0], exe, timeout: 120)
+  test('p_' + t[0], exe, timeout: 120, env: test_env)
 endforeach
 
 # The swap chain test: its Objective-C half (a layer standing in for a window) is a separate file.
@@ -92,4 +101,4 @@ test_swapchain = executable(
   objcpp_args: ['-fobjc-arc'],
   link_with: d3d12_metal,
 )
-test('test_swapchain', test_swapchain, timeout: 60)
+test('test_swapchain', test_swapchain, timeout: 60, env: test_env)

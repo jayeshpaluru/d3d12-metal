@@ -31,6 +31,9 @@ void platform_reset_event(HANDLE event);
 HANDLE platform_duplicate_event(HANDLE event);
 void platform_close_event(HANDLE event);
 
+// The name of the running executable without directory or extension ("game" for C:\\Games\\game.exe).
+std::string platform_executable_name();
+
 // The CPU clock the application sees (QueryPerformanceCounter), for GetClockCalibration.
 uint64_t platform_performance_counter();
 

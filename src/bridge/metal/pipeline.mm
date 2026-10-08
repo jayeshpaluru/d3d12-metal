@@ -45,6 +45,12 @@ std::string error_text(IRError *error, const char *what)
     return text;
 }
 
+// The converter settings every shader is compiled with (they are part of the disk cache key).
+constexpr IRCompatibilityFlags kCompatibilityFlags = static_cast<IRCompatibilityFlags>(
+    IRCompatibilityFlagBoundsCheck | IRCompatibilityFlagTextureMinLODClamp | IRCompatibilityFlagSamplerLODBias
+    | IRCompatibilityFlagSampleNanToZero | IRCompatibilityFlagPositionInvariance);
+constexpr uint32_t kCacheRevision = 1;  // bump when the conversion changes in a way the key does not capture
+
 // One compiler per thread: creating one per stage per pipeline is wasteful.
 IRCompiler *thread_compiler()
 {
@@ -57,9 +63,7 @@ IRCompiler *thread_compiler()
         // D3D12 semantics the converter leaves off by default: out-of-bounds buffer and texture reads
         // return zero (and writes are dropped), the descriptors' min LOD clamp and the samplers' LOD bias
         // are applied, NaN coordinates sample as zero, and equal vertex shaders give equal positions.
-        IRCompilerSetCompatibilityFlags(compiler.ptr, static_cast<IRCompatibilityFlags>(
-            IRCompatibilityFlagBoundsCheck | IRCompatibilityFlagTextureMinLODClamp | IRCompatibilityFlagSamplerLODBias
-            | IRCompatibilityFlagSampleNanToZero | IRCompatibilityFlagPositionInvariance));
+        IRCompilerSetCompatibilityFlags(compiler.ptr, kCompatibilityFlags);
     }
     return compiler.ptr;
 }
@@ -73,42 +77,16 @@ uint64_t hash_bytes(const void *data, uint64_t size)
     return hash;
 }
 
-// Converts one DXIL shader against `root_signature` and loads its Metal function.
-mtlb_result convert_stage(Device *device, RootSignature *root_signature, const void *dxil, uint64_t size,
-                          const char *entry, IRShaderStage ir_stage, ShaderStage &out)
+// Loads a converted shader's Metal function and reflection into `out`.
+mtlb_result finish_stage(Device *device, dispatch_data_t bytecode, std::shared_ptr<IRShaderReflection> reflection,
+                         IRShaderStage ir_stage, ShaderStage &out)
 {
-    IRCompiler *compiler = thread_compiler();
-    IRCompilerSetGlobalRootSignature(compiler, root_signature->ir);
-
-    OwnedObject input(IRObjectCreateFromDXIL(static_cast<const uint8_t *>(dxil), size, IRBytecodeOwnershipNone));
-    IRError *error = nullptr;
-    OwnedObject output(IRCompilerAllocCompileAndLink(compiler, entry, input.ptr, &error));
-    // The compiler outlives root signatures; do not leave it pointing at this one.
-    IRCompilerSetGlobalRootSignature(compiler, nullptr);
-    if (!output.ptr) {
-        // D3D12METAL_DUMP_FAILED=<dir> keeps the shaders the converter rejects, for inspection with dxc -dumpbin.
-        if (const char *dir = std::getenv("D3D12METAL_DUMP_FAILED")) {
-            std::string path = std::string(dir) + "/failed_" + std::to_string(hash_bytes(dxil, size)) + ".dxil";
-            fprintf(stderr, "dump %s\n", path.c_str());
-            if (FILE *f = std::fopen(path.c_str(), "wb")) {
-                std::fwrite(dxil, 1, size, f);
-                std::fclose(f);
-            }
-        }
-        return fail(MTLB_ERROR_COMPILE_FAILED, error_text(error, "DXIL conversion failed"));
-    }
-
-    OwnedMetalLib metallib(IRMetalLibBinaryCreate());
-    if (!IRObjectGetMetalLibBinary(output.ptr, ir_stage, metallib.ptr))
-        return fail(MTLB_ERROR_COMPILE_FAILED, "converted shader has no metallib for the requested stage");
-
-    std::shared_ptr<IRShaderReflection> reflection(IRShaderReflectionCreate(), IRShaderReflectionDestroy);
-    if (!IRObjectGetReflection(output.ptr, ir_stage, reflection.get()))
-        return fail(MTLB_ERROR_COMPILE_FAILED, "shader reflection unavailable");
     const char *function_name = IRShaderReflectionGetEntryPointFunctionName(reflection.get());
+    if (!function_name)
+        return fail(MTLB_ERROR_COMPILE_FAILED, "shader reflection has no entry point");
 
     NSError *ns_error = nil;
-    id<MTLLibrary> library = [device->device newLibraryWithData:IRMetalLibGetBytecodeData(metallib.ptr) error:&ns_error];
+    id<MTLLibrary> library = [device->device newLibraryWithData:bytecode error:&ns_error];
     if (!library)
         return fail(MTLB_ERROR_COMPILE_FAILED, std::string("newLibraryWithData: ") + ns_error.localizedDescription.UTF8String);
     out.function = [library newFunctionWithName:[NSString stringWithUTF8String:function_name]];
@@ -128,9 +106,96 @@ mtlb_result convert_stage(Device *device, RootSignature *root_signature, const v
             return fail(MTLB_ERROR_COMPILE_FAILED, "vertex reflection unavailable");
         out.num_vertex_inputs = static_cast<uint32_t>(info.info_1_0.num_vertex_inputs);
         IRShaderReflectionReleaseVertexInfo(&info);
-        out.reflection = reflection;
+        out.reflection = std::move(reflection);
     }
     return MTLB_OK;
+}
+
+dispatch_data_t bytecode_data(const std::vector<uint8_t> &bytes)
+{
+    return dispatch_data_create(bytes.data(), bytes.size(), nullptr, DISPATCH_DATA_DESTRUCTOR_DEFAULT);
+}
+
+// The disk cache key of a converted shader: everything its conversion depends on.
+CacheKey stage_key(RootSignature *root_signature, const void *dxil, uint64_t size, const char *entry, IRShaderStage ir_stage)
+{
+    Hasher h;
+    h.update(std::string("stage"));
+    h.update(DiskCache::converter_identity());
+    h.update_value(kCacheRevision);
+    h.update_value(static_cast<uint32_t>(kCompatibilityFlags));
+    h.update_value(static_cast<uint32_t>(ir_stage));
+    h.update(std::string(entry ? entry : ""));
+    h.update_value('\0');
+    h.update(root_signature->blob_hash.data(), root_signature->blob_hash.size());
+    h.update_value(size);
+    h.update(dxil, size);
+    return h.finish();
+}
+
+// Converts one DXIL shader against `root_signature` and loads its Metal function, or loads the converter's
+// earlier output from the disk cache.
+mtlb_result convert_stage(Device *device, RootSignature *root_signature, const void *dxil, uint64_t size,
+                          const char *entry, IRShaderStage ir_stage, ShaderStage &out)
+{
+    DiskCache &cache = DiskCache::instance();
+    const bool use_cache = cache.enabled();
+    CacheKey key{};
+    if (use_cache) {
+        key = stage_key(root_signature, dxil, size, entry, ir_stage);
+        std::vector<uint8_t> metallib;
+        std::string json;
+        if (cache.load(CacheKind::Stage, key, metallib, json)) {
+            std::shared_ptr<IRShaderReflection> reflection(IRShaderReflectionCreateFromJSON(json.c_str()), IRShaderReflectionDestroy);
+            if (reflection && finish_stage(device, bytecode_data(metallib), reflection, ir_stage, out) == MTLB_OK) {
+                out.cache_key = key;
+                return MTLB_OK;
+            }
+            out.function = nil;  // an entry the converter or Metal rejects: rebuild it below
+            out.reflection.reset();
+            cache.stats().corrupt++;
+        }
+    }
+
+    IRCompiler *compiler = thread_compiler();
+    IRCompilerSetGlobalRootSignature(compiler, root_signature->ir);
+
+    OwnedObject input(IRObjectCreateFromDXIL(static_cast<const uint8_t *>(dxil), size, IRBytecodeOwnershipNone));
+    IRError *error = nullptr;
+    OwnedObject output(IRCompilerAllocCompileAndLink(compiler, entry, input.ptr, &error));
+    // The compiler outlives root signatures; do not leave it pointing at this one.
+    IRCompilerSetGlobalRootSignature(compiler, nullptr);
+    if (!output.ptr) {
+        // D3D12METAL_DUMP_FAILED=<dir> keeps the shaders the converter rejects, for inspection with dxc -dumpbin.
+        if (const char *dir = std::getenv("D3D12METAL_DUMP_FAILED")) {
+            std::string path = std::string(dir) + "/failed_" + std::to_string(hash_bytes(dxil, size)) + ".dxil";
+            if (FILE *f = std::fopen(path.c_str(), "wb")) {
+                std::fwrite(dxil, 1, size, f);
+                std::fclose(f);
+            }
+        }
+        return fail(MTLB_ERROR_COMPILE_FAILED, error_text(error, "DXIL conversion failed"));
+    }
+
+    OwnedMetalLib metallib(IRMetalLibBinaryCreate());
+    if (!IRObjectGetMetalLibBinary(output.ptr, ir_stage, metallib.ptr))
+        return fail(MTLB_ERROR_COMPILE_FAILED, "converted shader has no metallib for the requested stage");
+
+    std::shared_ptr<IRShaderReflection> reflection(IRShaderReflectionCreate(), IRShaderReflectionDestroy);
+    if (!IRObjectGetReflection(output.ptr, ir_stage, reflection.get()))
+        return fail(MTLB_ERROR_COMPILE_FAILED, "shader reflection unavailable");
+    out.cache_key = key;
+    mtlb_result result = finish_stage(device, IRMetalLibGetBytecodeData(metallib.ptr), reflection, ir_stage, out);
+    if (result == MTLB_OK && use_cache) {
+        std::vector<uint8_t> bytes(IRMetalLibGetBytecodeSize(metallib.ptr));
+        IRMetalLibGetBytecode(metallib.ptr, bytes.data());
+        const char *json = IRShaderReflectionCopyJSONString(reflection.get());
+        if (json) {
+            cache.store(CacheKind::Stage, key, bytes.data(), bytes.size(), json);
+            IRShaderReflectionReleaseString(json);
+        }
+    }
+    return result;
 }
 
 // Returns the converted stage from the device cache, converting it on a miss.
@@ -309,16 +374,42 @@ mtlb_result get_stage_in(Device *device, ShaderStage &vs, const mtlb_pipeline_de
         *out = it->second;
         return MTLB_OK;
     }
+    DiskCache &cache = DiskCache::instance();
+    const bool use_cache = cache.enabled();
+    CacheKey disk_key{};
+    dispatch_data_t bytecode = nil;
     OwnedMetalLib metallib(IRMetalLibBinaryCreate());
-    if (!IRMetalLibSynthesizeStageInFunction(thread_compiler(), vs.reflection.get(), &layout, metallib.ptr))
-        return fail(MTLB_ERROR_COMPILE_FAILED, "stage-in function synthesis failed for the input layout");
+    if (use_cache) {
+        Hasher h;
+        h.update(std::string("stagein"));
+        h.update(DiskCache::converter_identity());
+        h.update_value(kCacheRevision);
+        h.update(vs.cache_key.data(), vs.cache_key.size());
+        h.update(key);  // the layout
+        disk_key = h.finish();
+        std::vector<uint8_t> cached;
+        std::string unused;
+        if (cache.load(CacheKind::StageIn, disk_key, cached, unused))
+            bytecode = bytecode_data(cached);
+    }
+    const bool from_cache = bytecode != nil;
+    if (!from_cache) {
+        if (!IRMetalLibSynthesizeStageInFunction(thread_compiler(), vs.reflection.get(), &layout, metallib.ptr))
+            return fail(MTLB_ERROR_COMPILE_FAILED, "stage-in function synthesis failed for the input layout");
+        bytecode = IRMetalLibGetBytecodeData(metallib.ptr);
+    }
     NSError *ns_error = nil;
-    id<MTLLibrary> library = [device->device newLibraryWithData:IRMetalLibGetBytecodeData(metallib.ptr) error:&ns_error];
+    id<MTLLibrary> library = [device->device newLibraryWithData:bytecode error:&ns_error];
     if (!library)
         return fail(MTLB_ERROR_COMPILE_FAILED, std::string("stage-in library: ") + ns_error.localizedDescription.UTF8String);
     id<MTLFunction> function = [library newFunctionWithName:library.functionNames.firstObject];
     if (!function)
         return fail(MTLB_ERROR_COMPILE_FAILED, "stage-in function missing from its library");
+    if (use_cache && !from_cache) {
+        std::vector<uint8_t> bytes(IRMetalLibGetBytecodeSize(metallib.ptr));
+        IRMetalLibGetBytecode(metallib.ptr, bytes.data());
+        cache.store(CacheKind::StageIn, disk_key, bytes.data(), bytes.size(), std::string());
+    }
     vs.stage_ins.emplace(std::move(key), function);
     *out = function;
     return MTLB_OK;
@@ -524,8 +615,10 @@ extern "C" mtlb_result mtlb_root_signature_create(mtlb_device handle, const void
     }
     layout->argument_buffer_size = static_cast<uint32_t>((end + 7) & ~uint64_t(7));
 
+    Hasher blob_hasher;
+    blob_hasher.update(blob, size);
     static std::atomic<uint64_t> next_id{1};
-    *out = to_handle(new RootSignature{device, next_id++, root_signature.ptr});
+    *out = to_handle(new RootSignature{device, next_id++, root_signature.ptr, blob_hasher.finish()});
     root_signature.ptr = nullptr;  // owned by the handle now
     return MTLB_OK;
 }

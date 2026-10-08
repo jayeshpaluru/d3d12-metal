@@ -46,6 +46,8 @@ cp "$out/d3d12.dll" "$out/dxgi.dll" "$godot_dir/"
 cp "$out/x86_64-unix/d3d12metal.so" "$godot_dir/x86_64-unix/"
 export WINEDLLPATH="$out"
 export WINEDLLOVERRIDES="d3d12,d3d12core,dxgi=n"
+# The shader cache of the test runs stays in the build tree (set D3D12METAL_CACHE_DIR to choose another).
+export D3D12METAL_CACHE_DIR="${D3D12METAL_CACHE_DIR:-$root/build-wine/shader-cache}"
 export WINEDEBUG="${WINEDEBUG:--all}"
 unset DISPLAY
 
