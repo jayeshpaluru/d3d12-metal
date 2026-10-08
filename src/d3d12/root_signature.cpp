@@ -1,17 +1,9 @@
 #include "d3d12/root_signature.h"
 
+#include "d3d12/device.h"
 #include "d3d12/root_signature_blob.h"
 
 namespace d3d12m {
-
-namespace {
-
-uint32_t align_up(uint32_t value, uint32_t alignment)
-{
-    return (value + alignment - 1) / alignment * alignment;
-}
-
-} // namespace
 
 HRESULT RootSignature::create(Device *device, const void *blob, size_t size, REFIID riid, void **out)
 {
@@ -25,25 +17,27 @@ HRESULT RootSignature::create(Device *device, const void *blob, size_t size, REF
         return hr;
 
     auto *rs = new RootSignature(device);
-    rs->blob_.assign(static_cast<const uint8_t *>(blob), static_cast<const uint8_t *>(blob) + size);
-
-    // Metal shader converter layout: parameters in order, root constants inline
-    // (4-byte aligned), root descriptors and descriptor tables as 64-bit
-    // addresses (8-byte aligned).
-    uint32_t offset = 0;
-    for (UINT i = 0; i < parsed.desc11.NumParameters; ++i) {
-        const D3D12_ROOT_PARAMETER1 &p = parsed.desc11.pParameters[i];
-        const bool constants = p.ParameterType == D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-        const uint32_t slot_size = constants ? p.Constants.Num32BitValues * 4 : 8;
-        offset = align_up(offset, constants ? 4 : 8);
-        rs->slots_.push_back({p.ParameterType, offset, slot_size});
-        offset += slot_size;
+    mtlb_root_signature_layout layout;
+    if (mtlb_root_signature_create(device->handle(), blob, size, &rs->handle_, &layout) != MTLB_OK
+        || layout.num_parameters != parsed.desc11.NumParameters) {
+        D3D12M_LOG("root signature creation failed: %s", mtlb_last_error());
+        rs->Release();
+        return E_FAIL;
     }
-    rs->argument_buffer_size_ = align_up(offset, 8);
+    for (UINT i = 0; i < layout.num_parameters; ++i)
+        rs->slots_.push_back({parsed.desc11.pParameters[i].ParameterType, layout.parameters[i].offset,
+                              layout.parameters[i].size});
+    rs->argument_buffer_size_ = layout.argument_buffer_size;
 
     hr = rs->QueryInterface(riid, out);
     rs->Release();
     return hr;
+}
+
+RootSignature::~RootSignature()
+{
+    if (handle_)
+        mtlb_root_signature_destroy(handle_);
 }
 
 } // namespace d3d12m

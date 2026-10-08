@@ -243,23 +243,17 @@ extern "C" mtlb_result mtlb_pipeline_create(mtlb_device handle, const mtlb_pipel
         || desc->num_input_elements > MTLB_MAX_INPUT_ELEMENTS)
         return MTLB_ERROR_INVALID_ARGUMENT;
 
-    IRError *error = nullptr;
-    IRVersionedRootSignatureDescriptor *rs_desc = IRVersionedRootSignatureDescriptorCreateFromBlob(
-        static_cast<const uint8_t *>(desc->root_signature), static_cast<uint32_t>(desc->root_signature_size), &error);
-    if (!rs_desc)
-        return fail(MTLB_ERROR_COMPILE_FAILED, error_text(error, "root signature rejected by the shader converter"));
-    OwnedRootSignature root_signature(IRRootSignatureCreateFromDescriptor(rs_desc, &error));
-    IRVersionedRootSignatureDescriptorRelease(rs_desc);
-    if (!root_signature.ptr)
-        return fail(MTLB_ERROR_COMPILE_FAILED, error_text(error, "root signature rejected by the shader converter"));
+    RootSignature *root_signature = from_handle<RootSignature>(desc->root_signature);
+    if (!root_signature)
+        return MTLB_ERROR_INVALID_ARGUMENT;
 
     Stage vs, ps;
-    mtlb_result result = build_stage(device->device, root_signature.ptr, desc->vs_dxil, desc->vs_size,
+    mtlb_result result = build_stage(device->device, root_signature->ir, desc->vs_dxil, desc->vs_size,
                                      desc->vs_entry, IRShaderStageVertex, vs);
     if (result != MTLB_OK)
         return result;
     if (desc->ps_dxil && desc->ps_size) {
-        result = build_stage(device->device, root_signature.ptr, desc->ps_dxil, desc->ps_size,
+        result = build_stage(device->device, root_signature->ir, desc->ps_dxil, desc->ps_size,
                              desc->ps_entry, IRShaderStageFragment, ps);
         if (result != MTLB_OK)
             return result;
@@ -337,6 +331,55 @@ extern "C" mtlb_result mtlb_pipeline_create(mtlb_device handle, const mtlb_pipel
     pipeline->depth_bias_clamp = desc->depth_bias_clamp;
     *out = to_handle(pipeline);
     return MTLB_OK;
+}
+
+extern "C" mtlb_result mtlb_root_signature_create(mtlb_device handle, const void *blob, uint64_t size,
+                                                   mtlb_root_signature *out, mtlb_root_signature_layout *layout)
+{
+    if (!from_handle<Device>(handle) || !blob || !out || !layout)
+        return MTLB_ERROR_INVALID_ARGUMENT;
+
+    IRError *error = nullptr;
+    IRVersionedRootSignatureDescriptor *rs_desc = IRVersionedRootSignatureDescriptorCreateFromBlob(
+        static_cast<const uint8_t *>(blob), static_cast<uint32_t>(size), &error);
+    if (!rs_desc)
+        return fail(MTLB_ERROR_COMPILE_FAILED, error_text(error, "root signature rejected by the shader converter"));
+    const uint32_t num_parameters = rs_desc->version == IRRootSignatureVersion_1_0 ? rs_desc->desc_1_0.NumParameters
+                                                                                   : rs_desc->desc_1_1.NumParameters;
+    OwnedRootSignature root_signature(IRRootSignatureCreateFromDescriptor(rs_desc, &error));
+    IRVersionedRootSignatureDescriptorRelease(rs_desc);
+    if (!root_signature.ptr)
+        return fail(MTLB_ERROR_COMPILE_FAILED, error_text(error, "root signature rejected by the shader converter"));
+
+    // The converter reports one top-level argument buffer entry per root
+    // parameter, in parameter order.
+    const size_t count = IRRootSignatureGetResourceCount(root_signature.ptr);
+    if (count != num_parameters || count > MTLB_MAX_ROOT_PARAMETERS)
+        return fail(MTLB_ERROR_UNSUPPORTED, "unexpected root signature resource count " + std::to_string(count));
+    std::vector<IRResourceLocation> locations(count);
+    IRRootSignatureGetResourceLocations(root_signature.ptr, locations.data());
+
+    *layout = {};
+    layout->num_parameters = static_cast<uint32_t>(count);
+    uint64_t end = 0;
+    for (size_t i = 0; i < count; ++i) {
+        layout->parameters[i] = {locations[i].topLevelOffset, static_cast<uint32_t>(locations[i].sizeBytes)};
+        end = std::max<uint64_t>(end, uint64_t(locations[i].topLevelOffset) + locations[i].sizeBytes);
+    }
+    layout->argument_buffer_size = static_cast<uint32_t>((end + 7) & ~uint64_t(7));
+
+    *out = to_handle(new RootSignature{root_signature.ptr});
+    root_signature.ptr = nullptr;  // owned by the handle now
+    return MTLB_OK;
+}
+
+extern "C" void mtlb_root_signature_destroy(mtlb_root_signature handle)
+{
+    RootSignature *root_signature = from_handle<RootSignature>(handle);
+    if (!root_signature)
+        return;
+    IRRootSignatureDestroy(root_signature->ir);
+    delete root_signature;
 }
 
 extern "C" void mtlb_pipeline_destroy(mtlb_pipeline handle)

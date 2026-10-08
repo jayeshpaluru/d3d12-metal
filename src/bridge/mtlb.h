@@ -52,6 +52,7 @@ typedef uint64_t mtlb_device;
 typedef uint64_t mtlb_buffer;
 typedef uint64_t mtlb_texture;
 typedef uint64_t mtlb_pipeline;
+typedef uint64_t mtlb_root_signature;
 typedef uint64_t mtlb_queue;
 typedef uint64_t mtlb_event;
 typedef uint64_t mtlb_notify;
@@ -320,14 +321,34 @@ typedef struct mtlb_render_target_blend {
     uint32_t write_mask;                                   /* bit0=R .. bit3=A */
 } mtlb_render_target_blend;
 
+#define MTLB_MAX_ROOT_PARAMETERS 64
+
+/* Where one root parameter lives in the top-level argument buffer. */
+typedef struct mtlb_root_parameter_layout {
+    uint32_t offset;           /* bytes from the start of the argument buffer */
+    uint32_t size;             /* bytes: 4 * Num32BitValues for constants, 8 otherwise */
+} mtlb_root_parameter_layout;
+
+typedef struct mtlb_root_signature_layout {
+    uint32_t num_parameters;
+    uint32_t argument_buffer_size;   /* bytes, multiple of 8 */
+    mtlb_root_parameter_layout parameters[MTLB_MAX_ROOT_PARAMETERS];
+} mtlb_root_signature_layout;
+
+/* Builds the shader converter's root signature once from a serialized root
+ * signature (DXBC container or bare RTS0 blob) and reports the top-level
+ * argument buffer layout it implies. Pipelines are built against the handle. */
+MTLB_EXPORT mtlb_result mtlb_root_signature_create(mtlb_device device, const void *blob, uint64_t size,
+                                                   mtlb_root_signature *out, mtlb_root_signature_layout *layout);
+MTLB_EXPORT void mtlb_root_signature_destroy(mtlb_root_signature root_signature);
+
 typedef struct mtlb_pipeline_desc {
     /* DXIL blobs; a missing stage has size 0. */
     const void *vs_dxil; uint64_t vs_size;
     const void *ps_dxil; uint64_t ps_size;
     const char *vs_entry;      /* NULL: the entry point named in the DXIL */
     const char *ps_entry;
-    /* Serialized root signature (DXBC container or bare RTS0 blob). */
-    const void *root_signature; uint64_t root_signature_size;
+    mtlb_root_signature root_signature;
 
     uint32_t num_render_targets;
     uint32_t rtv_formats[MTLB_MAX_RENDER_TARGETS];  /* mtlb_format */
@@ -437,7 +458,9 @@ MTLB_ASSERT_SIZE(mtlb_texture_info, 8);
 MTLB_ASSERT_SIZE(mtlb_input_element, 56);
 MTLB_ASSERT_SIZE(mtlb_stencil_face, 16);
 MTLB_ASSERT_SIZE(mtlb_render_target_blend, 32);
-MTLB_ASSERT_SIZE(mtlb_pipeline_desc, 2200);
+MTLB_ASSERT_SIZE(mtlb_root_parameter_layout, 8);
+MTLB_ASSERT_SIZE(mtlb_root_signature_layout, 520);
+MTLB_ASSERT_SIZE(mtlb_pipeline_desc, 2192);
 
 #ifdef __cplusplus
 }

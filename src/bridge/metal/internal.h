@@ -9,6 +9,8 @@
 #include <mutex>
 #include <string>
 
+#include <metal_irconverter/metal_irconverter.h>
+
 #include "bridge/mtlb.h"
 
 namespace mtlb {
@@ -44,6 +46,10 @@ struct Texture {
     // (command buffers do not retain what they reference).
     std::mutex views_mutex;
     std::map<uint32_t, id<MTLTexture>> views;
+};
+
+struct RootSignature {
+    IRRootSignature *ir;
 };
 
 struct Pipeline {

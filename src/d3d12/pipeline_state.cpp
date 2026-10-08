@@ -55,8 +55,7 @@ HRESULT PipelineState::create_graphics(Device *device, const D3D12_GRAPHICS_PIPE
     pd.vs_size = desc.VS.BytecodeLength;
     pd.ps_dxil = desc.PS.pShaderBytecode;
     pd.ps_size = desc.PS.BytecodeLength;
-    pd.root_signature = root_signature->blob().data();
-    pd.root_signature_size = root_signature->blob().size();
+    pd.root_signature = root_signature->handle();
 
     pd.num_render_targets = desc.NumRenderTargets;
     for (UINT i = 0; i < desc.NumRenderTargets; ++i) {

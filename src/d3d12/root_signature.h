@@ -3,6 +3,7 @@
 
 #include <vector>
 
+#include "bridge/mtlb.h"
 #include "d3d12/object.h"
 
 namespace d3d12m {
@@ -20,8 +21,7 @@ public:
 
     const std::vector<Slot> &slots() const { return slots_; }
     uint32_t argument_buffer_size() const { return argument_buffer_size_; }
-    // The serialized root signature as given to CreateRootSignature.
-    const std::vector<uint8_t> &blob() const { return blob_; }
+    mtlb_root_signature handle() const { return handle_; }
 
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **out) override
     {
@@ -30,8 +30,9 @@ public:
 
 private:
     explicit RootSignature(Device *device) : ChildImpl(device) {}
+    ~RootSignature() override;
 
-    std::vector<uint8_t> blob_;
+    mtlb_root_signature handle_ = 0;
     std::vector<Slot> slots_;
     uint32_t argument_buffer_size_ = 0;
 };
