@@ -205,5 +205,14 @@ Wine notes:
   - The AMD GPU Services library reads dxgi.dll's export table itself; a forwarder RVA crashed it (jump into the string table).
     dxgi.dll now exports real functions (`tests/wine/exports_test.cpp`).
   - crs-video.exe (crash reporter helper) crashes on Wine's `ApiInformation` stub; harmless, ignore.
-- Next blocker: 32 small DXBC (SM4/5) shaders (Bink 2 video) are refused by the converter (`IRErrorCodeUnrecognizedDXILHeader`).
-  Failed pipeline creation is not cached, so it is retried every frame.
+- Milestone 5b: the game renders its profile-select menu (3D scene and UI), about 60 fps with the API trace on. Fixed on the way:
+  - `Fence::GetCompletedValue` reads a shared-memory mirror the backend keeps (updated by command buffer completion of a queue signal
+    and by CPU signals), so busy-polling makes no unix call; `GetDeviceRemovedReason` was already front-end only.
+  - Failed pipeline creations are cached by description (shader contents, state, root signature) and logged once.
+  - DXBC (SM 4/5) shaders: Microsoft's dxilconv builds on macOS (`third_party/dxilconv`, `tools/build-dxilconv.sh`, arm64 and x86_64,
+    sources unmodified plus a header shim) and the backend converts DXBC to DXIL before Metal Shader Converter (`src/bridge/metal/dxbc.mm`,
+    loaded on first use from `libdxilconv.dylib` next to the module). Test shaders come from Wine's D3DCompile (`tools/gen-dxbc-test-shaders.sh`).
+  - Fragment outputs of another type than their render target (uint4 to RGBA8_UNORM and the like) are written through a view of the other kind.
+  - Index buffer views of format UNKNOWN unbind; ClearUnorderedAccessViewUint handles R11G11B10_FLOAT; timestamp query heaps are split
+    over several counter sample buffers (4096 samples each, made when first used).
+  - Open: geometry, hull, domain and stream-output stages are refused (Metal Shader Converter can emulate them through mesh shaders; not done).

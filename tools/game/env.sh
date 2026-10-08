@@ -3,7 +3,8 @@
 #   WINE_ROOT, STEAM_WINEPREFIX (see tools/game-common.sh), GAME_FOLDER (the game's install folder)
 source "$(dirname "${BASH_SOURCE[0]}")/../game-common.sh"
 STEAM_WINEPREFIX="${STEAM_WINEPREFIX:-/Users/jsp/code/deps/wineprefix-steam}"
-GAME_FOLDER="${GAME_FOLDER:-$STEAM_WINEPREFIX/drive_c/Program Files (x86)/Steam/steamapps/common/Marvel's Spider-Man Remastered}"
+default_game_folder="$STEAM_WINEPREFIX/drive_c/Program Files (x86)/Steam/steamapps/common/Marvel's Spider-Man Remastered"
+GAME_FOLDER="${GAME_FOLDER:-$default_game_folder}"
 
 # wine_steam <args...>: wine in the Steam prefix.
 wine_steam() { WINEPREFIX="$STEAM_WINEPREFIX" "$WINE_ROOT/bin/wine" "$@"; }
