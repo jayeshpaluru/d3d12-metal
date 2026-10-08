@@ -697,7 +697,6 @@ private:
 
     DrawState state_;
     std::vector<PendingClear> clears_;  // waiting for a pass that binds their view
-    bool warned_no_targets_ = false;
     // True for a texture the open render pass renders to.
     bool is_attachment(const Texture *texture) const
     {
@@ -772,6 +771,7 @@ private:
         MTLVisibilityResultMode mode = MTLVisibilityResultModeDisabled;
     } query_;
     int debug_depth_ = 0;  // debug groups this submission has opened and not closed yet
+    bool warned_no_targets_ = false;
     NSUInteger target_width_ = 0, target_height_ = 0;
     MTLPixelFormat pass_depth_format_ = MTLPixelFormatInvalid;    // attachments of the open pass
     MTLPixelFormat pass_stencil_format_ = MTLPixelFormatInvalid;
@@ -1192,6 +1192,13 @@ mtlb_result Replay::open_render_pass()
         target_height_ = target_height_ ? std::min(target_height_, h) : h;
     }
 
+    if (!target_width_) {
+        // No attachments: Metal needs the render target size and sample count explicitly.
+        target_width_ = target_height_ = 16384;
+        pass.renderTargetWidth = target_width_;
+        pass.renderTargetHeight = target_height_;
+        pass.defaultRasterSampleCount = 1;
+    }
     if (visibility_heap_ && visibility_heap_->results)
         pass.visibilityResultBuffer = visibility_heap_->results;
     if (last_valid_ && state_.depth == last_depth_ && std::equal(state_.targets, state_.targets + MTLB_MAX_RENDER_TARGETS, last_targets_)) {
@@ -1334,18 +1341,17 @@ mtlb_result Replay::apply_state()
     return MTLB_OK;
 }
 
-// Gets a draw ready: validates it, opens the pass and applies state. Sets
-// *ready to false for draws that are skipped: those without render targets
-// (reported once), since depth-only rendering is not supported yet.
+// Gets a draw ready: validates it, opens the pass and applies state. Draws without
+// render targets (UAV-only work in a vertex or pixel shader) run in a pass without attachments.
 mtlb_result Replay::begin_draw(bool *ready)
 {
     *ready = false;
     if (!state_.pipeline)
         return fail(MTLB_ERROR_INVALID_ARGUMENT, "draw without a pipeline");
-    if (!state_.depth.texture
+    if (state_.pipeline->has_attachments && !state_.depth.texture
         && std::none_of(state_.targets, state_.targets + state_.num_targets, [](const Target &t) { return t.texture; })) {
         if (!warned_no_targets_)
-            backend_log("draw skipped, no render targets are bound");
+            backend_log("draw skipped, the pipeline writes render targets and none are bound");
         warned_no_targets_ = true;
         return MTLB_OK;
     }
