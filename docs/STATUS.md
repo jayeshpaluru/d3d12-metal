@@ -60,8 +60,8 @@ in the vtable, log `<function> is not implemented` once to stderr and return
   Win32 events and a second thread), `swapchain_test.exe` (latency object, resize with
   four formats, outputs), `hello_triangle.exe --selftest` (a port of D3D12HelloTriangle with
   DXIL shaders: back buffer centre and corner checked) and `hello_triangle.exe --frames 300`
-  (about 115 frames per second at `Present(1, 0)`, one vsync wait per frame is a
-  120 Hz panel). `tools/run-wine-tests.sh` runs them all.
+  (about 115 frames per second at `Present(1, 0)` with a wait for the GPU after every
+  frame, as the sample does; the panel is 120 Hz). `tools/run-wine-tests.sh` runs them all.
 - The presented frame is checked through `D3D12METAL_DUMP_PRESENT` (the present pass
   rendered into a readable texture). A real window screenshot (`screencapture -l`) needs an
   awake, unlocked display and Screen Recording permission for the terminal; the test script
@@ -120,4 +120,4 @@ Wine notes:
 
 - `FenceWaiter::run` runs on a Windows thread (a `std::thread` built for the PE target is one), never on a Metal callback thread. The listener blocks in `notify.mm` only lock a mutex, queue a record and notify a condition variable.
 - `platform_set_event` calls `SetEvent` in `_WIN32` builds; the native build uses the small event object in `src/common/platform.cpp`.
-- Every bridge call is a unix call (about a hundred nanoseconds to a few microseconds of overhead, to be measured): per frame the triangle sample makes a handful. A busy game will want `mtlb_format_get_info` and similar pure lookups answered on the PE side, and descriptor writes batched.
+- Every bridge call is a unix call: a trivial one (`ID3D12Fence::GetCompletedValue`) costs about 350 ns round trip under Rosetta, measured over 200000 calls. The triangle sample makes a handful per frame. A busy game will want `mtlb_format_get_info` and similar pure lookups answered on the PE side, and descriptor writes batched.
