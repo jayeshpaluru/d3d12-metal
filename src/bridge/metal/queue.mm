@@ -1076,6 +1076,7 @@ mtlb_result Replay::write_immediate(const mtlb_cmd_write_immediate &cmd)
     sync_needed_ = !sync_disabled_;
     end_blit();
     end_render();
+    end_compute();  // a dispatch in the open concurrent encoder could still be running
     id<MTLComputeCommandEncoder> enc = compute();
     const uint64_t where[2] = {offset, cmd.size};
     [enc setComputePipelineState:kernel];

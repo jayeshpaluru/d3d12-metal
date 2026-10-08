@@ -288,6 +288,24 @@ int main()
         CHECK_EQ(h, 0x3C00u);
     }
 
+    // ---- WriteBufferImmediate lands after the dispatches before it ------------------------------------------------------
+    {
+        for (int round = 0; round < 20; ++round) {
+            ComPtr<ID3D12GraphicsCommandList> list = f.begin();
+            ComPtr<ID3D12GraphicsCommandList2> list2;
+            CHECK_HR(list.As(&list2));
+            f.dispatch(list.Get(), 0, 0);  // writes every word of the buffer
+            const D3D12_WRITEBUFFERIMMEDIATE_PARAMETER params[2] = {{f.structured->GetGPUVirtualAddress(), 0xFEED0000u + round},
+                                                                    {f.structured->GetGPUVirtualAddress() + (kSize * kSize - 1) * 4, 0xBEEF0000u + round}};
+            list2->WriteBufferImmediate(2, params, nullptr);
+            gpu.run(list.Get());
+            const std::vector<uint32_t> values = f.words(f.structured.Get());
+            CHECK_EQ(values[0], 0xFEED0000u + round);
+            CHECK_EQ(values[kSize * kSize - 1], 0xBEEF0000u + round);
+            CHECK_EQ(values[1], 0xA5000001u);
+        }
+    }
+
     // ---- A dispatch with a zero group count does nothing -------------------------------------------------------------
     {
         ComPtr<ID3D12GraphicsCommandList> list = f.begin();
