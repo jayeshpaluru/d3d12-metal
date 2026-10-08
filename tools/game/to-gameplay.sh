@@ -15,3 +15,5 @@ sleep 5
 steps=(); for _ in $(seq $((row - 1))); do steps+=(down); done
 "$tools/keys.sh" "${steps[@]}" enter wait:4000 enter   # profile, then CONTINUE on the main menu
 for i in $(seq $((load / 10))); do sleep 10; "$tools/screenshot.sh" "load-$i" >/dev/null; done
+# Gameplay only reads the keyboard once the window has been clicked (menus take keys without it).
+"$tools/keys.sh" click:500:400 wait:500
