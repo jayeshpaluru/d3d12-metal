@@ -239,3 +239,36 @@ Wine notes:
 - Known open: a `mtlb_queue_signal` access violation once seen right after switching to XeSS in the open world (not reproduced);
   gameplay speed varies with the display state (the stats' GPU time can jump to 160 ms per frame when the display sleeps or another GPU client runs);
   stream output; typed buffer views above 2^28 texels are still clamped.
+
+## Milestone 7: robustness and performance
+
+Code-review fixes (each with a regression test): a render pass continues across a barrier only when none of its draws binds a UAV in any
+stage (`pipeline.mm` reads the PSV0 part of the DXIL; no in-pass memory barrier any more); block-size mismatch copies clamp their boxes to the mip
+level and stage through pooled hazard-tracked buffers; the fence mirror follows the event's actual value and advances for signals of failed
+command buffers (Metal events never go down, so a lower `Signal` value changes nothing; `mtlb_queue_test_drop_signals` simulates a failed buffer);
+the typed-output check covers only the targets the pixel shader declares (OSG1); the pipeline failure cache is keyed by root signature content and
+skips transient failures; embedded root signatures are shared by content and searched in all stages; a failed counter sample buffer is tried once.
+
+Performance findings (Spider-Man, gameplay scene, `tools/game/measure.sh`):
+- The per-method CPU numbers of milestone 6 were mostly the profiler: shared counters bounced between the polling threads and a clock read costs
+  hundreds of ns under Wine. The profile now samples per thread. Real costs (`p_descbench` under Wine): `GetCompletedValue` 2.6 ns,
+  `GetDeviceRemovedReason` 2.3 ns, `CopyDescriptorsSimple` 95 -> 42 ns per call (the PE build's thread-local storage is emulated: a call per access;
+  the heap lookup no longer uses any), 64-descriptor copy 2.1 -> 1.3 ns per descriptor. With the profile on the game ran about 6% slower.
+- `D3D12METAL_SUBMIT_PROFILE=1` splits `ExecuteCommandLists` (about 2.6 ms per frame): render encoder creation ~9-11 us each (about 0.9 ms/frame),
+  blit ~7 us, compute ~8 us, draws ~0.3-0.6 us, commit ~5 us. Encoder count is the lever. It also lists why passes end: the dominant reason is
+  barriers after passes whose draws bind UAVs (about 3000/s). That split is required for correctness on a tile-based GPU (a later vertex stage cannot be
+  ordered after an earlier fragment write inside a pass), so it stays.
+- Done for the count: a pass that began without waiting waits mid-pass at a barrier instead of ending; a clear of another texture no longer ends the open
+  pass (it waits for a pass that binds the view, or for a barrier naming the texture); redundant raster state is not set again.
+- `BoundsCheck` off (`D3D12METAL_COMPAT_FLAGS=60`): no measurable GPU change (busy 9.8 vs 9.7 ms), kept on.
+- Shader cache: cold run 7792 PSOs in 307 s (all at load), warm run 7720 PSOs in ~7 s with 2688 hits and 0 misses; no PSO creation happens in gameplay (0.00 per frame).
+- `D3D12METAL_COMPAT_FLAGS`, `D3D12METAL_GPU_FAMILY` replace the converter settings for experiments (part of the cache key).
+- Typed buffer views above 2^28 elements: not solvable here. The limit is the GPU's texture buffer width (measured), Metal Shader Converter has no
+  option to lower typed buffers to raw loads (checked `metal_irconverter.h`), and an index cannot be redirected to a second view without rewriting the DXIL.
+  Such views stay clamped (`p_large_buffers`).
+- XeSS `mtlb_queue_signal` access violation: not reproduced; hardened (the fence is held during Signal/Wait, the queue's destruction waits for in-flight
+  submits, pooled buffers return through shared pools instead of a queue pointer in completion handlers).
+- Open: the `to-gameplay.sh` flow sometimes lands in New Game's difficulty menu instead of CONTINUE (timing); check the screenshot before trusting numbers.
+  Gameplay numbers this session: 52-62 fps, ~105 passes, ~300 barriers, game CPU 500%+ (a different scene than milestone 6's notes); no clean same-scene baseline
+  could be obtained for the old build. Asynchronous submission (a worker thread for `ExecuteCommandLists`) would take ~3 ms off the submitting thread but needs
+  object lifetimes held across it.
