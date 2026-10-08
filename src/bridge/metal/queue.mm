@@ -1,4 +1,5 @@
 // Queues and command stream replay.
+#include "bridge/metal/log.h"
 #include "internal.h"
 
 #include <algorithm>
@@ -422,7 +423,7 @@ void Replay::note_error(mtlb_result result)
     error_message_ = mtlb_last_error();
     static std::atomic<bool> logged{false};
     if (!logged.exchange(true))
-        std::fprintf(stderr, "d3d12-metal: invalid command skipped: %s\n", error_message_.c_str());
+        backend_log("invalid command skipped: %s", error_message_.c_str());
 }
 
 void Replay::run(const uint8_t *stream, size_t length)
@@ -842,7 +843,7 @@ mtlb_result Replay::begin_draw(bool *ready)
     if (!state_.depth.texture
         && std::none_of(state_.targets, state_.targets + state_.num_targets, [](const Target &t) { return t.texture; })) {
         if (!warned_no_targets_)
-            std::fprintf(stderr, "d3d12-metal: draw skipped, no render targets are bound\n");
+            backend_log("draw skipped, no render targets are bound");
         warned_no_targets_ = true;
         return MTLB_OK;
     }
@@ -872,7 +873,7 @@ mtlb_result Replay::draw_indexed(const mtlb_cmd_draw_indexed &cmd)
     if ((uint64_t(cmd.start_index) + cmd.index_count) * state_.index_size > state_.index_view_size) {
         static std::atomic<bool> logged{false};
         if (!logged.exchange(true))
-            std::fprintf(stderr, "d3d12-metal: indexed draw skipped, it reads past the index buffer view\n");
+            backend_log("indexed draw skipped, it reads past the index buffer view");
         return MTLB_OK;
     }
     IRRuntimeDrawIndexedPrimitives(render_, to_primitive_type(state_.topology), cmd.index_count,
@@ -1691,7 +1692,7 @@ id<MTLCommandBuffer> open_command_buffer(Queue *queue)
         }
         [queue->open addCompletedHandler:^(id<MTLCommandBuffer> done) {
             if (done.error)
-                std::fprintf(stderr, "d3d12-metal: command buffer failed: %s\n", done.error.localizedDescription.UTF8String);
+                backend_log("command buffer failed: %s", done.error.localizedDescription.UTF8String);
         }];
     }
     return queue->open;

@@ -180,6 +180,7 @@ mtlb_descriptor Device::null_descriptor(uint32_t kind)
 void Device::CreateShaderResourceView(ID3D12Resource *resource_ptr, const D3D12_SHADER_RESOURCE_VIEW_DESC *desc,
                                       D3D12_CPU_DESCRIPTOR_HANDLE dest)
 {
+    D3D12M_TRACE(resource_ptr, desc, dest);
     if (!validate_cpu_range(dest, 1, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV))
         return log_bad_handle("CreateShaderResourceView");
     stat_add(Stat::DescriptorWrites);
@@ -323,6 +324,7 @@ void Device::CreateShaderResourceView(ID3D12Resource *resource_ptr, const D3D12_
 void Device::CreateUnorderedAccessView(ID3D12Resource *resource_ptr, ID3D12Resource *counter_ptr,
                                        const D3D12_UNORDERED_ACCESS_VIEW_DESC *desc, D3D12_CPU_DESCRIPTOR_HANDLE dest)
 {
+    D3D12M_TRACE(resource_ptr, counter_ptr, desc, dest);
     size_t index = 0;
     DescriptorHeap *heap = validate_cpu_range(dest, 1, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, &index);
     if (!heap)
@@ -456,6 +458,7 @@ HRESULT Device::sampler_descriptor(const mtlb_sampler_desc &desc, mtlb_descripto
 
 void Device::CreateSampler(const D3D12_SAMPLER_DESC *desc, D3D12_CPU_DESCRIPTOR_HANDLE dest)
 {
+    D3D12M_TRACE(desc, dest);
     if (!validate_cpu_range(dest, 1, D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER))
         return log_bad_handle("CreateSampler");
     stat_add(Stat::DescriptorWrites);

@@ -4,6 +4,7 @@
 // present draws the back buffer onto the layer's next drawable with a fullscreen
 // triangle. That one path converts between the back buffer format and the
 // layer's (RGBA/BGRA order, sRGB encoding) and scales when the sizes differ.
+#include "bridge/metal/log.h"
 #include "internal.h"
 
 #import <ImageIO/ImageIO.h>
@@ -107,7 +108,7 @@ void write_png(id<MTLTexture> texture, const std::string &path)
         CGImageDestinationAddImage(destination, image, nullptr);
         ok = CGImageDestinationFinalize(destination);
     }
-    fprintf(stderr, "d3d12-metal: %s present dump %s\n", ok ? "wrote" : "failed to write", path.c_str());
+    backend_log("%s present dump %s", ok ? "wrote" : "failed to write", path.c_str());
     if (destination)
         CFRelease(destination);
     CGImageRelease(image);
@@ -194,7 +195,7 @@ Drawable acquire_drawable(Swapchain *swapchain, uint32_t sync_interval)
     if (!result.drawable) {
         static std::atomic<bool> logged{false};
         if (!logged.exchange(true))
-            fprintf(stderr, "d3d12-metal: no drawable available, skipping presents\n");
+            backend_log("no drawable available, skipping presents");
     }
     return result;
 }

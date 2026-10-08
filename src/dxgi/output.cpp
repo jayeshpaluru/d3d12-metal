@@ -114,20 +114,25 @@ public:
 
     HRESULT STDMETHODCALLTYPE GetParent(REFIID riid, void **parent) override
     {
+        D3D12M_TRACED_BEGIN
         return parent_->QueryInterface(riid, parent);
+        D3D12M_TRACED_END(riid, parent)
     }
 
     // IDXGIOutput
     HRESULT STDMETHODCALLTYPE GetDesc(DXGI_OUTPUT_DESC *desc) override
     {
+        D3D12M_TRACED_BEGIN
         if (!desc)
             return DXGI_ERROR_INVALID_CALL;
         fill_desc(*desc);
         return S_OK;
+        D3D12M_TRACED_END(desc)
     }
 
     HRESULT STDMETHODCALLTYPE GetDisplayModeList(DXGI_FORMAT format, UINT, UINT *count, DXGI_MODE_DESC *modes) override
     {
+        D3D12M_TRACED_BEGIN
         if (!count)
             return DXGI_ERROR_INVALID_CALL;
         const size_t available = is_displayable(format) ? display_.modes.size() : 0;
@@ -140,11 +145,13 @@ public:
         for (size_t i = 0; i < std::min<size_t>(capacity, available); ++i)
             modes[i] = to_desc(display_.modes[i], format);
         return capacity < available ? DXGI_ERROR_MORE_DATA : S_OK;
+        D3D12M_TRACED_END(format, count, modes)
     }
 
     // The mode of the list with the nearest size to the requested one.
     HRESULT STDMETHODCALLTYPE FindClosestMatchingMode(const DXGI_MODE_DESC *wanted, DXGI_MODE_DESC *closest, IUnknown *) override
     {
+        D3D12M_TRACED_BEGIN
         if (!wanted || !closest)
             return DXGI_ERROR_INVALID_CALL;
         const Mode *best = &display_.modes.back();
@@ -160,15 +167,18 @@ public:
         }
         *closest = to_desc(*best, wanted->Format);
         return S_OK;
+        D3D12M_TRACED_END(wanted, closest)
     }
 
     HRESULT STDMETHODCALLTYPE WaitForVBlank() override
     {
+        D3D12M_TRACED_BEGIN
         std::this_thread::sleep_for(std::chrono::microseconds(16667));
         return S_OK;
+        D3D12M_TRACED_END()
     }
 
-    HRESULT STDMETHODCALLTYPE TakeOwnership(IUnknown *, BOOL) override { return S_OK; }
+    HRESULT STDMETHODCALLTYPE TakeOwnership(IUnknown *, BOOL) override { D3D12M_TRACED_BEGIN return S_OK; D3D12M_TRACED_END() }
     void STDMETHODCALLTYPE ReleaseOwnership() override {}
     HRESULT STDMETHODCALLTYPE GetGammaControlCapabilities(DXGI_GAMMA_CONTROL_CAPABILITIES *) override { D3D12M_STUB_HR(); }
     HRESULT STDMETHODCALLTYPE SetGammaControl(const DXGI_GAMMA_CONTROL *) override { D3D12M_STUB_HR(); }
@@ -180,6 +190,7 @@ public:
     // IDXGIOutput1
     HRESULT STDMETHODCALLTYPE GetDisplayModeList1(DXGI_FORMAT format, UINT flags, UINT *count, DXGI_MODE_DESC1 *modes) override
     {
+        D3D12M_TRACED_BEGIN
         if (!count)
             return DXGI_ERROR_INVALID_CALL;
         if (!modes)
@@ -202,10 +213,12 @@ public:
                         plain[i].ScanlineOrdering, plain[i].Scaling, FALSE};
         }
         return hr;
+        D3D12M_TRACED_END(format, flags, count, modes)
     }
 
     HRESULT STDMETHODCALLTYPE FindClosestMatchingMode1(const DXGI_MODE_DESC1 *wanted, DXGI_MODE_DESC1 *closest, IUnknown *device) override
     {
+        D3D12M_TRACED_BEGIN
         if (!wanted || !closest)
             return DXGI_ERROR_INVALID_CALL;
         DXGI_MODE_DESC in = {wanted->Width, wanted->Height, wanted->RefreshRate, wanted->Format, wanted->ScanlineOrdering, wanted->Scaling};
@@ -214,26 +227,31 @@ public:
             return hr;
         *closest = {out.Width, out.Height, out.RefreshRate, out.Format, out.ScanlineOrdering, out.Scaling, FALSE};
         return S_OK;
+        D3D12M_TRACED_END(wanted, closest, device)
     }
 
     HRESULT STDMETHODCALLTYPE GetDisplaySurfaceData1(IDXGIResource *) override { D3D12M_STUB_HR(); }
     HRESULT STDMETHODCALLTYPE DuplicateOutput(IUnknown *, IDXGIOutputDuplication **) override { D3D12M_STUB_HR(); }
 
     // IDXGIOutput2..5
-    BOOL STDMETHODCALLTYPE SupportsOverlays() override { return FALSE; }
+    BOOL STDMETHODCALLTYPE SupportsOverlays() override { D3D12M_TRACE(); return FALSE; }
 
     HRESULT STDMETHODCALLTYPE CheckOverlaySupport(DXGI_FORMAT, IUnknown *, UINT *flags) override
     {
+        D3D12M_TRACED_BEGIN
         if (flags)
             *flags = 0;
         return S_OK;
+        D3D12M_TRACED_END(flags)
     }
 
     HRESULT STDMETHODCALLTYPE CheckOverlayColorSpaceSupport(DXGI_FORMAT, DXGI_COLOR_SPACE_TYPE, IUnknown *, UINT *flags) override
     {
+        D3D12M_TRACED_BEGIN
         if (flags)
             *flags = 0;
         return S_OK;
+        D3D12M_TRACED_END(flags)
     }
 
     HRESULT STDMETHODCALLTYPE DuplicateOutput1(IUnknown *, UINT, UINT, const DXGI_FORMAT *, IDXGIOutputDuplication **) override
@@ -244,6 +262,7 @@ public:
     // IDXGIOutput6: an SDR sRGB display.
     HRESULT STDMETHODCALLTYPE GetDesc1(DXGI_OUTPUT_DESC1 *desc) override
     {
+        D3D12M_TRACED_BEGIN
         if (!desc)
             return DXGI_ERROR_INVALID_CALL;
         *desc = {};
@@ -268,13 +287,16 @@ public:
         desc->MaxLuminance = 80.0f;
         desc->MaxFullFrameLuminance = 80.0f;
         return S_OK;
+        D3D12M_TRACED_END(desc)
     }
 
     HRESULT STDMETHODCALLTYPE CheckHardwareCompositionSupport(UINT *flags) override
     {
+        D3D12M_TRACED_BEGIN
         if (flags)
             *flags = 0;
         return S_OK;
+        D3D12M_TRACED_END(flags)
     }
 
 private:

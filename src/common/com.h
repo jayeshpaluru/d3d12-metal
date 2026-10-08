@@ -6,6 +6,7 @@
 #include <cstring>
 
 #include "common/d3d12_uuids.h"
+#include "common/trace.h"
 
 namespace d3d12m {
 
@@ -100,10 +101,15 @@ HRESULT query_interfaces(Derived *self, REFIID riid, void **out)
     else
     (void)((riid == __uuidof(Is) ? (found = static_cast<Is *>(self), true) : false) || ...);
     *out = found;
-    if (!found)
-        return E_NOINTERFACE;
-    self->AddRef();
-    return S_OK;
+    const HRESULT hr = found ? S_OK : E_NOINTERFACE;
+    if (found)
+        self->AddRef();
+    // Not the layer's own queries (ours<>), which carry a private IID.
+    if (D3D12M_TRACE_UNLIKELY(g_trace_enabled) && riid.Data1 != 0x6d3d1200) {
+        static TraceSite site{__PRETTY_FUNCTION__};
+        trace_call_result(site, hr, "riid", riid);
+    }
+    return hr;
 }
 
 // Returns the object behind an application-supplied COM pointer as `T` if it

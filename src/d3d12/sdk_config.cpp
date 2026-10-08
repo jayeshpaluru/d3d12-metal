@@ -26,22 +26,28 @@ public:
     ULONG STDMETHODCALLTYPE AddRef() override { return 2; }
     ULONG STDMETHODCALLTYPE Release() override { return 1; }
 
-    HRESULT STDMETHODCALLTYPE InitializeFromGlobalState() override { return S_OK; }
-    HRESULT STDMETHODCALLTYPE ApplyToGlobalState() override { return S_OK; }
+    HRESULT STDMETHODCALLTYPE InitializeFromGlobalState() override { D3D12M_TRACED_BEGIN return S_OK; D3D12M_TRACED_END() }
+    HRESULT STDMETHODCALLTYPE ApplyToGlobalState() override { D3D12M_TRACED_BEGIN return S_OK; D3D12M_TRACED_END() }
     HRESULT STDMETHODCALLTYPE SetFlags(D3D12_DEVICE_FACTORY_FLAGS flags) override
     {
+        D3D12M_TRACED_BEGIN
         flags_ = flags;
         return S_OK;
+        D3D12M_TRACED_END(flags)
     }
-    D3D12_DEVICE_FACTORY_FLAGS STDMETHODCALLTYPE GetFlags() override { return flags_; }
+    D3D12_DEVICE_FACTORY_FLAGS STDMETHODCALLTYPE GetFlags() override { D3D12M_TRACE(); return flags_; }
     HRESULT STDMETHODCALLTYPE GetConfigurationInterface(REFCLSID clsid, REFIID iid, void **out) override;
     HRESULT STDMETHODCALLTYPE EnableExperimentalFeatures(UINT count, const IID *, void *, UINT *) override
     {
+        D3D12M_TRACED_BEGIN
         return count == 0 ? S_OK : E_NOINTERFACE;
+        D3D12M_TRACED_END(count)
     }
     HRESULT STDMETHODCALLTYPE CreateDevice(IUnknown *adapter, D3D_FEATURE_LEVEL feature_level, REFIID riid, void **device) override
     {
+        D3D12M_TRACED_BEGIN
         return D3D12CreateDevice(adapter, feature_level, riid, device);
+        D3D12M_TRACED_END(adapter, feature_level, riid, device)
     }
 
 private:
@@ -61,12 +67,16 @@ public:
 
     HRESULT STDMETHODCALLTYPE SetSDKVersion(UINT version, const char *path) override
     {
+        D3D12M_TRACED_BEGIN
         D3D12M_LOG("SetSDKVersion(%u, \"%s\") ignored: the layer is the runtime", version, path ? path : "");
         return S_OK;
+        D3D12M_TRACED_END(version, path)
     }
     HRESULT STDMETHODCALLTYPE CreateDeviceFactory(UINT, const char *, REFIID riid, void **out) override
     {
+        D3D12M_TRACED_BEGIN
         return g_factory.QueryInterface(riid, out);
+        D3D12M_TRACED_END(riid, out)
     }
     void STDMETHODCALLTYPE FreeUnusedSDKs() override {}
 };
@@ -77,11 +87,14 @@ SdkConfiguration g_configuration;
 
 HRESULT DeviceFactory::GetConfigurationInterface(REFCLSID clsid, REFIID iid, void **out)
 {
+    D3D12M_TRACED_BEGIN
     return D3D12GetInterface(clsid, iid, out);
+    D3D12M_TRACED_END(clsid, iid, out)
 }
 
 D3D12M_EXPORT HRESULT D3D12GetInterface(REFCLSID clsid, REFIID iid, void **object)
 {
+    D3D12M_TRACED_BEGIN
     if (!object)
         return E_INVALIDARG;
     *object = nullptr;
@@ -94,4 +107,5 @@ D3D12M_EXPORT HRESULT D3D12GetInterface(REFCLSID clsid, REFIID iid, void **objec
     // The debug layer and the tools are not provided.
     D3D12M_LOG("D3D12GetInterface: no object for this class");
     return E_NOINTERFACE;
+    D3D12M_TRACED_END(clsid, iid, object)
 }

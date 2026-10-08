@@ -26,7 +26,7 @@ public:
     UINT64 STDMETHODCALLTYPE GetCompletedValue() override;
     HRESULT STDMETHODCALLTYPE SetEventOnCompletion(UINT64 value, HANDLE event) override;
     HRESULT STDMETHODCALLTYPE Signal(UINT64 value) override;
-    D3D12_FENCE_FLAGS STDMETHODCALLTYPE GetCreationFlags() override { return flags_; }
+    D3D12_FENCE_FLAGS STDMETHODCALLTYPE GetCreationFlags() override { D3D12M_TRACE(); return flags_; }
 
 private:
     explicit Fence(Device *device) : ChildImpl(device) {}

@@ -21,6 +21,8 @@ import re
 import sys
 
 STRING_RESULT_SIZE = 512
+# Functions the logging itself uses: tracing them would recurse.
+NO_TRACE = {"mtlb_log_write", "mtlb_configure"}
 KNOWN_RESULTS = {
     "mtlb_result": "MTLB_ERROR_DEVICE",  # what a failed transport reports
     "uint64_t": "0",
@@ -90,6 +92,8 @@ def arg_values(params):
 
 
 def trace_before(name, params, prefix=""):
+    if name in NO_TRACE:
+        return ""
     n = len(params)
     vals = arg_values([(t, prefix + nm) for t, nm in params])
     arr = f"uint64_t args_[] = {{{vals}}}; " if n else ""

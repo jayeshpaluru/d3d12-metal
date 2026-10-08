@@ -36,62 +36,78 @@ public:
     // A factory has no parent object; like the Windows one, answer with itself.
     HRESULT STDMETHODCALLTYPE GetParent(REFIID riid, void **parent) override
     {
+        D3D12M_TRACED_BEGIN
         return QueryInterface(riid, parent);
+        D3D12M_TRACED_END(riid, parent)
     }
 
     // IDXGIFactory
     HRESULT STDMETHODCALLTYPE EnumAdapters(UINT index, IDXGIAdapter **adapter) override
     {
+        D3D12M_TRACED_BEGIN
         return enum_adapter(index, adapter);
+        D3D12M_TRACED_END(index, adapter)
     }
 
     // Recorded only: the layer never handles Alt+Enter or other window messages itself.
     HRESULT STDMETHODCALLTYPE MakeWindowAssociation(HWND window, UINT) override
     {
+        D3D12M_TRACED_BEGIN
         associated_window_ = window;
         return S_OK;
+        D3D12M_TRACED_END(window)
     }
 
     HRESULT STDMETHODCALLTYPE GetWindowAssociation(HWND *window) override
     {
+        D3D12M_TRACED_BEGIN
         if (!window)
             return E_INVALIDARG;
         *window = associated_window_;
         return S_OK;
+        D3D12M_TRACED_END(window)
     }
 
     HRESULT STDMETHODCALLTYPE CreateSwapChain(IUnknown *queue, DXGI_SWAP_CHAIN_DESC *desc, IDXGISwapChain **swap_chain) override
     {
+        D3D12M_TRACED_BEGIN
         if (!desc || !swap_chain)
             return DXGI_ERROR_INVALID_CALL;
         return create_swap_chain(this, queue, *desc, swap_chain);
+        D3D12M_TRACED_END(queue, desc, swap_chain)
     }
 
     HRESULT STDMETHODCALLTYPE CreateSoftwareAdapter(HMODULE, IDXGIAdapter **adapter) override
     {
+        D3D12M_TRACED_BEGIN
         if (adapter)
             *adapter = nullptr;
         return DXGI_ERROR_UNSUPPORTED;
+        D3D12M_TRACED_END(adapter)
     }
 
     // IDXGIFactory1
     HRESULT STDMETHODCALLTYPE EnumAdapters1(UINT index, IDXGIAdapter1 **adapter) override
     {
+        D3D12M_TRACED_BEGIN
         return enum_adapter(index, adapter);
+        D3D12M_TRACED_END(index, adapter)
     }
 
-    BOOL STDMETHODCALLTYPE IsCurrent() override { return TRUE; }
+    BOOL STDMETHODCALLTYPE IsCurrent() override { D3D12M_TRACE(); return TRUE; }
 
     // IDXGIFactory2
-    BOOL STDMETHODCALLTYPE IsWindowedStereoEnabled() override { return FALSE; }
+    BOOL STDMETHODCALLTYPE IsWindowedStereoEnabled() override { D3D12M_TRACE(); return FALSE; }
 
     HRESULT STDMETHODCALLTYPE CreateSwapChainForHwnd(IUnknown *queue, HWND window, const DXGI_SWAP_CHAIN_DESC1 *desc,
                                                      const DXGI_SWAP_CHAIN_FULLSCREEN_DESC *fullscreen,
                                                      IDXGIOutput *, IDXGISwapChain1 **swap_chain) override
     {
+        D3D12M_TRACED_BEGIN
         if (!desc || !swap_chain)
             return DXGI_ERROR_INVALID_CALL;
         return create_swap_chain(this, queue, window, *desc, fullscreen, swap_chain);
+        D3D12M_TRACED_END(queue, window, desc, fullscreen, swap_chain)
     }
 
     HRESULT STDMETHODCALLTYPE CreateSwapChainForCoreWindow(IUnknown *, IUnknown *,
@@ -137,11 +153,12 @@ public:
     }
 
     // IDXGIFactory3
-    UINT STDMETHODCALLTYPE GetCreationFlags() override { return flags_; }
+    UINT STDMETHODCALLTYPE GetCreationFlags() override { D3D12M_TRACE(); return flags_; }
 
     // IDXGIFactory4
     HRESULT STDMETHODCALLTYPE EnumAdapterByLuid(LUID luid, REFIID riid, void **adapter) override
     {
+        D3D12M_TRACED_BEGIN
         IDXGIAdapter1 *found = nullptr;
         HRESULT hr = enum_adapter(0, &found);
         if (FAILED(hr))
@@ -154,24 +171,29 @@ public:
             return DXGI_ERROR_NOT_FOUND;
         }
         return hand_out(found, riid, adapter);
+        D3D12M_TRACED_END(luid, riid, adapter)
     }
 
     HRESULT STDMETHODCALLTYPE EnumWarpAdapter(REFIID, void **adapter) override
     {
+        D3D12M_TRACED_BEGIN
         if (adapter)
             *adapter = nullptr;
         return DXGI_ERROR_UNSUPPORTED;
+        D3D12M_TRACED_END(adapter)
     }
 
     // IDXGIFactory5
     HRESULT STDMETHODCALLTYPE CheckFeatureSupport(DXGI_FEATURE feature, void *data, UINT size) override
     {
+        D3D12M_TRACED_BEGIN
         if (feature != DXGI_FEATURE_PRESENT_ALLOW_TEARING)
             return E_INVALIDARG;
         if (!data || size != sizeof(BOOL))
             return E_INVALIDARG;
         *static_cast<BOOL *>(data) = TRUE;
         return S_OK;
+        D3D12M_TRACED_END(feature, data, size)
     }
 
 private:

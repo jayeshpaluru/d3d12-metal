@@ -12,6 +12,8 @@
 #include <string>
 
 #include "bridge/mtlb.h"
+#include "common/config.h"
+#include "common/log.h"
 #include "bridge/wine/mtlb_wine_common.h"
 #include "mtlb_wine_params.h"
 
@@ -53,6 +55,19 @@ bool load_unix_lib(NtQueryVirtualMemoryFn query, const wchar_t *name, size_t len
     return true;
 }
 
+// Tells the unix side the options of d3d12metal.conf: it has the environment of the Wine process, not the one
+// the game was configured with. Must run before any other unix call (they read the options).
+void send_configuration(const Transport &t)
+{
+    d3d12m::config_for_each_file_entry(
+        [](const char *name, const char *value, void *user) {
+            const Transport &t = *static_cast<const Transport *>(user);
+            mtlb_wine_mtlb_configure_params p = {name, value};
+            (*t.dispatcher)(t.handle, MTLB_WINE_mtlb_configure, &p);
+        },
+        const_cast<Transport *>(&t));
+}
+
 Transport connect()
 {
     Transport t;
@@ -88,6 +103,7 @@ Transport connect()
                   "or in one of the WINEDLLPATH directories";
         return t;
     }
+    send_configuration(t);
     return t;
 }
 
@@ -110,14 +126,14 @@ static bool mtlb_wine_call(unsigned index, void *params, const char *name)
         static bool reported = false;
         if (!reported) {
             reported = true;
-            fprintf(stderr, "d3d12-metal: %s\n", t.error.c_str());
+            D3D12M_LOG("%s", t.error.c_str());
         }
         return false;
     }
     g_call_count.fetch_add(1, std::memory_order_relaxed);
     const LONG status = (*t.dispatcher)(t.handle, index, params);
     if (status != 0) {
-        fprintf(stderr, "d3d12-metal: unix call %s failed: 0x%08lx\n", name, static_cast<unsigned long>(status));
+        D3D12M_LOG("unix call %s failed: 0x%08lx", name, static_cast<unsigned long>(status));
         return false;
     }
     return true;

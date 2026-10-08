@@ -30,12 +30,12 @@ public:
     }
     ULONG STDMETHODCALLTYPE AddRef() override { return 2; }
     ULONG STDMETHODCALLTYPE Release() override { return 1; }
-    HRESULT STDMETHODCALLTYPE GetAutoBreadcrumbsOutput(D3D12_DRED_AUTO_BREADCRUMBS_OUTPUT *) override { return kNotAvailable; }
-    HRESULT STDMETHODCALLTYPE GetPageFaultAllocationOutput(D3D12_DRED_PAGE_FAULT_OUTPUT *) override { return kNotAvailable; }
-    HRESULT STDMETHODCALLTYPE GetAutoBreadcrumbsOutput1(D3D12_DRED_AUTO_BREADCRUMBS_OUTPUT1 *) override { return kNotAvailable; }
-    HRESULT STDMETHODCALLTYPE GetPageFaultAllocationOutput1(D3D12_DRED_PAGE_FAULT_OUTPUT1 *) override { return kNotAvailable; }
-    HRESULT STDMETHODCALLTYPE GetPageFaultAllocationOutput2(D3D12_DRED_PAGE_FAULT_OUTPUT2 *) override { return kNotAvailable; }
-    D3D12_DRED_DEVICE_STATE STDMETHODCALLTYPE GetDeviceState() override { return D3D12_DRED_DEVICE_STATE_UNKNOWN; }
+    HRESULT STDMETHODCALLTYPE GetAutoBreadcrumbsOutput(D3D12_DRED_AUTO_BREADCRUMBS_OUTPUT *) override { D3D12M_TRACED_BEGIN return kNotAvailable; D3D12M_TRACED_END() }
+    HRESULT STDMETHODCALLTYPE GetPageFaultAllocationOutput(D3D12_DRED_PAGE_FAULT_OUTPUT *) override { D3D12M_TRACED_BEGIN return kNotAvailable; D3D12M_TRACED_END() }
+    HRESULT STDMETHODCALLTYPE GetAutoBreadcrumbsOutput1(D3D12_DRED_AUTO_BREADCRUMBS_OUTPUT1 *) override { D3D12M_TRACED_BEGIN return kNotAvailable; D3D12M_TRACED_END() }
+    HRESULT STDMETHODCALLTYPE GetPageFaultAllocationOutput1(D3D12_DRED_PAGE_FAULT_OUTPUT1 *) override { D3D12M_TRACED_BEGIN return kNotAvailable; D3D12M_TRACED_END() }
+    HRESULT STDMETHODCALLTYPE GetPageFaultAllocationOutput2(D3D12_DRED_PAGE_FAULT_OUTPUT2 *) override { D3D12M_TRACED_BEGIN return kNotAvailable; D3D12M_TRACED_END() }
+    D3D12_DRED_DEVICE_STATE STDMETHODCALLTYPE GetDeviceState() override { D3D12M_TRACE(); return D3D12_DRED_DEVICE_STATE_UNKNOWN; }
 };
 
 } // namespace

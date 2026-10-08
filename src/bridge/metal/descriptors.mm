@@ -1,6 +1,7 @@
 // What goes into descriptors: texture views, typed buffer views (texture buffers),
 // null descriptors and samplers, in the layout the Metal shader converter reads
 // (IRDescriptorTableEntry; see docs/ARCHITECTURE.md).
+#include "bridge/metal/log.h"
 #include "internal.h"
 
 #include <algorithm>
@@ -29,7 +30,7 @@ uint64_t buffer_metadata(uint64_t size_bytes, uint32_t padding_elements, bool ty
 void log_once(std::atomic<bool> &flag, const char *message)
 {
     if (!flag.exchange(true))
-        std::fprintf(stderr, "d3d12-metal: %s\n", message);
+        backend_log("%s", message);
 }
 
 MTLTextureType to_texture_type(uint32_t type)

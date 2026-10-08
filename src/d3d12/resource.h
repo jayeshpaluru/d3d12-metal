@@ -46,12 +46,12 @@ public:
     HRESULT STDMETHODCALLTYPE Map(UINT subresource, const D3D12_RANGE *read_range, void **data) override;
     void STDMETHODCALLTYPE Unmap(UINT subresource, const D3D12_RANGE *written_range) override;
     D3D12M_AGGREGATE_RETURN(D3D12_RESOURCE_DESC, GetDesc, desc_)
-    D3D12_GPU_VIRTUAL_ADDRESS STDMETHODCALLTYPE GetGPUVirtualAddress() override { return gpu_address_; }
+    D3D12_GPU_VIRTUAL_ADDRESS STDMETHODCALLTYPE GetGPUVirtualAddress() override { D3D12M_TRACE(); return gpu_address_; }
     HRESULT STDMETHODCALLTYPE WriteToSubresource(UINT, const D3D12_BOX *, const void *, UINT, UINT) override { D3D12M_STUB_HR(); }
     HRESULT STDMETHODCALLTYPE ReadFromSubresource(void *, UINT, UINT, UINT, const D3D12_BOX *) override { D3D12M_STUB_HR(); }
     HRESULT STDMETHODCALLTYPE GetHeapProperties(D3D12_HEAP_PROPERTIES *heap, D3D12_HEAP_FLAGS *flags) override;
     // ID3D12Resource1
-    HRESULT STDMETHODCALLTYPE GetProtectedResourceSession(REFIID, void **) override { return DXGI_ERROR_NOT_FOUND; }
+    HRESULT STDMETHODCALLTYPE GetProtectedResourceSession(REFIID, void **) override { D3D12M_TRACED_BEGIN return DXGI_ERROR_NOT_FOUND; D3D12M_TRACED_END() }
     // ID3D12Resource2
     D3D12M_AGGREGATE_RETURN(D3D12_RESOURCE_DESC1, GetDesc1, desc1())
 

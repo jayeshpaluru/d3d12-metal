@@ -15,7 +15,7 @@ public:
         return query_interfaces<IUnknown, ID3D12Object, ID3D12DeviceChild, ID3D12Pageable, ID3D12CommandAllocator>(this, riid, out);
     }
 
-    HRESULT STDMETHODCALLTYPE Reset() override { return S_OK; }
+    HRESULT STDMETHODCALLTYPE Reset() override { D3D12M_TRACED_BEGIN return S_OK; D3D12M_TRACED_END() }
 
 private:
     explicit CommandAllocator(Device *device) : ChildImpl(device) {}

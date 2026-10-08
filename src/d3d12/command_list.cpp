@@ -128,14 +128,17 @@ void CommandList::flush_root_args(RootState &state, mtlb_cmd_type type)
 
 HRESULT CommandList::Close()
 {
+    D3D12M_TRACED_BEGIN
     if (closed_)
         return E_FAIL;
     closed_ = true;
     return S_OK;
+    D3D12M_TRACED_END()
 }
 
 HRESULT CommandList::Reset(ID3D12CommandAllocator *allocator, ID3D12PipelineState *initial_state)
 {
+    D3D12M_TRACED_BEGIN
     if (!closed_ || !allocator)
         return E_FAIL;
     reset_state();
@@ -143,12 +146,14 @@ HRESULT CommandList::Reset(ID3D12CommandAllocator *allocator, ID3D12PipelineStat
     if (initial_state)
         SetPipelineState(initial_state);
     return S_OK;
+    D3D12M_TRACED_END(allocator, initial_state)
 }
 
 // ---- State ------------------------------------------------------------------
 
 void CommandList::SetPipelineState(ID3D12PipelineState *pso)
 {
+    D3D12M_TRACE(pso);
     auto *state = hold<PipelineState>(pso);
     if (!state) {
         if (pso)
@@ -161,6 +166,7 @@ void CommandList::SetPipelineState(ID3D12PipelineState *pso)
 
 void CommandList::IASetPrimitiveTopology(D3D12_PRIMITIVE_TOPOLOGY topology)
 {
+    D3D12M_TRACE(topology);
     switch (topology) {
     case D3D_PRIMITIVE_TOPOLOGY_POINTLIST:
     case D3D_PRIMITIVE_TOPOLOGY_LINELIST:
@@ -176,6 +182,7 @@ void CommandList::IASetPrimitiveTopology(D3D12_PRIMITIVE_TOPOLOGY topology)
 
 void CommandList::RSSetViewports(UINT count, const D3D12_VIEWPORT *viewports)
 {
+    D3D12M_TRACE(count, viewports);
     if (!viewports || count > MTLB_MAX_VIEWPORTS)
         return;
     auto *cmd = append<mtlb_cmd_set_viewports>(MTLB_CMD_SET_VIEWPORTS, count * sizeof(mtlb_viewport));
@@ -188,6 +195,7 @@ void CommandList::RSSetViewports(UINT count, const D3D12_VIEWPORT *viewports)
 
 void CommandList::RSSetScissorRects(UINT count, const D3D12_RECT *rects)
 {
+    D3D12M_TRACE(count, rects);
     if (!rects || count > MTLB_MAX_VIEWPORTS)
         return;
     auto *cmd = append<mtlb_cmd_set_scissors>(MTLB_CMD_SET_SCISSORS, count * sizeof(mtlb_rect));
@@ -198,6 +206,7 @@ void CommandList::RSSetScissorRects(UINT count, const D3D12_RECT *rects)
 
 void CommandList::OMSetBlendFactor(const FLOAT factor[4])
 {
+    D3D12M_TRACE();
     auto *cmd = append<mtlb_cmd_set_blend_factor>(MTLB_CMD_SET_BLEND_FACTOR);
     if (factor)
         std::copy_n(factor, 4, cmd->factor);
@@ -207,11 +216,13 @@ void CommandList::OMSetBlendFactor(const FLOAT factor[4])
 
 void CommandList::OMSetStencilRef(UINT ref)
 {
+    D3D12M_TRACE(ref);
     append<mtlb_cmd_set_stencil_ref>(MTLB_CMD_SET_STENCIL_REF)->ref = ref;
 }
 
 void CommandList::IASetVertexBuffers(UINT start_slot, UINT count, const D3D12_VERTEX_BUFFER_VIEW *views)
 {
+    D3D12M_TRACE(start_slot, count, views);
     if (count == 0 || start_slot + count > MTLB_MAX_VERTEX_BUFFERS)
         return;
     auto *cmd = append<mtlb_cmd_set_vertex_buffers>(MTLB_CMD_SET_VERTEX_BUFFERS, count * sizeof(mtlb_vertex_buffer));
@@ -223,6 +234,7 @@ void CommandList::IASetVertexBuffers(UINT start_slot, UINT count, const D3D12_VE
 
 void CommandList::IASetIndexBuffer(const D3D12_INDEX_BUFFER_VIEW *view)
 {
+    D3D12M_TRACE(view);
     auto *cmd = append<mtlb_cmd_set_index_buffer>(MTLB_CMD_SET_INDEX_BUFFER);
     if (!view)
         return;
@@ -238,6 +250,7 @@ void CommandList::IASetIndexBuffer(const D3D12_INDEX_BUFFER_VIEW *view)
 void CommandList::OMSetRenderTargets(UINT count, const D3D12_CPU_DESCRIPTOR_HANDLE *rtvs,
                                      BOOL single_handle_to_range, const D3D12_CPU_DESCRIPTOR_HANDLE *dsv)
 {
+    D3D12M_TRACE(count, rtvs, single_handle_to_range, dsv);
     set_render_targets(count, rtvs, single_handle_to_range, dsv, 0);
 }
 
@@ -290,6 +303,7 @@ void CommandList::drop_pass()
 void CommandList::BeginRenderPass(UINT count, const D3D12_RENDER_PASS_RENDER_TARGET_DESC *targets,
                                   const D3D12_RENDER_PASS_DEPTH_STENCIL_DESC *depth_stencil, D3D12_RENDER_PASS_FLAGS flags)
 {
+    D3D12M_TRACE(count, targets, depth_stencil, flags);
     if (closed_ || in_pass_ || count > MTLB_MAX_RENDER_TARGETS || (count && !targets)) {
         D3D12M_LOG("BeginRenderPass: needs an open list outside a pass and valid targets");
         return;
@@ -350,6 +364,7 @@ void CommandList::BeginRenderPass(UINT count, const D3D12_RENDER_PASS_RENDER_TAR
 
 void CommandList::EndRenderPass()
 {
+    D3D12M_TRACE();
     if (closed_ || !in_pass_) {
         D3D12M_LOG("EndRenderPass without BeginRenderPass");
         return;
@@ -369,6 +384,7 @@ void CommandList::EndRenderPass()
 void CommandList::ClearRenderTargetView(D3D12_CPU_DESCRIPTOR_HANDLE view, const FLOAT color[4], UINT num_rects,
                                         const D3D12_RECT *)
 {
+    D3D12M_TRACE(view, num_rects);
     if (closed_ || !view.ptr || !color)
         return;
     mtlb_render_target target;
@@ -384,6 +400,7 @@ void CommandList::ClearRenderTargetView(D3D12_CPU_DESCRIPTOR_HANDLE view, const 
 void CommandList::ClearDepthStencilView(D3D12_CPU_DESCRIPTOR_HANDLE view, D3D12_CLEAR_FLAGS flags, FLOAT depth,
                                         UINT8 stencil, UINT num_rects, const D3D12_RECT *)
 {
+    D3D12M_TRACE(view, flags, depth, stencil, num_rects);
     if (closed_ || !view.ptr || !(flags & (D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL)))
         return;
     mtlb_render_target target;
@@ -422,11 +439,13 @@ void CommandList::set_root_signature(RootState &state, ID3D12RootSignature *sign
 
 void CommandList::SetGraphicsRootSignature(ID3D12RootSignature *signature)
 {
+    D3D12M_TRACE(signature);
     set_root_signature(graphics_, signature, "SetGraphicsRootSignature");
 }
 
 void CommandList::SetComputeRootSignature(ID3D12RootSignature *signature)
 {
+    D3D12M_TRACE(signature);
     set_root_signature(compute_, signature, "SetComputeRootSignature");
 }
 
@@ -462,61 +481,73 @@ void CommandList::set_root_constants(RootState &state, UINT index, UINT count, c
 
 void CommandList::SetGraphicsRootDescriptorTable(UINT index, D3D12_GPU_DESCRIPTOR_HANDLE base)
 {
+    D3D12M_TRACE(index, base);
     set_root_address(graphics_, index, D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE, base.ptr);
 }
 
 void CommandList::SetGraphicsRootConstantBufferView(UINT index, D3D12_GPU_VIRTUAL_ADDRESS address)
 {
+    D3D12M_TRACE(index, address);
     set_root_address(graphics_, index, D3D12_ROOT_PARAMETER_TYPE_CBV, address);
 }
 
 void CommandList::SetGraphicsRootShaderResourceView(UINT index, D3D12_GPU_VIRTUAL_ADDRESS address)
 {
+    D3D12M_TRACE(index, address);
     set_root_address(graphics_, index, D3D12_ROOT_PARAMETER_TYPE_SRV, address);
 }
 
 void CommandList::SetGraphicsRootUnorderedAccessView(UINT index, D3D12_GPU_VIRTUAL_ADDRESS address)
 {
+    D3D12M_TRACE(index, address);
     set_root_address(graphics_, index, D3D12_ROOT_PARAMETER_TYPE_UAV, address);
 }
 
 void CommandList::SetGraphicsRoot32BitConstant(UINT index, UINT value, UINT dest_offset)
 {
+    D3D12M_TRACE(index, value, dest_offset);
     set_root_constants(graphics_, index, 1, &value, dest_offset);
 }
 
 void CommandList::SetGraphicsRoot32BitConstants(UINT index, UINT count, const void *data, UINT dest_offset)
 {
+    D3D12M_TRACE(index, count, data, dest_offset);
     set_root_constants(graphics_, index, count, data, dest_offset);
 }
 
 void CommandList::SetComputeRootDescriptorTable(UINT index, D3D12_GPU_DESCRIPTOR_HANDLE base)
 {
+    D3D12M_TRACE(index, base);
     set_root_address(compute_, index, D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE, base.ptr);
 }
 
 void CommandList::SetComputeRootConstantBufferView(UINT index, D3D12_GPU_VIRTUAL_ADDRESS address)
 {
+    D3D12M_TRACE(index, address);
     set_root_address(compute_, index, D3D12_ROOT_PARAMETER_TYPE_CBV, address);
 }
 
 void CommandList::SetComputeRootShaderResourceView(UINT index, D3D12_GPU_VIRTUAL_ADDRESS address)
 {
+    D3D12M_TRACE(index, address);
     set_root_address(compute_, index, D3D12_ROOT_PARAMETER_TYPE_SRV, address);
 }
 
 void CommandList::SetComputeRootUnorderedAccessView(UINT index, D3D12_GPU_VIRTUAL_ADDRESS address)
 {
+    D3D12M_TRACE(index, address);
     set_root_address(compute_, index, D3D12_ROOT_PARAMETER_TYPE_UAV, address);
 }
 
 void CommandList::SetComputeRoot32BitConstant(UINT index, UINT value, UINT dest_offset)
 {
+    D3D12M_TRACE(index, value, dest_offset);
     set_root_constants(compute_, index, 1, &value, dest_offset);
 }
 
 void CommandList::SetComputeRoot32BitConstants(UINT index, UINT count, const void *data, UINT dest_offset)
 {
+    D3D12M_TRACE(index, count, data, dest_offset);
     set_root_constants(compute_, index, count, data, dest_offset);
 }
 
@@ -524,6 +555,7 @@ void CommandList::SetComputeRoot32BitConstants(UINT index, UINT count, const voi
 // A transition to the state a resource is already in, and the "begin" half of a split barrier, need nothing.
 void CommandList::ResourceBarrier(UINT count, const D3D12_RESOURCE_BARRIER *barriers)
 {
+    D3D12M_TRACE(count, barriers);
     if (!barriers)
         return;
     std::vector<mtlb_barrier> entries;
@@ -579,6 +611,7 @@ void CommandList::ResourceBarrier(UINT count, const D3D12_RESOURCE_BARRIER *barr
 // ResourceDescriptorHeap) find them at fixed bind points: the backend binds the current pair.
 void CommandList::SetDescriptorHeaps(UINT count, ID3D12DescriptorHeap *const *heaps)
 {
+    D3D12M_TRACE(count, heaps);
     uint64_t resource_heap = 0, sampler_heap = 0;
     for (UINT i = 0; i < count && heaps; ++i) {
         auto *heap = hold<DescriptorHeap>(heaps[i]);
@@ -598,6 +631,7 @@ void CommandList::SetDescriptorHeaps(UINT count, ID3D12DescriptorHeap *const *he
 
 void CommandList::DrawInstanced(UINT vertex_count, UINT instance_count, UINT start_vertex, UINT start_instance)
 {
+    D3D12M_TRACE(vertex_count, instance_count, start_vertex, start_instance);
     if (!prepare_draw())
         return;
     auto *cmd = append<mtlb_cmd_draw>(MTLB_CMD_DRAW);
@@ -610,6 +644,7 @@ void CommandList::DrawInstanced(UINT vertex_count, UINT instance_count, UINT sta
 void CommandList::DrawIndexedInstanced(UINT index_count, UINT instance_count, UINT start_index, INT base_vertex,
                                        UINT start_instance)
 {
+    D3D12M_TRACE(index_count, instance_count, start_index, base_vertex, start_instance);
     if (!prepare_draw())
         return;
     auto *cmd = append<mtlb_cmd_draw_indexed>(MTLB_CMD_DRAW_INDEXED);
@@ -624,6 +659,7 @@ void CommandList::DrawIndexedInstanced(UINT index_count, UINT instance_count, UI
 
 void CommandList::BeginQuery(ID3D12QueryHeap *heap_ptr, D3D12_QUERY_TYPE type, UINT index)
 {
+    D3D12M_TRACE(heap_ptr, type, index);
     auto *heap = hold<QueryHeap>(heap_ptr);
     if (closed_ || !heap || index >= heap->count() || !query_matches_heap(type, heap->type())) {
         D3D12M_LOG("BeginQuery: invalid query heap, index or type");
@@ -637,6 +673,7 @@ void CommandList::BeginQuery(ID3D12QueryHeap *heap_ptr, D3D12_QUERY_TYPE type, U
 
 void CommandList::EndQuery(ID3D12QueryHeap *heap_ptr, D3D12_QUERY_TYPE type, UINT index)
 {
+    D3D12M_TRACE(heap_ptr, type, index);
     auto *heap = hold<QueryHeap>(heap_ptr);
     if (closed_ || !heap || index >= heap->count() || !query_matches_heap(type, heap->type())) {
         D3D12M_LOG("EndQuery: invalid query heap, index or type");
@@ -651,6 +688,7 @@ void CommandList::EndQuery(ID3D12QueryHeap *heap_ptr, D3D12_QUERY_TYPE type, UIN
 void CommandList::ResolveQueryData(ID3D12QueryHeap *heap_ptr, D3D12_QUERY_TYPE type, UINT start, UINT count,
                                    ID3D12Resource *destination, UINT64 offset)
 {
+    D3D12M_TRACE(heap_ptr, type, start, count, destination, offset);
     auto *heap = hold<QueryHeap>(heap_ptr);
     auto *dst = hold<Resource>(destination);
     if (closed_ || !heap || !dst || !dst->is_buffer() || uint64_t(start) + count > heap->count()
@@ -677,22 +715,26 @@ void CommandList::marker(UINT kind, const std::string &text)
 
 void CommandList::SetMarker(UINT metadata, const void *data, UINT size)
 {
+    D3D12M_TRACE(metadata, data, size);
     marker(2, marker_text(metadata, data, size));
 }
 
 void CommandList::BeginEvent(UINT metadata, const void *data, UINT size)
 {
+    D3D12M_TRACE(metadata, data, size);
     marker(0, marker_text(metadata, data, size));
 }
 
 void CommandList::EndEvent()
 {
+    D3D12M_TRACE();
     marker(1, std::string());
 }
 
 void CommandList::WriteBufferImmediate(UINT count, const D3D12_WRITEBUFFERIMMEDIATE_PARAMETER *params,
                                        const D3D12_WRITEBUFFERIMMEDIATE_MODE *)
 {
+    D3D12M_TRACE(count, params);
     // Every write happens in order with the commands around it, which satisfies all the modes.
     for (UINT i = 0; i < count && params; ++i) {
         if (params[i].Dest % 4) {
@@ -711,6 +753,7 @@ void CommandList::WriteBufferImmediate(UINT count, const D3D12_WRITEBUFFERIMMEDI
 // as in D3D12.
 void CommandList::ExecuteBundle(ID3D12GraphicsCommandList *bundle_ptr)
 {
+    D3D12M_TRACE(bundle_ptr);
     auto *bundle = ours<CommandList>(bundle_ptr);
     if (closed_ || !bundle || bundle->type_ != D3D12_COMMAND_LIST_TYPE_BUNDLE || !bundle->closed_ || type_ == D3D12_COMMAND_LIST_TYPE_BUNDLE) {
         D3D12M_LOG("ExecuteBundle needs a closed bundle of this layer on a direct or compute list");
@@ -745,6 +788,7 @@ void CommandList::ClearUnorderedAccessViewUint(D3D12_GPU_DESCRIPTOR_HANDLE, D3D1
                                                ID3D12Resource *resource, const UINT values[4], UINT num_rects,
                                                const D3D12_RECT *rects)
 {
+    D3D12M_TRACE(cpu_handle, resource, num_rects, rects);
     clear_uav(cpu_handle, resource, values, false, num_rects, rects);
 }
 
@@ -752,6 +796,7 @@ void CommandList::ClearUnorderedAccessViewFloat(D3D12_GPU_DESCRIPTOR_HANDLE, D3D
                                                 ID3D12Resource *resource, const FLOAT values[4], UINT num_rects,
                                                 const D3D12_RECT *rects)
 {
+    D3D12M_TRACE(cpu_handle, resource, num_rects, rects);
     uint32_t bits[4];
     std::memcpy(bits, values, sizeof(bits));
     clear_uav(cpu_handle, resource, bits, true, num_rects, rects);
@@ -877,6 +922,7 @@ void CommandList::clear_uav(D3D12_CPU_DESCRIPTOR_HANDLE view_handle, ID3D12Resou
 void CommandList::ResolveSubresource(ID3D12Resource *dst_ptr, UINT dst_subresource, ID3D12Resource *src_ptr,
                                      UINT src_subresource, DXGI_FORMAT format)
 {
+    D3D12M_TRACE(dst_ptr, dst_subresource, src_ptr, src_subresource, format);
     auto *dst = hold<Resource>(dst_ptr);
     auto *src = hold<Resource>(src_ptr);
     if (closed_ || !dst || !src || dst->is_buffer() || src->is_buffer()) {
@@ -901,6 +947,7 @@ void CommandList::ResolveSubresourceRegion(ID3D12Resource *dst, UINT dst_subreso
                                            ID3D12Resource *src, UINT src_subresource, D3D12_RECT *src_rect,
                                            DXGI_FORMAT format, D3D12_RESOLVE_MODE mode)
 {
+    D3D12M_TRACE(dst, dst_subresource, dst_x, dst_y, src, src_subresource, src_rect, format, mode);
     if (mode != D3D12_RESOLVE_MODE_AVERAGE && mode != D3D12_RESOLVE_MODE_DECOMPRESS)
         D3D12M_LOG("ResolveSubresourceRegion: resolve mode %d is approximated by averaging", static_cast<int>(mode));
     if (dst_x || dst_y || src_rect)
@@ -913,6 +960,7 @@ void CommandList::ResolveSubresourceRegion(ID3D12Resource *dst, UINT dst_subreso
 void CommandList::ExecuteIndirect(ID3D12CommandSignature *signature_ptr, UINT max_count, ID3D12Resource *argument_buffer,
                                   UINT64 argument_offset, ID3D12Resource *count_buffer, UINT64 count_offset)
 {
+    D3D12M_TRACE(signature_ptr, max_count, argument_buffer, argument_offset, count_buffer, count_offset);
     auto *signature = hold<CommandSignature>(signature_ptr);
     auto *arguments = hold<Resource>(argument_buffer);
     auto *count = hold<Resource>(count_buffer);
@@ -990,6 +1038,7 @@ void CommandList::ExecuteIndirect(ID3D12CommandSignature *signature_ptr, UINT ma
 
 void CommandList::Dispatch(UINT x, UINT y, UINT z)
 {
+    D3D12M_TRACE(x, y, z);
     if (closed_ || (type_ != D3D12_COMMAND_LIST_TYPE_BUNDLE && (!has_compute_pipeline_ || !compute_.signature))) {
         D3D12M_LOG("dispatch skipped: needs an open list, a compute pipeline and a compute root signature");
         return;
@@ -1006,6 +1055,7 @@ void CommandList::Dispatch(UINT x, UINT y, UINT z)
 void CommandList::CopyBufferRegion(ID3D12Resource *dst, UINT64 dst_offset, ID3D12Resource *src, UINT64 src_offset,
                                    UINT64 size)
 {
+    D3D12M_TRACE(dst, dst_offset, src, src_offset, size);
     auto *d = hold<Resource>(dst);
     auto *s = hold<Resource>(src);
     if (!d || !s || !d->is_buffer() || !s->is_buffer()) {
@@ -1022,6 +1072,7 @@ void CommandList::CopyBufferRegion(ID3D12Resource *dst, UINT64 dst_offset, ID3D1
 
 void CommandList::CopyResource(ID3D12Resource *dst, ID3D12Resource *src)
 {
+    D3D12M_TRACE(dst, src);
     auto *d = hold<Resource>(dst);
     auto *s = hold<Resource>(src);
     if (!d || !s || d->is_buffer() != s->is_buffer()) {
@@ -1084,6 +1135,7 @@ void CommandList::copy_texture_to_texture(const D3D12_TEXTURE_COPY_LOCATION &dst
 void CommandList::CopyTextureRegion(const D3D12_TEXTURE_COPY_LOCATION *dst, UINT dst_x, UINT dst_y, UINT dst_z,
                                     const D3D12_TEXTURE_COPY_LOCATION *src, const D3D12_BOX *src_box)
 {
+    D3D12M_TRACE(dst, dst_x, dst_y, dst_z, src, src_box);
     if (!dst || !src)
         return;
     const bool to_buffer = dst->Type == D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT

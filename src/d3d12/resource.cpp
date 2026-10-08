@@ -202,12 +202,14 @@ Resource::~Resource()
 
 HRESULT Resource::Map(UINT subresource, const D3D12_RANGE *, void **data)
 {
+    D3D12M_TRACED_BEGIN
     if (!is_buffer() || subresource != 0 || heap_.Type == D3D12_HEAP_TYPE_DEFAULT)
         return E_INVALIDARG;
     // Shared storage is coherent for the CPU, so the ranges need no handling.
     if (data)
         *data = cpu_ptr_;
     return S_OK;
+    D3D12M_TRACED_END(subresource, data)
 }
 
 void Resource::Unmap(UINT, const D3D12_RANGE *)
@@ -216,11 +218,13 @@ void Resource::Unmap(UINT, const D3D12_RANGE *)
 
 HRESULT Resource::GetHeapProperties(D3D12_HEAP_PROPERTIES *heap, D3D12_HEAP_FLAGS *flags)
 {
+    D3D12M_TRACED_BEGIN
     if (heap)
         *heap = heap_;
     if (flags)
         *flags = D3D12_HEAP_FLAG_NONE;
     return S_OK;
+    D3D12M_TRACED_END(heap, flags)
 }
 
 } // namespace d3d12m

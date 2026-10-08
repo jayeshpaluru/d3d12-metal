@@ -63,54 +63,66 @@ public:
 
     HRESULT STDMETHODCALLTYPE GetParent(REFIID riid, void **parent) override
     {
+        D3D12M_TRACED_BEGIN
         return parent_->QueryInterface(riid, parent);
+        D3D12M_TRACED_END(riid, parent)
     }
 
     // IDXGIAdapter
     // One output, the primary display.
     HRESULT STDMETHODCALLTYPE EnumOutputs(UINT index, IDXGIOutput **output) override
     {
+        D3D12M_TRACED_BEGIN
         if (!output)
             return DXGI_ERROR_INVALID_CALL;
         *output = nullptr;
         if (index != 0)
             return DXGI_ERROR_NOT_FOUND;
         return hand_out(create_output(this), __uuidof(IDXGIOutput), reinterpret_cast<void **>(output));
+        D3D12M_TRACED_END(index, output)
     }
 
     HRESULT STDMETHODCALLTYPE GetDesc(DXGI_ADAPTER_DESC *desc) override
     {
+        D3D12M_TRACED_BEGIN
         if (!desc)
             return E_INVALIDARG;
         fill_common(*desc, desc_);
         return S_OK;
+        D3D12M_TRACED_END(desc)
     }
 
     // The layer is a plain translation layer: every interface "is supported".
     HRESULT STDMETHODCALLTYPE CheckInterfaceSupport(REFGUID, LARGE_INTEGER *umd_version) override
     {
+        D3D12M_TRACED_BEGIN
         if (umd_version)
             umd_version->QuadPart = 1;
         return S_OK;
+        D3D12M_TRACED_END(umd_version)
     }
 
     // IDXGIAdapter1
     HRESULT STDMETHODCALLTYPE GetDesc1(DXGI_ADAPTER_DESC1 *desc) override
     {
+        D3D12M_TRACED_BEGIN
         if (!desc)
             return E_INVALIDARG;
         fill_common(*desc, desc_);
         desc->Flags = desc_.Flags;
         return S_OK;
+        D3D12M_TRACED_END(desc)
     }
 
     // IDXGIAdapter2
     HRESULT STDMETHODCALLTYPE GetDesc2(DXGI_ADAPTER_DESC2 *desc) override
     {
+        D3D12M_TRACED_BEGIN
         if (!desc)
             return E_INVALIDARG;
         *desc = desc_;
         return S_OK;
+        D3D12M_TRACED_END(desc)
     }
 
     // IDXGIAdapter3
@@ -130,6 +142,7 @@ public:
     HRESULT STDMETHODCALLTYPE QueryVideoMemoryInfo(UINT node, DXGI_MEMORY_SEGMENT_GROUP group,
                                                    DXGI_QUERY_VIDEO_MEMORY_INFO *info) override
     {
+        D3D12M_TRACED_BEGIN
         if (node != 0 || !info || (group != DXGI_MEMORY_SEGMENT_GROUP_LOCAL && group != DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL))
             return E_INVALIDARG;
         const bool local = group == DXGI_MEMORY_SEGMENT_GROUP_LOCAL;
@@ -148,23 +161,28 @@ public:
         info->AvailableForReservation = info->Budget / 2;
         info->CurrentReservation = reservation_[local ? 0 : 1];
         return S_OK;
+        D3D12M_TRACED_END(node, group, info)
     }
 
     HRESULT STDMETHODCALLTYPE SetVideoMemoryReservation(UINT node, DXGI_MEMORY_SEGMENT_GROUP group, UINT64 reservation) override
     {
+        D3D12M_TRACED_BEGIN
         if (node != 0 || (group != DXGI_MEMORY_SEGMENT_GROUP_LOCAL && group != DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL))
             return E_INVALIDARG;
         reservation_[group == DXGI_MEMORY_SEGMENT_GROUP_LOCAL ? 0 : 1] = reservation;
         return S_OK;
+        D3D12M_TRACED_END(node, group, reservation)
     }
 
     // The budget never changes, so the event is never signalled; the cookie only identifies the registration.
     HRESULT STDMETHODCALLTYPE RegisterVideoMemoryBudgetChangeNotificationEvent(HANDLE event, DWORD *cookie) override
     {
+        D3D12M_TRACED_BEGIN
         if (!event || !cookie)
             return E_INVALIDARG;
         *cookie = next_cookie_++;
         return S_OK;
+        D3D12M_TRACED_END(event, cookie)
     }
 
     void STDMETHODCALLTYPE UnregisterVideoMemoryBudgetChangeNotification(DWORD) override {}

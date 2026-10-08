@@ -47,6 +47,14 @@ enum {
 /* Description of the most recent failure on the calling thread. */
 MTLB_EXPORT const char *mtlb_last_error(void);
 
+/* Sets an option the backend reads from the environment (D3D12METAL_*) unless the environment already sets it:
+ * the front-end passes the entries of d3d12metal.conf (Wine's unix side does not see the game's configuration). */
+MTLB_EXPORT void mtlb_configure(const char *name, const char *value);
+
+/* Log output. Channel 0 appends `length` bytes (whole lines) to D3D12METAL_LOG_FILE if it is set; channel 1
+ * replaces the file D3D12METAL_LOG_FILE + ".methods" (the API trace's inventory of methods). */
+MTLB_EXPORT void mtlb_log_write(uint32_t channel, const char *text, uint64_t length);
+
 /* Opaque handles. Zero is never a valid handle. */
 typedef uint64_t mtlb_device;
 typedef uint64_t mtlb_buffer;

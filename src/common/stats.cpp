@@ -5,6 +5,8 @@
 #include <cstdlib>
 
 #include "bridge/mtlb.h"
+#include "common/config.h"
+#include "common/log.h"
 
 #ifdef _WIN32
 // Bridge calls (unix calls) made so far; counted by the PE client (src/bridge/wine/mtlb_client.cpp).
@@ -16,15 +18,10 @@ static uint64_t mtlb_client_call_count(void) { return 0; }  // native builds cal
 namespace d3d12m {
 
 namespace {
-bool read_enabled()
-{
-    const char *value = std::getenv("D3D12METAL_STATS");
-    return value && *value && *value != '0';
-}
 constexpr unsigned kFramesPerReport = 120;
 } // namespace
 
-bool g_stats_enabled = read_enabled();
+bool g_stats_enabled = config_flag("STATS");
 
 uint64_t PsoTimer::now()
 {
@@ -53,10 +50,10 @@ void stats_frame()
     const uint64_t calls = mtlb_client_call_count();
     auto per_frame = [](uint64_t now, uint64_t before) { return double(now - before) / kFramesPerReport; };
     auto f = [&](Stat s) { return per_frame(front[static_cast<unsigned>(s)], last_front[static_cast<unsigned>(s)]); };
-    std::fprintf(stderr,
+    log_printf(
                  "d3d12-metal stats (per frame, last %u): submits %.1f, lists %.1f, command buffers %.1f, render passes %.1f, "
                  "compute encoders %.1f, blit encoders %.1f, barriers %.1f, fence syncs %.1f, descriptor writes %.0f, "
-                 "PSO creations %.2f, stream KB %.1f, unix calls %.1f; PSO creation total %llu in %.1f ms\n",
+                 "PSO creations %.2f, stream KB %.1f, unix calls %.1f; PSO creation total %llu in %.1f ms",
                  kFramesPerReport, f(Stat::Submits), f(Stat::CommandLists), per_frame(back.command_buffers, last_back.command_buffers),
                  per_frame(back.render_encoders, last_back.render_encoders), per_frame(back.compute_encoders, last_back.compute_encoders),
                  per_frame(back.blit_encoders, last_back.blit_encoders), per_frame(back.barriers, last_back.barriers),

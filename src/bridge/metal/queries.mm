@@ -1,4 +1,5 @@
 // Query heaps and GPU clocks.
+#include "bridge/metal/log.h"
 #include "internal.h"
 
 #include <mach/mach_time.h>
@@ -37,11 +38,11 @@ mtlb_result mtlb_query_heap_create(mtlb_device handle, uint32_t kind, uint32_t c
             NSError *error = nil;
             heap->samples = [device->device newCounterSampleBufferWithDescriptor:descriptor error:&error];
             if (!heap->samples)
-                fprintf(stderr, "d3d12-metal: timestamp queries unavailable: %s\n", error.localizedDescription.UTF8String);
+                backend_log("timestamp queries unavailable: %s", error.localizedDescription.UTF8String);
         } else {
             static std::atomic<bool> logged{false};
             if (!logged.exchange(true))
-                fprintf(stderr, "d3d12-metal: this GPU cannot sample timestamps at encoder boundaries; timestamp queries read zero\n");
+                backend_log("this GPU cannot sample timestamps at encoder boundaries; timestamp queries read zero");
         }
     }
     *out = to_handle(heap);

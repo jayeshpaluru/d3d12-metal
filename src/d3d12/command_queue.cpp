@@ -37,6 +37,7 @@ CommandQueue::~CommandQueue()
 
 void CommandQueue::ExecuteCommandLists(UINT count, ID3D12CommandList *const *lists)
 {
+    D3D12M_TRACE(count, lists);
     if (count && !lists)
         return;
     // All lists go to the backend in a single submit, one span per list.
@@ -76,31 +77,38 @@ void CommandQueue::ExecuteCommandLists(UINT count, ID3D12CommandList *const *lis
 
 HRESULT CommandQueue::Signal(ID3D12Fence *fence, UINT64 value)
 {
+    D3D12M_TRACED_BEGIN
     auto *f = ours<Fence>(fence);
     if (!f)
         return E_INVALIDARG;
     return to_hresult(mtlb_queue_signal(queue_, f->event(), value));
+    D3D12M_TRACED_END(fence, value)
 }
 
 HRESULT CommandQueue::Wait(ID3D12Fence *fence, UINT64 value)
 {
+    D3D12M_TRACED_BEGIN
     auto *f = ours<Fence>(fence);
     if (!f)
         return E_INVALIDARG;
     return to_hresult(mtlb_queue_wait(queue_, f->event(), value));
+    D3D12M_TRACED_END(fence, value)
 }
 
 HRESULT CommandQueue::GetTimestampFrequency(UINT64 *frequency)
 {
+    D3D12M_TRACED_BEGIN
     if (!frequency)
         return E_INVALIDARG;
     *frequency = mtlb_timestamp_frequency(device()->handle());
     return S_OK;
+    D3D12M_TRACED_END(frequency)
 }
 
 // The GPU clock in timestamp query ticks, and the CPU clock in QueryPerformanceCounter ticks, sampled together.
 HRESULT CommandQueue::GetClockCalibration(UINT64 *gpu_timestamp, UINT64 *cpu_timestamp)
 {
+    D3D12M_TRACED_BEGIN
     if (!gpu_timestamp || !cpu_timestamp)
         return E_INVALIDARG;
     uint64_t gpu, cpu_mach;
@@ -109,11 +117,13 @@ HRESULT CommandQueue::GetClockCalibration(UINT64 *gpu_timestamp, UINT64 *cpu_tim
     *gpu_timestamp = gpu;
     *cpu_timestamp = platform_performance_counter();
     return S_OK;
+    D3D12M_TRACED_END(gpu_timestamp, cpu_timestamp)
 }
 
 // Queue markers label the work the queue has recorded so far.
 void CommandQueue::SetMarker(UINT metadata, const void *data, UINT size)
 {
+    D3D12M_TRACE(metadata, data, size);
     const std::string text = marker_text(metadata, data, size);
     mtlb_queue_marker(queue_, 0, text.c_str());
     mtlb_queue_marker(queue_, 1, nullptr);
@@ -121,11 +131,13 @@ void CommandQueue::SetMarker(UINT metadata, const void *data, UINT size)
 
 void CommandQueue::BeginEvent(UINT metadata, const void *data, UINT size)
 {
+    D3D12M_TRACE(metadata, data, size);
     mtlb_queue_marker(queue_, 0, marker_text(metadata, data, size).c_str());
 }
 
 void CommandQueue::EndEvent()
 {
+    D3D12M_TRACE();
     mtlb_queue_marker(queue_, 1, nullptr);
 }
 

@@ -46,6 +46,7 @@ public:
     HRESULT STDMETHODCALLTYPE GetRootSignatureDescAtVersion(
         D3D_ROOT_SIGNATURE_VERSION version, const D3D12_VERSIONED_ROOT_SIGNATURE_DESC **desc) override
     {
+        D3D12M_TRACED_BEGIN
         if (!desc)
             return E_INVALIDARG;
         *desc = nullptr;
@@ -54,6 +55,7 @@ public:
         case D3D_ROOT_SIGNATURE_VERSION_1_1: *desc = &v11_; return S_OK;
         default: return E_INVALIDARG;
         }
+        D3D12M_TRACED_END(version, desc)
     }
 
     const D3D12_VERSIONED_ROOT_SIGNATURE_DESC *STDMETHODCALLTYPE GetUnconvertedRootSignatureDesc() override

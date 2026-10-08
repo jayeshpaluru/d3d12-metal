@@ -44,17 +44,23 @@ class WithPrivateData : public Base {
 public:
     HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID guid, UINT *size, void *data) override
     {
+        D3D12M_TRACED_BEGIN
         return private_data_.get(guid, size, data);
+        D3D12M_TRACED_END(guid, size, data)
     }
 
     HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID guid, UINT size, const void *data) override
     {
+        D3D12M_TRACED_BEGIN
         return private_data_.set(guid, size, data);
+        D3D12M_TRACED_END(guid, size)
     }
 
     HRESULT STDMETHODCALLTYPE SetPrivateDataInterface(REFGUID guid, const IUnknown *iface) override
     {
+        D3D12M_TRACED_BEGIN
         return private_data_.set_interface(guid, iface);
+        D3D12M_TRACED_END(guid, iface)
     }
 
 protected:

@@ -98,7 +98,7 @@ public:
     }
 
     // ID3D12CommandList
-    D3D12_COMMAND_LIST_TYPE STDMETHODCALLTYPE GetType() override { return type_; }
+    D3D12_COMMAND_LIST_TYPE STDMETHODCALLTYPE GetType() override { D3D12M_TRACE(); return type_; }
 
     // ID3D12GraphicsCommandList
     HRESULT STDMETHODCALLTYPE Close() override;

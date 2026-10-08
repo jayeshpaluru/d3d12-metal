@@ -6,6 +6,7 @@ if host_system == 'darwin'
     'metal/formats.mm',
     'metal/heap.mm',
     'metal/kernels.mm',
+    'metal/log.cpp',
     'metal/notify.mm',
     'metal/pipeline.mm',
     'metal/queries.mm',

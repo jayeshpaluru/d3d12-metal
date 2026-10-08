@@ -20,11 +20,13 @@ class ObjectImpl : public WithPrivateData<RefCounted<I>> {
 public:
     HRESULT STDMETHODCALLTYPE SetName(LPCWSTR name) override
     {
+        D3D12M_TRACED_BEGIN
         size_t length = 0;
         while (name && name[length])
             ++length;
         return this->private_data_.set(WKPDID_D3DDebugObjectNameW,
                                  name ? static_cast<UINT>((length + 1) * sizeof(WCHAR)) : 0, name);
+        D3D12M_TRACED_END(name)
     }
 };
 
@@ -36,12 +38,13 @@ public:
 #define D3D12M_AGGREGATE_RETURN(T, name, expr) \
     T *STDMETHODCALLTYPE name(T *ret) override  \
     {                                           \
+        D3D12M_TRACE();                         \
         *ret = (expr);                          \
         return ret;                             \
     }
 #else
 #define D3D12M_AGGREGATE_RETURN(T, name, expr) \
-    T STDMETHODCALLTYPE name() override { return (expr); }
+    T STDMETHODCALLTYPE name() override { D3D12M_TRACE(); return (expr); }
 #endif
 
 // The castable format list parameter of the newest resource creation methods is
@@ -91,7 +94,9 @@ class ChildImpl : public ObjectImpl<I> {
 public:
     HRESULT STDMETHODCALLTYPE GetDevice(REFIID riid, void **device) override
     {
+        D3D12M_TRACED_BEGIN
         return query_device(device_, riid, device);
+        D3D12M_TRACED_END(riid, device)
     }
 
 protected:

@@ -22,7 +22,7 @@ public:
     }
 
     D3D12M_AGGREGATE_RETURN(D3D12_HEAP_DESC, GetDesc, desc_)
-    HRESULT STDMETHODCALLTYPE GetProtectedResourceSession(REFIID, void **) override { return DXGI_ERROR_NOT_FOUND; }
+    HRESULT STDMETHODCALLTYPE GetProtectedResourceSession(REFIID, void **) override { D3D12M_TRACED_BEGIN return DXGI_ERROR_NOT_FOUND; D3D12M_TRACED_END() }
 
 private:
     explicit Heap(Device *device) : ChildImpl(device) {}

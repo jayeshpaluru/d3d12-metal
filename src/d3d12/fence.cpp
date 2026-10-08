@@ -30,11 +30,13 @@ Fence::~Fence()
 
 UINT64 Fence::GetCompletedValue()
 {
+    D3D12M_TRACE();
     return mtlb_event_completed_value(event_);
 }
 
 HRESULT Fence::SetEventOnCompletion(UINT64 value, HANDLE event)
 {
+    D3D12M_TRACED_BEGIN
     if (!event)
         return to_hresult(mtlb_event_wait_cpu(event_, value, UINT64_MAX));
     if (GetCompletedValue() >= value) {
@@ -42,6 +44,7 @@ HRESULT Fence::SetEventOnCompletion(UINT64 value, HANDLE event)
         return S_OK;
     }
     return device()->fence_waiter().add(this, value, event);
+    D3D12M_TRACED_END(value, event)
 }
 
 FenceWaiter::~FenceWaiter()
@@ -117,8 +120,10 @@ void FenceWaiter::run()
 
 HRESULT Fence::Signal(UINT64 value)
 {
+    D3D12M_TRACED_BEGIN
     mtlb_event_signal_cpu(event_, value);
     return S_OK;
+    D3D12M_TRACED_END(value)
 }
 
 } // namespace d3d12m

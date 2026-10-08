@@ -187,42 +187,56 @@ Device::~Device()
 
 UINT Device::GetNodeCount()
 {
+    D3D12M_TRACE();
     return 1;
 }
 
 HRESULT Device::CreateCommandQueue(const D3D12_COMMAND_QUEUE_DESC *desc, REFIID riid, void **out)
 {
+    D3D12M_TRACED_BEGIN
     return desc ? CommandQueue::create(this, *desc, riid, out) : E_INVALIDARG;
+    D3D12M_TRACED_END(desc, riid, out)
 }
 
 HRESULT Device::CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE type, REFIID riid, void **out)
 {
+    D3D12M_TRACED_BEGIN
     return CommandAllocator::create(this, type, riid, out);
+    D3D12M_TRACED_END(type, riid, out)
 }
 
 HRESULT Device::CreateGraphicsPipelineState(const D3D12_GRAPHICS_PIPELINE_STATE_DESC *desc, REFIID riid, void **out)
 {
+    D3D12M_TRACED_BEGIN
     return desc ? PipelineState::create_graphics(this, *desc, riid, out) : E_INVALIDARG;
+    D3D12M_TRACED_END(desc, riid, out)
 }
 
 HRESULT Device::CreateComputePipelineState(const D3D12_COMPUTE_PIPELINE_STATE_DESC *desc, REFIID riid, void **out)
 {
+    D3D12M_TRACED_BEGIN
     return desc ? PipelineState::create_compute(this, *desc, riid, out) : E_INVALIDARG;
+    D3D12M_TRACED_END(desc, riid, out)
 }
 
 HRESULT Device::CreatePipelineState(const D3D12_PIPELINE_STATE_STREAM_DESC *desc, REFIID riid, void **out)
 {
+    D3D12M_TRACED_BEGIN
     return desc ? PipelineState::create_from_stream(this, *desc, riid, out) : E_INVALIDARG;
+    D3D12M_TRACED_END(desc, riid, out)
 }
 
 HRESULT Device::EnqueueMakeResident(D3D12_RESIDENCY_FLAGS, UINT, ID3D12Pageable *const *, ID3D12Fence *fence, UINT64 value)
 {
+    D3D12M_TRACED_BEGIN
     // Everything is resident, so the "enqueued" work is complete at once.
     return fence ? fence->Signal(value) : E_INVALIDARG;
+    D3D12M_TRACED_END(fence, value)
 }
 
 HRESULT Device::CreateCommandList1(UINT, D3D12_COMMAND_LIST_TYPE type, D3D12_COMMAND_LIST_FLAGS, REFIID riid, void **out)
 {
+    D3D12M_TRACED_BEGIN
     if (!out)
         return E_POINTER;
     ID3D12CommandAllocator *allocator = nullptr;
@@ -239,82 +253,106 @@ HRESULT Device::CreateCommandList1(UINT, D3D12_COMMAND_LIST_TYPE type, D3D12_COM
         hr = list->QueryInterface(riid, out);
     list->Release();
     return hr;
+    D3D12M_TRACED_END(type, riid, out)
 }
 
 HRESULT Device::CreateCommandList(UINT, D3D12_COMMAND_LIST_TYPE type, ID3D12CommandAllocator *allocator,
                                   ID3D12PipelineState *initial_state, REFIID riid, void **out)
 {
+    D3D12M_TRACED_BEGIN
     return CommandList::create(this, type, allocator, initial_state, riid, out);
+    D3D12M_TRACED_END(type, allocator, initial_state, riid, out)
 }
 
 HRESULT Device::CreateDescriptorHeap(const D3D12_DESCRIPTOR_HEAP_DESC *desc, REFIID riid, void **out)
 {
+    D3D12M_TRACED_BEGIN
     return desc ? DescriptorHeap::create(this, *desc, riid, out) : E_INVALIDARG;
+    D3D12M_TRACED_END(desc, riid, out)
 }
 
 UINT Device::GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE type)
 {
+    D3D12M_TRACE(type);
     return descriptor_size(type);
 }
 
 HRESULT Device::CreateRootSignature(UINT, const void *blob, SIZE_T size, REFIID riid, void **out)
 {
+    D3D12M_TRACED_BEGIN
     return RootSignature::create(this, blob, size, riid, out);
+    D3D12M_TRACED_END(blob, size, riid, out)
 }
 
 HRESULT Device::CreateFence(UINT64 initial_value, D3D12_FENCE_FLAGS flags, REFIID riid, void **out)
 {
+    D3D12M_TRACED_BEGIN
     return Fence::create(this, initial_value, flags, riid, out);
+    D3D12M_TRACED_END(initial_value, flags, riid, out)
 }
 
 HRESULT Device::CreateQueryHeap(const D3D12_QUERY_HEAP_DESC *desc, REFIID riid, void **out)
 {
+    D3D12M_TRACED_BEGIN
     return desc ? QueryHeap::create(this, *desc, riid, out) : E_INVALIDARG;
+    D3D12M_TRACED_END(desc, riid, out)
 }
 
 HRESULT Device::CreateCommandSignature(const D3D12_COMMAND_SIGNATURE_DESC *desc, ID3D12RootSignature *root_signature,
                                        REFIID riid, void **out)
 {
+    D3D12M_TRACED_BEGIN
     return desc ? CommandSignature::create(this, *desc, root_signature, riid, out) : E_INVALIDARG;
+    D3D12M_TRACED_END(desc, root_signature, riid, out)
 }
 
 HRESULT Device::CreateHeap(const D3D12_HEAP_DESC *desc, REFIID riid, void **out)
 {
+    D3D12M_TRACED_BEGIN
     return desc ? Heap::create(this, *desc, riid, out) : E_INVALIDARG;
+    D3D12M_TRACED_END(desc, riid, out)
 }
 
 HRESULT Device::CreatePlacedResource(ID3D12Heap *heap_ptr, UINT64 offset, const D3D12_RESOURCE_DESC *desc,
                                      D3D12_RESOURCE_STATES, const D3D12_CLEAR_VALUE *, REFIID riid, void **out)
 {
+    D3D12M_TRACED_BEGIN
     auto *heap = ours<Heap>(heap_ptr);
     if (!heap || !desc)
         return E_INVALIDARG;
     return Resource::create_placed(this, heap, offset, *desc, riid, out);
+    D3D12M_TRACED_END(heap_ptr, offset, desc, riid, out)
 }
 
 HRESULT Device::CreateCommittedResource(const D3D12_HEAP_PROPERTIES *heap, D3D12_HEAP_FLAGS, const D3D12_RESOURCE_DESC *desc,
                                         D3D12_RESOURCE_STATES, const D3D12_CLEAR_VALUE *, REFIID riid, void **out)
 {
+    D3D12M_TRACED_BEGIN
     return heap && desc ? Resource::create_committed(this, *heap, *desc, riid, out) : E_INVALIDARG;
+    D3D12M_TRACED_END(heap, desc, riid, out)
 }
 
 HRESULT Device::CreateCommittedResource2(const D3D12_HEAP_PROPERTIES *heap, D3D12_HEAP_FLAGS flags, const D3D12_RESOURCE_DESC1 *desc,
                                          D3D12_RESOURCE_STATES state, const D3D12_CLEAR_VALUE *clear,
                                          ID3D12ProtectedResourceSession *, REFIID riid, void **out)
 {
+    D3D12M_TRACED_BEGIN
     if (!desc)
         return E_INVALIDARG;
     const D3D12_RESOURCE_DESC plain = to_desc(*desc);
     return CreateCommittedResource(heap, flags, &plain, state, clear, riid, out);
+    D3D12M_TRACED_END(heap, flags, desc, state, clear, riid, out)
 }
 
 HRESULT Device::CreatePlacedResource1(ID3D12Heap *heap, UINT64 offset, const D3D12_RESOURCE_DESC1 *desc,
                                       D3D12_RESOURCE_STATES state, const D3D12_CLEAR_VALUE *clear, REFIID riid, void **out)
 {
+    D3D12M_TRACED_BEGIN
     if (!desc)
         return E_INVALIDARG;
     const D3D12_RESOURCE_DESC plain = to_desc(*desc);
     return CreatePlacedResource(heap, offset, &plain, state, clear, riid, out);
+    D3D12M_TRACED_END(heap, offset, desc, state, clear, riid, out)
 }
 
 // Enhanced barriers are not supported; the layout only says how the resource starts, which this layer does not track.
@@ -322,25 +360,30 @@ HRESULT Device::CreateCommittedResource3(const D3D12_HEAP_PROPERTIES *heap, D3D1
                                          D3D12_BARRIER_LAYOUT, const D3D12_CLEAR_VALUE *clear, ID3D12ProtectedResourceSession *,
                                          UINT32, D3D12M_CASTABLE_FORMATS, REFIID riid, void **out)
 {
+    D3D12M_TRACED_BEGIN
     if (!desc)
         return E_INVALIDARG;
     const D3D12_RESOURCE_DESC plain = to_desc(*desc);
     return CreateCommittedResource(heap, flags, &plain, D3D12_RESOURCE_STATE_COMMON, clear, riid, out);
+    D3D12M_TRACED_END(heap, flags, desc, clear, riid, out)
 }
 
 HRESULT Device::CreatePlacedResource2(ID3D12Heap *heap, UINT64 offset, const D3D12_RESOURCE_DESC1 *desc, D3D12_BARRIER_LAYOUT,
                                       const D3D12_CLEAR_VALUE *clear, UINT32, D3D12M_CASTABLE_FORMATS, REFIID riid, void **out)
 {
+    D3D12M_TRACED_BEGIN
     if (!desc)
         return E_INVALIDARG;
     const D3D12_RESOURCE_DESC plain = to_desc(*desc);
     return CreatePlacedResource(heap, offset, &plain, D3D12_RESOURCE_STATE_COMMON, clear, riid, out);
+    D3D12M_TRACED_END(heap, offset, desc, clear, riid, out)
 }
 
 void Device::GetCopyableFootprints1(const D3D12_RESOURCE_DESC1 *desc, UINT first, UINT count, UINT64 base_offset,
                                     D3D12_PLACED_SUBRESOURCE_FOOTPRINT *layouts, UINT *num_rows, UINT64 *row_sizes,
                                     UINT64 *total_bytes)
 {
+    D3D12M_TRACE(desc, first, count, base_offset, layouts, num_rows, row_sizes, total_bytes);
     if (!desc)
         return;
     const D3D12_RESOURCE_DESC plain = to_desc(*desc);
@@ -556,6 +599,7 @@ bool attachment_range_valid(const D3D12_RESOURCE_DESC &rd, UINT mip, UINT slice)
 
 void Device::CreateConstantBufferView(const D3D12_CONSTANT_BUFFER_VIEW_DESC *desc, D3D12_CPU_DESCRIPTOR_HANDLE dest)
 {
+    D3D12M_TRACE(desc, dest);
     if (!validate_cpu_range(dest, 1, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV))
         return log_bad_handle("CreateConstantBufferView");
     stat_add(Stat::DescriptorWrites);
@@ -590,6 +634,7 @@ static void fill_attachment(Resource *resource, D3D12_RESOURCE_FLAGS required, D
 void Device::CreateRenderTargetView(ID3D12Resource *resource, const D3D12_RENDER_TARGET_VIEW_DESC *desc,
                                     D3D12_CPU_DESCRIPTOR_HANDLE dest)
 {
+    D3D12M_TRACE(resource, desc, dest);
     if (!validate_cpu_range(dest, 1, D3D12_DESCRIPTOR_HEAP_TYPE_RTV))
         return log_bad_handle("CreateRenderTargetView");
     stat_add(Stat::DescriptorWrites);
@@ -624,6 +669,7 @@ void Device::CreateRenderTargetView(ID3D12Resource *resource, const D3D12_RENDER
 void Device::CreateDepthStencilView(ID3D12Resource *resource, const D3D12_DEPTH_STENCIL_VIEW_DESC *desc,
                                     D3D12_CPU_DESCRIPTOR_HANDLE dest)
 {
+    D3D12M_TRACE(resource, desc, dest);
     if (!validate_cpu_range(dest, 1, D3D12_DESCRIPTOR_HEAP_TYPE_DSV))
         return log_bad_handle("CreateDepthStencilView");
     stat_add(Stat::DescriptorWrites);
@@ -664,6 +710,7 @@ void Device::CopyDescriptors(UINT num_dest_ranges, const D3D12_CPU_DESCRIPTOR_HA
                              const D3D12_CPU_DESCRIPTOR_HANDLE *src_starts, const UINT *src_sizes,
                              D3D12_DESCRIPTOR_HEAP_TYPE type)
 {
+    D3D12M_TRACE(num_dest_ranges, dest_starts, dest_sizes, num_src_ranges, src_starts, src_sizes, type);
     const size_t size = descriptor_size(type);
     if (!size || !dest_starts || !src_starts)
         return;
@@ -695,6 +742,7 @@ void Device::CopyDescriptors(UINT num_dest_ranges, const D3D12_CPU_DESCRIPTOR_HA
 void Device::CopyDescriptorsSimple(UINT count, D3D12_CPU_DESCRIPTOR_HANDLE dest, D3D12_CPU_DESCRIPTOR_HANDLE src,
                                    D3D12_DESCRIPTOR_HEAP_TYPE type)
 {
+    D3D12M_TRACE(count, dest, src, type);
     const size_t size = descriptor_size(type);
     if (!size || !count)
         return;
@@ -755,23 +803,30 @@ void Device::GetCopyableFootprints(const D3D12_RESOURCE_DESC *desc, UINT first, 
                                    D3D12_PLACED_SUBRESOURCE_FOOTPRINT *layouts, UINT *num_rows,
                                    UINT64 *row_sizes, UINT64 *total_bytes)
 {
+    D3D12M_TRACE(desc, first, count, base_offset, layouts, num_rows, row_sizes, total_bytes);
     if (!compute_copyable_footprints(*desc, first, count, base_offset, layouts, num_rows, row_sizes, total_bytes))
         D3D12M_LOG("GetCopyableFootprints: unsupported format or subresource range");
 }
 
 HRESULT Device::MakeResident(UINT, ID3D12Pageable *const *)
 {
+    D3D12M_TRACED_BEGIN
     return S_OK;  // every allocation is always resident
+    D3D12M_TRACED_END()
 }
 
 HRESULT Device::Evict(UINT, ID3D12Pageable *const *)
 {
+    D3D12M_TRACED_BEGIN
     return S_OK;
+    D3D12M_TRACED_END()
 }
 
 HRESULT Device::GetDeviceRemovedReason()
 {
+    D3D12M_TRACED_BEGIN
     return S_OK;
+    D3D12M_TRACED_END()
 }
 
 LUID Device::adapter_luid() const
@@ -784,6 +839,7 @@ LUID Device::adapter_luid() const
 // What the layer reports is what the backend can honor: see docs/STATUS.md.
 HRESULT Device::CheckFeatureSupport(D3D12_FEATURE feature, void *data, UINT size)
 {
+    D3D12M_TRACED_BEGIN
     if (!data)
         return E_INVALIDARG;
     switch (static_cast<int>(feature)) {
@@ -1010,6 +1066,7 @@ HRESULT Device::CheckFeatureSupport(D3D12_FEATURE feature, void *data, UINT size
         D3D12M_LOG("CheckFeatureSupport: feature %d is not implemented", static_cast<int>(feature));
         return E_INVALIDARG;
     }
+    D3D12M_TRACED_END(feature, data, size)
 }
 
 } // namespace d3d12m

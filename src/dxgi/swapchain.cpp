@@ -138,45 +138,56 @@ public:
     // IDXGIObject
     HRESULT STDMETHODCALLTYPE GetParent(REFIID riid, void **parent) override
     {
+        D3D12M_TRACED_BEGIN
         return factory_->QueryInterface(riid, parent);
+        D3D12M_TRACED_END(riid, parent)
     }
 
     // IDXGIDeviceSubObject: the device of a D3D12 swap chain is its command queue.
     HRESULT STDMETHODCALLTYPE GetDevice(REFIID riid, void **device) override
     {
+        D3D12M_TRACED_BEGIN
         return queue_->QueryInterface(riid, device);
+        D3D12M_TRACED_END(riid, device)
     }
 
     // IDXGISwapChain
     HRESULT STDMETHODCALLTYPE Present(UINT sync_interval, UINT flags) override
     {
+        D3D12M_TRACED_BEGIN
         return present(sync_interval, flags);
+        D3D12M_TRACED_END(sync_interval, flags)
     }
 
     HRESULT STDMETHODCALLTYPE GetBuffer(UINT index, REFIID riid, void **surface) override
     {
+        D3D12M_TRACED_BEGIN
         if (!surface)
             return DXGI_ERROR_INVALID_CALL;
         std::lock_guard<std::mutex> lock(mutex_);
         if (index >= buffers_.size())
             return DXGI_ERROR_INVALID_CALL;
         return buffers_[index]->QueryInterface(riid, surface);
+        D3D12M_TRACED_END(index, riid, surface)
     }
 
     // Windowed only: a request for fullscreen is accepted and ignored.
-    HRESULT STDMETHODCALLTYPE SetFullscreenState(BOOL, IDXGIOutput *) override { return S_OK; }
+    HRESULT STDMETHODCALLTYPE SetFullscreenState(BOOL, IDXGIOutput *) override { D3D12M_TRACED_BEGIN return S_OK; D3D12M_TRACED_END() }
 
     HRESULT STDMETHODCALLTYPE GetFullscreenState(BOOL *fullscreen, IDXGIOutput **target) override
     {
+        D3D12M_TRACED_BEGIN
         if (fullscreen)
             *fullscreen = FALSE;
         if (target)
             *target = nullptr;
         return S_OK;
+        D3D12M_TRACED_END(fullscreen, target)
     }
 
     HRESULT STDMETHODCALLTYPE GetDesc(DXGI_SWAP_CHAIN_DESC *desc) override
     {
+        D3D12M_TRACED_BEGIN
         if (!desc)
             return DXGI_ERROR_INVALID_CALL;
         std::lock_guard<std::mutex> lock(mutex_);
@@ -194,17 +205,21 @@ public:
         desc->SwapEffect = desc_.SwapEffect;
         desc->Flags = desc_.Flags;
         return S_OK;
+        D3D12M_TRACED_END(desc)
     }
 
     HRESULT STDMETHODCALLTYPE ResizeBuffers(UINT count, UINT width, UINT height, DXGI_FORMAT format, UINT flags) override
     {
+        D3D12M_TRACED_BEGIN
         return resize(count, width, height, format, flags);
+        D3D12M_TRACED_END(count, width, height, format, flags)
     }
 
-    HRESULT STDMETHODCALLTYPE ResizeTarget(const DXGI_MODE_DESC *) override { return S_OK; }
+    HRESULT STDMETHODCALLTYPE ResizeTarget(const DXGI_MODE_DESC *) override { D3D12M_TRACED_BEGIN return S_OK; D3D12M_TRACED_END() }
 
     HRESULT STDMETHODCALLTYPE GetContainingOutput(IDXGIOutput **output) override
     {
+        D3D12M_TRACED_BEGIN
         if (!output)
             return DXGI_ERROR_INVALID_CALL;
         IDXGIAdapter *adapter = nullptr;
@@ -215,123 +230,152 @@ public:
         IDXGIOutput6 *created = create_output(adapter);
         adapter->Release();
         return hand_out(created, __uuidof(IDXGIOutput), reinterpret_cast<void **>(output));
+        D3D12M_TRACED_END(output)
     }
 
     HRESULT STDMETHODCALLTYPE GetFrameStatistics(DXGI_FRAME_STATISTICS *stats) override
     {
+        D3D12M_TRACED_BEGIN
         if (!stats)
             return DXGI_ERROR_INVALID_CALL;
         *stats = {};
         stats->PresentCount = present_count_;
         return S_OK;
+        D3D12M_TRACED_END(stats)
     }
 
     HRESULT STDMETHODCALLTYPE GetLastPresentCount(UINT *count) override
     {
+        D3D12M_TRACED_BEGIN
         if (!count)
             return DXGI_ERROR_INVALID_CALL;
         *count = present_count_;
         return S_OK;
+        D3D12M_TRACED_END(count)
     }
 
     // IDXGISwapChain1
     HRESULT STDMETHODCALLTYPE GetDesc1(DXGI_SWAP_CHAIN_DESC1 *desc) override
     {
+        D3D12M_TRACED_BEGIN
         if (!desc)
             return DXGI_ERROR_INVALID_CALL;
         std::lock_guard<std::mutex> lock(mutex_);
         *desc = desc_;
         return S_OK;
+        D3D12M_TRACED_END(desc)
     }
 
     HRESULT STDMETHODCALLTYPE GetFullscreenDesc(DXGI_SWAP_CHAIN_FULLSCREEN_DESC *desc) override
     {
+        D3D12M_TRACED_BEGIN
         if (!desc)
             return DXGI_ERROR_INVALID_CALL;
         *desc = fullscreen_;
         return S_OK;
+        D3D12M_TRACED_END(desc)
     }
 
     HRESULT STDMETHODCALLTYPE GetHwnd(HWND *window) override
     {
+        D3D12M_TRACED_BEGIN
         if (!window)
             return DXGI_ERROR_INVALID_CALL;
         *window = window_;
         return S_OK;
+        D3D12M_TRACED_END(window)
     }
 
     HRESULT STDMETHODCALLTYPE GetCoreWindow(REFIID, void **window) override
     {
+        D3D12M_TRACED_BEGIN
         if (window)
             *window = nullptr;
         return DXGI_ERROR_INVALID_CALL;
+        D3D12M_TRACED_END(window)
     }
 
     HRESULT STDMETHODCALLTYPE Present1(UINT sync_interval, UINT flags, const DXGI_PRESENT_PARAMETERS *) override
     {
+        D3D12M_TRACED_BEGIN
         return present(sync_interval, flags);
+        D3D12M_TRACED_END(sync_interval, flags)
     }
 
-    BOOL STDMETHODCALLTYPE IsTemporaryMonoSupported() override { return FALSE; }
+    BOOL STDMETHODCALLTYPE IsTemporaryMonoSupported() override { D3D12M_TRACE(); return FALSE; }
 
     HRESULT STDMETHODCALLTYPE GetRestrictToOutput(IDXGIOutput **output) override
     {
+        D3D12M_TRACED_BEGIN
         if (output)
             *output = nullptr;
         return S_OK;
+        D3D12M_TRACED_END(output)
     }
 
-    HRESULT STDMETHODCALLTYPE SetBackgroundColor(const DXGI_RGBA *) override { return S_OK; }
+    HRESULT STDMETHODCALLTYPE SetBackgroundColor(const DXGI_RGBA *) override { D3D12M_TRACED_BEGIN return S_OK; D3D12M_TRACED_END() }
 
     HRESULT STDMETHODCALLTYPE GetBackgroundColor(DXGI_RGBA *color) override
     {
+        D3D12M_TRACED_BEGIN
         if (!color)
             return DXGI_ERROR_INVALID_CALL;
         *color = {0, 0, 0, 1};
         return S_OK;
+        D3D12M_TRACED_END(color)
     }
 
     HRESULT STDMETHODCALLTYPE SetRotation(DXGI_MODE_ROTATION rotation) override
     {
+        D3D12M_TRACED_BEGIN
         return rotation == DXGI_MODE_ROTATION_IDENTITY || rotation == DXGI_MODE_ROTATION_UNSPECIFIED
                    ? S_OK
                    : DXGI_ERROR_INVALID_CALL;
+        D3D12M_TRACED_END(rotation)
     }
 
     HRESULT STDMETHODCALLTYPE GetRotation(DXGI_MODE_ROTATION *rotation) override
     {
+        D3D12M_TRACED_BEGIN
         if (!rotation)
             return DXGI_ERROR_INVALID_CALL;
         *rotation = DXGI_MODE_ROTATION_IDENTITY;
         return S_OK;
+        D3D12M_TRACED_END(rotation)
     }
 
     // IDXGISwapChain2
     HRESULT STDMETHODCALLTYPE SetSourceSize(UINT, UINT) override { D3D12M_STUB_HR(); }
     HRESULT STDMETHODCALLTYPE GetSourceSize(UINT *width, UINT *height) override
     {
+        D3D12M_TRACED_BEGIN
         if (!width || !height)
             return DXGI_ERROR_INVALID_CALL;
         std::lock_guard<std::mutex> lock(mutex_);
         *width = desc_.Width;
         *height = desc_.Height;
         return S_OK;
+        D3D12M_TRACED_END(width, height)
     }
 
     HRESULT STDMETHODCALLTYPE SetMaximumFrameLatency(UINT latency) override
     {
+        D3D12M_TRACED_BEGIN
         if (!latency_ || latency == 0 || latency > kMaxBuffers)
             return DXGI_ERROR_INVALID_CALL;
         latency_->set_maximum(latency);
         return S_OK;
+        D3D12M_TRACED_END(latency)
     }
 
     HRESULT STDMETHODCALLTYPE GetMaximumFrameLatency(UINT *latency) override
     {
+        D3D12M_TRACED_BEGIN
         if (!latency || !latency_)
             return DXGI_ERROR_INVALID_CALL;
         *latency = latency_->maximum();
         return S_OK;
+        D3D12M_TRACED_END(latency)
     }
 
     // The event is signaled while fewer than the maximum latency's number of
@@ -339,6 +383,7 @@ public:
     // new handle to it.
     HANDLE STDMETHODCALLTYPE GetFrameLatencyWaitableObject() override
     {
+        D3D12M_TRACE();
         return latency_ ? latency_->duplicate_event() : nullptr;
     }
 
@@ -348,29 +393,36 @@ public:
     // IDXGISwapChain3
     UINT STDMETHODCALLTYPE GetCurrentBackBufferIndex() override
     {
+        D3D12M_TRACE();
         std::lock_guard<std::mutex> lock(mutex_);
         return current_;
     }
 
     HRESULT STDMETHODCALLTYPE CheckColorSpaceSupport(DXGI_COLOR_SPACE_TYPE color_space, UINT *support) override
     {
+        D3D12M_TRACED_BEGIN
         if (!support)
             return DXGI_ERROR_INVALID_CALL;
         *support = color_space == DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709
                        ? DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT
                        : 0;
         return S_OK;
+        D3D12M_TRACED_END(color_space, support)
     }
 
     HRESULT STDMETHODCALLTYPE SetColorSpace1(DXGI_COLOR_SPACE_TYPE color_space) override
     {
+        D3D12M_TRACED_BEGIN
         return color_space == DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709 ? S_OK : E_INVALIDARG;
+        D3D12M_TRACED_END(color_space)
     }
 
     HRESULT STDMETHODCALLTYPE ResizeBuffers1(UINT count, UINT width, UINT height, DXGI_FORMAT format, UINT flags,
                                              const UINT *, IUnknown *const *) override
     {
+        D3D12M_TRACED_BEGIN
         return resize(count, width, height, format, flags);
+        D3D12M_TRACED_END(count, width, height, format, flags)
     }
 
     // IDXGISwapChain4
@@ -491,6 +543,7 @@ private:
                 current_ = (current_ + 1) % static_cast<UINT>(buffers_.size());
         }
         stats_frame();
+        trace_frame();
         const mtlb_result result = mtlb_queue_present(queue_->handle(), handle_, buffer->texture(), sync_interval);
         buffer->Release();
         if (result != MTLB_OK) {
