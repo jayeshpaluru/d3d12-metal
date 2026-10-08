@@ -18,6 +18,17 @@ extern "C" {
 
 #define MTLB_EXPORT __attribute__((visibility("default")))
 
+/* Compile-time layout checks. The structs below cross a process boundary later,
+ * so their layout is part of the interface. */
+#ifdef __cplusplus
+#define MTLB_STATIC_ASSERT(cond, msg) static_assert(cond, msg)
+#else
+#define MTLB_STATIC_ASSERT(cond, msg) _Static_assert(cond, msg)
+#endif
+#define MTLB_ASSERT_SIZE(type, size) MTLB_STATIC_ASSERT(sizeof(type) == (size), #type " size changed")
+#define MTLB_ASSERT_OFFSET(type, member, offset) \
+    MTLB_STATIC_ASSERT(offsetof(type, member) == (offset), #type "." #member " offset changed")
+
 /* ------------------------------------------------------------------------ */
 /* Results and handles                                                      */
 /* ------------------------------------------------------------------------ */
@@ -374,6 +385,20 @@ MTLB_EXPORT void mtlb_event_signal_cpu(mtlb_event event, uint64_t value);
 /* Blocks until the event reaches `value`; timeout_ms of UINT64_MAX waits forever.
  * Returns MTLB_ERROR_TIMEOUT on timeout. */
 MTLB_EXPORT mtlb_result mtlb_event_wait_cpu(mtlb_event event, uint64_t value, uint64_t timeout_ms);
+
+MTLB_ASSERT_SIZE(mtlb_format_info, 16);
+MTLB_ASSERT_SIZE(mtlb_device_caps, 288);
+MTLB_ASSERT_SIZE(mtlb_buffer_info, 24);
+MTLB_ASSERT_OFFSET(mtlb_buffer_info, gpu_address, 8);
+MTLB_ASSERT_SIZE(mtlb_descriptor, 24);
+MTLB_ASSERT_OFFSET(mtlb_descriptor, texture_id, 8);
+MTLB_ASSERT_OFFSET(mtlb_descriptor, metadata, 16);
+MTLB_ASSERT_SIZE(mtlb_texture_desc, 40);
+MTLB_ASSERT_SIZE(mtlb_texture_info, 8);
+MTLB_ASSERT_SIZE(mtlb_input_element, 56);
+MTLB_ASSERT_SIZE(mtlb_stencil_face, 16);
+MTLB_ASSERT_SIZE(mtlb_render_target_blend, 32);
+MTLB_ASSERT_SIZE(mtlb_pipeline_desc, 2200);
 
 #ifdef __cplusplus
 }

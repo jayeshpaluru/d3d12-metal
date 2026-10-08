@@ -270,6 +270,40 @@ typedef struct mtlb_cmd_wait_event {
     uint64_t value;
 } mtlb_cmd_wait_event;
 
+MTLB_ASSERT_SIZE(mtlb_cmd_header, 8);
+MTLB_ASSERT_SIZE(mtlb_color_attachment, 48);
+MTLB_ASSERT_OFFSET(mtlb_color_attachment, clear_color, 32);
+MTLB_ASSERT_SIZE(mtlb_depth_attachment, 48);
+MTLB_ASSERT_SIZE(mtlb_cmd_begin_render_pass, 448);
+MTLB_ASSERT_OFFSET(mtlb_cmd_begin_render_pass, colors, 16);
+MTLB_ASSERT_SIZE(mtlb_cmd_end_render_pass, 8);
+MTLB_ASSERT_SIZE(mtlb_cmd_reset_state, 8);
+MTLB_ASSERT_SIZE(mtlb_cmd_set_pipeline, 16);
+MTLB_ASSERT_SIZE(mtlb_viewport, 24);
+MTLB_ASSERT_SIZE(mtlb_cmd_set_viewports, 16);
+MTLB_ASSERT_OFFSET(mtlb_cmd_set_viewports, viewports, 16);
+MTLB_ASSERT_SIZE(mtlb_rect, 16);
+MTLB_ASSERT_SIZE(mtlb_cmd_set_scissors, 16);
+MTLB_ASSERT_OFFSET(mtlb_cmd_set_scissors, rects, 16);
+MTLB_ASSERT_SIZE(mtlb_cmd_set_topology, 16);
+MTLB_ASSERT_SIZE(mtlb_vertex_buffer, 16);
+MTLB_ASSERT_SIZE(mtlb_cmd_set_vertex_buffers, 16);
+MTLB_ASSERT_OFFSET(mtlb_cmd_set_vertex_buffers, buffers, 16);
+MTLB_ASSERT_SIZE(mtlb_cmd_set_index_buffer, 24);
+MTLB_ASSERT_SIZE(mtlb_cmd_set_graphics_root_args, 16);
+MTLB_ASSERT_OFFSET(mtlb_cmd_set_graphics_root_args, data, 16);
+MTLB_ASSERT_SIZE(mtlb_cmd_set_blend_factor, 24);
+MTLB_ASSERT_SIZE(mtlb_cmd_set_stencil_ref, 16);
+MTLB_ASSERT_SIZE(mtlb_cmd_draw, 24);
+MTLB_ASSERT_SIZE(mtlb_cmd_draw_indexed, 32);
+MTLB_ASSERT_SIZE(mtlb_cmd_copy_buffer, 48);
+MTLB_ASSERT_SIZE(mtlb_texture_copy_region, 72);
+MTLB_ASSERT_OFFSET(mtlb_texture_copy_region, buffer_offset, 16);
+MTLB_ASSERT_SIZE(mtlb_cmd_copy_texture_to_buffer, 80);
+MTLB_ASSERT_SIZE(mtlb_cmd_copy_buffer_to_texture, 80);
+MTLB_ASSERT_SIZE(mtlb_cmd_signal_event, 24);
+MTLB_ASSERT_SIZE(mtlb_cmd_wait_event, 24);
+
 #ifdef __cplusplus
 }
 #endif
