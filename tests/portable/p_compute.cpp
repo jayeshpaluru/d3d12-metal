@@ -300,6 +300,28 @@ int main()
         CHECK_EQ(h, 0x3C00u);
     }
 
+    // ---- ClearUnorderedAccessViewUint on R11G11B10_FLOAT: the low 11, 11 and 10 bits of the values -----------------------
+    {
+        ComPtr<ID3D12DescriptorHeap> cpu_heap = gpu.descriptor_heap(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 1, false);
+        ComPtr<ID3D12DescriptorHeap> gpu_heap = gpu.descriptor_heap(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 1, true);
+        ComPtr<ID3D12Resource> packed = gpu.texture(tex2d_desc(DXGI_FORMAT_R11G11B10_FLOAT, kSize, kSize, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS));
+        D3D12_UNORDERED_ACCESS_VIEW_DESC desc = {};
+        desc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+        desc.Format = DXGI_FORMAT_R11G11B10_FLOAT;
+        gpu.device->CreateUnorderedAccessView(packed.Get(), nullptr, &desc, gpu.cpu_handle(cpu_heap.Get(), 0));
+        gpu.device->CreateUnorderedAccessView(packed.Get(), nullptr, &desc, gpu.cpu_handle(gpu_heap.Get(), 0));
+        ComPtr<ID3D12GraphicsCommandList> list = f.begin();
+        ID3D12DescriptorHeap *heaps[] = {gpu_heap.Get()};
+        list->SetDescriptorHeaps(1, heaps);
+        const UINT bits[4] = {0x3C0, 0x3C0 | 0xF800, 0x1E0, 0};  // 1.0, 1.0 (the high bits are dropped), 1.0
+        list->ClearUnorderedAccessViewUint(gpu.gpu_handle(gpu_heap.Get(), 0), gpu.cpu_handle(cpu_heap.Get(), 0), packed.Get(), bits, 0, nullptr);
+        gpu.run(list.Get());
+        const Image image = gpu.read_texture(packed.Get(), 0, 4);
+        uint32_t word;
+        std::memcpy(&word, image.at(3, 3), 4);
+        CHECK_EQ(word, 0x3C0u | (0x3C0u << 11) | (0x1E0u << 22));
+    }
+
     // ---- WriteBufferImmediate lands after the dispatches before it ------------------------------------------------------
     {
         for (int round = 0; round < 20; ++round) {

@@ -92,6 +92,21 @@ uint32_t convert(uint32_t value, Type type, unsigned bits, bool from_float)
     }
 }
 
+// A float as an unsigned float with a 5-bit exponent and `mantissa_bits` (R11G11B10_FLOAT components): negative
+// values and NaN clamp to zero, overflow to the largest finite value, and infinity stays infinity.
+uint32_t to_small_float(float f, unsigned mantissa_bits)
+{
+    const uint32_t mantissa_mask = (1u << mantissa_bits) - 1;
+    if (std::isnan(f) || f <= 0.0f)
+        return 0;
+    if (std::isinf(f))
+        return 0x1fu << mantissa_bits;
+    const uint32_t half = to_half(f);  // sign is 0 here: 5-bit exponent and a 10-bit mantissa
+    if ((half & 0x7c00) == 0x7c00)
+        return (0x1eu << mantissa_bits) | mantissa_mask;  // too large for a half: the largest finite value
+    return half >> (10 - mantissa_bits);
+}
+
 } // namespace
 
 uint32_t pack_clear_element(DXGI_FORMAT format, const uint32_t values[4], bool from_float, uint8_t out[16])
@@ -103,6 +118,19 @@ uint32_t pack_clear_element(DXGI_FORMAT format, const uint32_t values[4], bool f
         for (int i = 0; i < 3; ++i)
             packed |= convert(values[i], unorm ? Type::Unorm : Type::Uint, 10, from_float) << (10 * i);
         packed |= convert(values[3], unorm ? Type::Unorm : Type::Uint, 2, from_float) << 30;
+        std::memcpy(out, &packed, 4);
+        return 4;
+    }
+    if (format == DXGI_FORMAT_R11G11B10_FLOAT) {
+        // Integer values keep their low bits (11, 11 and 10); float values are converted.
+        const unsigned bits[3] = {11, 11, 10};
+        uint32_t packed = 0, shift = 0;
+        for (int i = 0; i < 3; ++i) {
+            const uint32_t mask = (1u << bits[i]) - 1;
+            const uint32_t v = from_float ? to_small_float(as_float(values[i]), bits[i] - 5) : values[i] & mask;
+            packed |= (v & mask) << shift;
+            shift += bits[i];
+        }
         std::memcpy(out, &packed, 4);
         return 4;
     }

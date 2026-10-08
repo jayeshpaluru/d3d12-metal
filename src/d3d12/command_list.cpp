@@ -239,7 +239,10 @@ void CommandList::IASetIndexBuffer(const D3D12_INDEX_BUFFER_VIEW *view)
     if (!view)
         return;
     if (view->Format != DXGI_FORMAT_R16_UINT && view->Format != DXGI_FORMAT_R32_UINT) {
-        D3D12M_LOG("unsupported index buffer format %d", static_cast<int>(view->Format));
+        // DXGI_FORMAT_UNKNOWN is how games unbind (D3D12 only objects at an indexed draw); the buffer stays unbound.
+        static std::atomic<unsigned> reported{0};
+        if (view->Format != DXGI_FORMAT_UNKNOWN && reported.fetch_add(1) < 8)
+            D3D12M_LOG("unsupported index buffer format %d (index buffer unbound)", static_cast<int>(view->Format));
         return;
     }
     cmd->gpu_address = view->BufferLocation;

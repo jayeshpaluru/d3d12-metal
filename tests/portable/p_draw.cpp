@@ -133,6 +133,9 @@ int main()
     {
         const Image image = f.render(triangles.Get(), D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP, [&](ID3D12GraphicsCommandList *list) {
             list->IASetVertexBuffers(0, 2, both);
+            // Games unbind the index buffer with a view of format UNKNOWN; a non-indexed draw is unaffected.
+            const D3D12_INDEX_BUFFER_VIEW unbound = {0, 0, DXGI_FORMAT_UNKNOWN};
+            list->IASetIndexBuffer(&unbound);
             list->DrawInstanced(4, 3, 0, 0);
         });
         expect_colour("strip instance 0", image, -0.5f, 0.5f, kRed);
