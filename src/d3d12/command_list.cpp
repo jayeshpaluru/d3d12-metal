@@ -671,7 +671,7 @@ void CommandList::clear_uav(D3D12_CPU_DESCRIPTOR_HANDLE view_handle, ID3D12Resou
     if (resource->is_buffer())
         return;
     mtlb_format_info info;
-    const DXGI_FORMAT format = view->format == DXGI_FORMAT_UNKNOWN ? resource->desc().Format : view->format;
+    DXGI_FORMAT format = view->format == DXGI_FORMAT_UNKNOWN ? resource->desc().Format : view->format;
     const bool known = get_format_info(format, &info);
     (void)known;
     uint32_t converted_values[4];
@@ -691,13 +691,27 @@ void CommandList::clear_uav(D3D12_CPU_DESCRIPTOR_HANDLE view_handle, ID3D12Resou
         break;
     default:
         if (!from_float) {
-            // An integer clear of a normalized or float format: the bits go through the format's own conversion.
-            float converted[4];
-            for (int i = 0; i < 4; ++i)
-                converted[i] = static_cast<float>(values[i]);
-            D3D12M_LOG("ClearUnorderedAccessViewUint on a non-integer texture format converts the values to float");
-            std::memcpy(converted_values, converted, sizeof(converted));
+            // An integer clear of a normalized or float format writes the low bits of each value into the
+            // component, bit for bit: the element is packed and the texture is cleared through an unsigned
+            // integer view of the same width.
+            uint8_t packed[16];
+            const uint32_t bytes = pack_clear_element(format, values, false, packed);
+            static const DXGI_FORMAT kUintFormats[17] = {
+                DXGI_FORMAT_UNKNOWN,           DXGI_FORMAT_R8_UINT,           DXGI_FORMAT_R16_UINT,          DXGI_FORMAT_UNKNOWN,
+                DXGI_FORMAT_R32_UINT,          DXGI_FORMAT_UNKNOWN,           DXGI_FORMAT_UNKNOWN,           DXGI_FORMAT_UNKNOWN,
+                DXGI_FORMAT_R32G32_UINT,       DXGI_FORMAT_UNKNOWN,           DXGI_FORMAT_UNKNOWN,           DXGI_FORMAT_UNKNOWN,
+                DXGI_FORMAT_UNKNOWN,           DXGI_FORMAT_UNKNOWN,           DXGI_FORMAT_UNKNOWN,           DXGI_FORMAT_UNKNOWN,
+                DXGI_FORMAT_R32G32B32A32_UINT};
+            if (!bytes || bytes > 16 || kUintFormats[bytes] == DXGI_FORMAT_UNKNOWN) {
+                D3D12M_LOG("ClearUnorderedAccessViewUint: format %d cannot be cleared", static_cast<int>(format));
+                return;
+            }
+            std::memset(converted_values, 0, sizeof(converted_values));
+            std::memcpy(converted_values, packed, bytes);
             values = converted_values;
+            format = kUintFormats[bytes];
+            kind = MTLB_CLEAR_UINT;
+            break;
         }
         kind = MTLB_CLEAR_FLOAT;
     }

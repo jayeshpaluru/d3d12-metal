@@ -252,6 +252,42 @@ int main()
         expect_pixel("outside the rectangle (left)", image.pixel(1, 5), {64, 128, 191, 255}, 1);
     }
 
+    // ---- ClearUnorderedAccessViewUint on float and normalized formats copies the low bits of each value ----------------
+    {
+        ComPtr<ID3D12DescriptorHeap> cpu_heap = gpu.descriptor_heap(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 3, false);
+        ComPtr<ID3D12Resource> half = gpu.texture(tex2d_desc(DXGI_FORMAT_R16_FLOAT, kSize, kSize, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS));
+        const struct {
+            ID3D12Resource *resource;
+            DXGI_FORMAT format;
+        } views[3] = {{f.texture.Get(), DXGI_FORMAT_R8G8B8A8_UNORM},
+                      {f.float_texture.Get(), DXGI_FORMAT_R32_FLOAT},
+                      {half.Get(), DXGI_FORMAT_R16_FLOAT}};
+        for (UINT i = 0; i < 3; ++i) {
+            D3D12_UNORDERED_ACCESS_VIEW_DESC desc = {};
+            desc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+            desc.Format = views[i].format;
+            gpu.device->CreateUnorderedAccessView(views[i].resource, nullptr, &desc, gpu.cpu_handle(cpu_heap.Get(), i));
+        }
+        ComPtr<ID3D12GraphicsCommandList> list = f.begin();
+        const UINT bytes[4] = {128, 64, 32, 255};
+        list->ClearUnorderedAccessViewUint(gpu.gpu_handle(f.heap.Get(), 0), gpu.cpu_handle(cpu_heap.Get(), 0), f.texture.Get(), bytes, 0, nullptr);
+        const UINT one[4] = {0x3F800000u, 0, 0, 0};
+        list->ClearUnorderedAccessViewUint(gpu.gpu_handle(f.heap.Get(), 4), gpu.cpu_handle(cpu_heap.Get(), 1), f.float_texture.Get(), one, 0, nullptr);
+        const UINT half_one[4] = {0x3C00u, 0, 0, 0};
+        list->ClearUnorderedAccessViewUint(gpu.gpu_handle(f.heap.Get(), 4), gpu.cpu_handle(cpu_heap.Get(), 2), half.Get(), half_one, 0, nullptr);
+        gpu.run(list.Get());
+        Image image = gpu.read_texture(f.texture.Get(), 0, 4);
+        expect_pixel("bits of an integer clear of UNORM8", image.pixel(5, 5), {128, 64, 32, 255}, 0);
+        image = gpu.read_texture(f.float_texture.Get(), 0, 4);
+        float v;
+        std::memcpy(&v, image.at(6, 6), 4);
+        CHECK(v == 1.0f);
+        image = gpu.read_texture(half.Get(), 0, 2);
+        uint16_t h;
+        std::memcpy(&h, image.at(4, 4), 2);
+        CHECK_EQ(h, 0x3C00u);
+    }
+
     // ---- A dispatch with a zero group count does nothing -------------------------------------------------------------
     {
         ComPtr<ID3D12GraphicsCommandList> list = f.begin();
