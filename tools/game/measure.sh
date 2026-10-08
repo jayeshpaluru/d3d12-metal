@@ -5,8 +5,8 @@
 # Prints an averaged summary and the last reports; the full layer log is build-wine/game-logs/<name>.log.
 # The API and pass profiles are off by default (they perturb the CPU use); D3D12METAL_PROFILE=1 D3D12METAL_PASS_PROFILE=1
 # D3D12METAL_SUBMIT_PROFILE=1 turn them on for digging.
-# usage: tools/game/measure.sh <name> [stand-seconds] [profile-row] [load-seconds]
-# Refuses to start when a game is already running (it may be the user's); stops only Spider-Man.exe and its helpers.
+# usage: GAME=sm1|sm2 tools/game/measure.sh <name> [stand-seconds] [profile-row] [load-seconds]
+# Refuses to start when a game is already running (it may be the user's); stops only the profile's exe (GAME=sm1|sm2) and its helpers.
 source "$(dirname "${BASH_SOURCE[0]}")/env.sh"
 name="${1:?usage: measure.sh <name> [stand-seconds] [profile-row] [load-seconds]}"
 stand="${2:-60}"; row="${3:-2}"; load="${4:-120}"

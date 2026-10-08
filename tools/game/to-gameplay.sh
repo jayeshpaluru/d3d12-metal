@@ -3,7 +3,7 @@
 # It looks at the screen (tools/game/state.sh) before every key: picks the profile row, confirms CONTINUE, waits while loading and
 # returns once the open world has been seen twice in a row. Never confirms anything it does not recognise: a screen that is not the
 # main menu after a profile was chosen (New Game's difficulty menu) gets Escape. Exits 1 on timeout.
-# usage: GAME_LOG=<layer log> tools/game/to-gameplay.sh [profile-row 1|2] [load-seconds, the time allowed after CONTINUE]
+# usage: GAME=sm1|sm2 GAME_LOG=<layer log> tools/game/to-gameplay.sh [profile-row 1|2] [load-seconds, the time allowed after CONTINUE]
 source "$(dirname "${BASH_SOURCE[0]}")/env.sh"
 row="${1:-2}"; load="${2:-120}"
 tools="$game_root/tools/game"

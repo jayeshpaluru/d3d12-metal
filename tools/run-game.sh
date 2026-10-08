@@ -14,13 +14,15 @@
 #   --screens-every S   seconds between screenshots [15]
 # Everything else (and everything after --) is passed to the game; Steam forwards the arguments after the app id.
 # Steam must already be running in its prefix: start it with tools/start-steam.sh (this script never starts it).
-# Environment: GAME_DIR, GAME_EXE, GAME_APPID, STEAM_WINEPREFIX, WINE_ROOT (see tools/game-common.sh),
+# Environment: GAME (sm1|sm2, default sm1), GAME_DIR, GAME_EXE, GAME_APPID, GAME_ARGS, STEAM_WINEPREFIX, WINE_ROOT (see tools/game-common.sh),
 #              WINDOW_MATCH (regex for the window title to capture, default: any non-Steam Wine window).
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/game-common.sh"
 
 direct=0 kill_only=0 install=1 dry_run_launch=0 timeout=1800 start_timeout="" shot_interval=15
 extra=()
+read -r -a game_args <<< "${GAME_ARGS:-}"   # the profile's default arguments (Steam mode)
+export ROSETTA_ADVERTISE_AVX=1   # Spider-Man 2 needs AVX2 and F16C; Rosetta hides them otherwise (direct mode; Steam games inherit it from tools/start-steam.sh)
 while [ $# -gt 0 ]; do
     case "$1" in
         --direct) direct=1; shift ;;
@@ -186,7 +188,7 @@ if [ "$direct" = 1 ]; then
 else
     echo "launching app $GAME_APPID through Steam ${extra[*]:-}"
     WINEPREFIX="$prefix" WINEDEBUG="${WINEDEBUG:--all}" "$WINE_ROOT/bin/wine" 'C:\Program Files (x86)\Steam\steam.exe' \
-        -applaunch "$GAME_APPID" -nolauncher ${extra[@]+"${extra[@]}"} >"$launcher_log" 2>&1 &
+        -applaunch "$GAME_APPID" ${game_args[@]+"${game_args[@]}"} ${extra[@]+"${extra[@]}"} >"$launcher_log" 2>&1 &
 fi
 launcher=$!
 

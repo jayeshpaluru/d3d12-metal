@@ -8,7 +8,7 @@
 # The registry is changed with `wine reg add`, which talks to the prefix's running wineserver (Steam keeps running).
 #
 # Usage: tools/install-game.sh [--dry-run]       (build first: tools/build-wine.sh)
-# Environment: GAME_DIR, GAME_EXE, STEAM_WINEPREFIX, WINE_ROOT (see tools/game-common.sh)
+# Environment: GAME (sm1|sm2, default sm1), GAME_DIR, GAME_EXE, STEAM_WINEPREFIX, WINE_ROOT (see tools/game-common.sh)
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/game-common.sh"
 

@@ -3,7 +3,7 @@
 # the per-app DLL overrides from the Wine prefix's registry. Safe to run again.
 #
 # Usage: tools/uninstall-game.sh [--dry-run]
-# Environment: GAME_DIR, GAME_EXE, STEAM_WINEPREFIX, WINE_ROOT (see tools/game-common.sh)
+# Environment: GAME (sm1|sm2, default sm1), GAME_DIR, GAME_EXE, STEAM_WINEPREFIX, WINE_ROOT (see tools/game-common.sh)
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/game-common.sh"
 

@@ -1,9 +1,9 @@
 #!/bin/bash
 # Shared by the tools/game scripts (sourced). Paths are overridable through the environment:
-#   WINE_ROOT, STEAM_WINEPREFIX (see tools/game-common.sh), GAME_FOLDER (the game's install folder)
+#   GAME (sm1|sm2 profile), WINE_ROOT, STEAM_WINEPREFIX (see tools/game-common.sh), GAME_FOLDER (the game's install folder)
 source "$(dirname "${BASH_SOURCE[0]}")/../game-common.sh"
 STEAM_WINEPREFIX="${STEAM_WINEPREFIX:-/Users/jsp/code/deps/wineprefix-steam}"
-default_game_folder="$STEAM_WINEPREFIX/drive_c/Program Files (x86)/Steam/steamapps/common/Marvel's Spider-Man Remastered"
+default_game_folder="$STEAM_WINEPREFIX/drive_c/Program Files (x86)/Steam/steamapps/common/$GAME_INSTALL_DIR"
 GAME_FOLDER="${GAME_FOLDER:-$default_game_folder}"
 
 # wine_steam <args...>: wine in the Steam prefix.

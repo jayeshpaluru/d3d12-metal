@@ -5,15 +5,32 @@
 #   WINE_ROOT          directory with bin/wine [the Gcenx Wine Devel app in deps]
 #   STEAM_WINEPREFIX   the prefix Steam and the game live in [deps/wineprefix-steam]
 #   GAME_WINEPREFIX    act on this prefix instead (stand-in games in the test prefix)
-#   GAME_DIR           the folder holding the game's exe [steamapps/common/*/Spider-Man.exe in the Steam prefix]
-#   GAME_EXE           the exe's name [Spider-Man.exe]
-#   GAME_APPID         Steam app id [1817070]
+#   GAME              game profile: sm1 (Marvel's Spider-Man Remastered) or sm2 (Marvel's Spider-Man 2) [sm1]
+#   GAME_DIR           the folder holding the game's exe [steamapps/common/<install dir of the profile> in the Steam prefix]
+#   GAME_EXE           the exe's name [from the profile: Spider-Man.exe, Spider-Man2.exe]
+#   GAME_APPID         Steam app id [from the profile: 1817070, 2651280]
+#   GAME_ARGS          default game arguments [from the profile: -nolauncher]
 #   GAME_OUT           the build to install [build-wine/out] (install-game.sh; an older build for comparisons)
 
 game_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WINE_ROOT="${WINE_ROOT:-/Users/jsp/code/deps/wine/Wine Devel.app/Contents/Resources/wine}"
-GAME_EXE="${GAME_EXE:-Spider-Man.exe}"
-GAME_APPID="${GAME_APPID:-1817070}"
+
+# Game profiles. Each defines the exe, Steam app id, install folder name (under steamapps/common), default game
+# arguments and the window title to capture. GAME_EXE, GAME_APPID, GAME_INSTALL_DIR and GAME_ARGS from the
+# environment override the profile (stand-in games).
+GAME="${GAME:-sm1}"
+case "$GAME" in
+    sm1) profile_exe="Spider-Man.exe";  profile_appid=1817070; profile_dir="Marvel's Spider-Man Remastered"; profile_args="-nolauncher"; profile_window="Spider" ;;
+    sm2) profile_exe="Spider-Man2.exe"; profile_appid=2651280; profile_dir="Marvel's Spider-Man 2";         profile_args="-nolauncher"; profile_window="Spider" ;;
+    *) echo "unknown GAME=$GAME (sm1 or sm2)" >&2; exit 2 ;;
+esac
+GAME_EXE="${GAME_EXE:-$profile_exe}"
+GAME_APPID="${GAME_APPID:-$profile_appid}"
+GAME_INSTALL_DIR="${GAME_INSTALL_DIR:-$profile_dir}"
+GAME_ARGS="${GAME_ARGS-$profile_args}"
+GAME_WINDOW="${GAME_WINDOW:-$profile_window}"
+# Screen-state references of the classifier (tools/game/state.sh), made locally per game.
+game_ref="$game_root/build-wine/ref/$GAME"
 game_out="${GAME_OUT:-$game_root/build-wine/out}"
 game_logs="$game_root/build-wine/game-logs"
 game_screens="$game_root/build-wine/game-screens"
@@ -46,6 +63,11 @@ find_game_dir() {
         return 0
     fi
     local common exe
+    exe="$(game_prefix)/drive_c/Program Files (x86)/Steam/steamapps/common/$GAME_INSTALL_DIR/$GAME_EXE"
+    if [ -f "$exe" ]; then
+        game_dir="$(dirname "$exe")"
+        return 0
+    fi
     common="$(game_prefix)/drive_c/Program Files (x86)/Steam/steamapps/common"
     for exe in "$common"/*/"$GAME_EXE"; do
         if [ -f "$exe" ]; then
@@ -53,7 +75,7 @@ find_game_dir() {
             return 0
         fi
     done
-    echo "$GAME_EXE not found under $common (still downloading? set GAME_DIR=<folder with $GAME_EXE>)" >&2
+    echo "$GAME_EXE not found in $common/$GAME_INSTALL_DIR (GAME=$GAME; still downloading? set GAME_DIR=<folder with $GAME_EXE>)" >&2
     return 1
 }
 

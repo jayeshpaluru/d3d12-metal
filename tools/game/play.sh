@@ -2,7 +2,7 @@
 # Launches the game with statistics on (the installed d3d12metal.conf is left alone: the environment overrides it)
 # and drives it from the profile menu into the open world (tools/game/to-gameplay.sh), screenshots land in
 # build-wine/game-screens/load-N.png. The layer log is build-wine/game-logs/<name>.log.
-# usage: tools/game/play.sh <name> [profile-row 1|2] [load-seconds]     (extra environment, e.g. D3D12METAL_TRACE=1, passes through)
+# usage: GAME=sm1|sm2 tools/game/play.sh <name> [profile-row 1|2] [load-seconds]     (extra environment, e.g. D3D12METAL_TRACE=1, passes through)
 # Refuses to start when a game is already running (it may be the user's).
 source "$(dirname "${BASH_SOURCE[0]}")/env.sh"
 name="${1:?usage: play.sh <name> [profile-row] [load-seconds]}"; shift
