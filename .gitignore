@@ -7,3 +7,4 @@ build/
 *.gputrace
 .DS_Store
 captures/
+.claude/

@@ -1,0 +1,133 @@
+// ID3D12GraphicsCommandList (implemented up to ID3D12GraphicsCommandList1).
+//
+// Calls are recorded into an mtlb command stream (bridge/mtlb_cmd.h) that
+// ExecuteCommandLists hands to the backend. Render passes are opened lazily:
+// a ClearRenderTargetView on a bound target is folded into the pass's clear
+// load action when no draw has happened yet, otherwise it gets a pass of its
+// own.
+#pragma once
+
+#include <vector>
+
+#include "bridge/mtlb_cmd.h"
+#include "common/log.h"
+#include "d3d12/descriptor_heap.h"
+#include "d3d12/object.h"
+#include "d3d12/root_signature.h"
+
+namespace d3d12m {
+
+class CommandList final : public ChildImpl<ID3D12GraphicsCommandList1> {
+public:
+    // Creates a list in the recording state.
+    static HRESULT create(Device *device, D3D12_COMMAND_LIST_TYPE type, ID3D12CommandAllocator *allocator,
+                          ID3D12PipelineState *initial_state, REFIID riid, void **out);
+
+    bool closed() const { return closed_; }
+    const std::vector<uint8_t> &stream() const { return stream_; }
+
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **out) override
+    {
+        return query_interfaces<IUnknown, ID3D12Object, ID3D12DeviceChild, ID3D12CommandList,
+                                ID3D12GraphicsCommandList, ID3D12GraphicsCommandList1>(this, riid, out);
+    }
+
+    // ID3D12CommandList
+    D3D12_COMMAND_LIST_TYPE STDMETHODCALLTYPE GetType() override { return type_; }
+
+    // ID3D12GraphicsCommandList
+    HRESULT STDMETHODCALLTYPE Close() override;
+    HRESULT STDMETHODCALLTYPE Reset(ID3D12CommandAllocator *pAllocator, ID3D12PipelineState *pInitialState) override;
+    void STDMETHODCALLTYPE ClearState(ID3D12PipelineState *) override { D3D12M_STUB_LOG(); }
+    void STDMETHODCALLTYPE DrawInstanced(UINT VertexCountPerInstance, UINT InstanceCount, UINT StartVertexLocation, UINT StartInstanceLocation) override;
+    void STDMETHODCALLTYPE DrawIndexedInstanced(UINT IndexCountPerInstance, UINT InstanceCount, UINT StartIndexLocation, INT BaseVertexLocation, UINT StartInstanceLocation) override;
+    void STDMETHODCALLTYPE Dispatch(UINT, UINT, UINT) override { D3D12M_STUB_LOG(); }
+    void STDMETHODCALLTYPE CopyBufferRegion(ID3D12Resource *pDstBuffer, UINT64 DstOffset, ID3D12Resource *pSrcBuffer, UINT64 SrcOffset, UINT64 NumBytes) override;
+    void STDMETHODCALLTYPE CopyTextureRegion(const D3D12_TEXTURE_COPY_LOCATION *pDst, UINT DstX, UINT DstY, UINT DstZ, const D3D12_TEXTURE_COPY_LOCATION *pSrc, const D3D12_BOX *pSrcBox) override;
+    void STDMETHODCALLTYPE CopyResource(ID3D12Resource *pDstResource, ID3D12Resource *pSrcResource) override;
+    void STDMETHODCALLTYPE CopyTiles(ID3D12Resource *, const D3D12_TILED_RESOURCE_COORDINATE *, const D3D12_TILE_REGION_SIZE *, ID3D12Resource *, UINT64, D3D12_TILE_COPY_FLAGS) override { D3D12M_STUB_LOG(); }
+    void STDMETHODCALLTYPE ResolveSubresource(ID3D12Resource *, UINT, ID3D12Resource *, UINT, DXGI_FORMAT) override { D3D12M_STUB_LOG(); }
+    void STDMETHODCALLTYPE IASetPrimitiveTopology(D3D12_PRIMITIVE_TOPOLOGY PrimitiveTopology) override;
+    void STDMETHODCALLTYPE RSSetViewports(UINT NumViewports, const D3D12_VIEWPORT *pViewports) override;
+    void STDMETHODCALLTYPE RSSetScissorRects(UINT NumRects, const D3D12_RECT *pRects) override;
+    void STDMETHODCALLTYPE OMSetBlendFactor(const FLOAT BlendFactor[ 4 ]) override;
+    void STDMETHODCALLTYPE OMSetStencilRef(UINT StencilRef) override;
+    void STDMETHODCALLTYPE SetPipelineState(ID3D12PipelineState *pPipelineState) override;
+    void STDMETHODCALLTYPE ResourceBarrier(UINT NumBarriers, const D3D12_RESOURCE_BARRIER *pBarriers) override;
+    void STDMETHODCALLTYPE ExecuteBundle(ID3D12GraphicsCommandList *) override { D3D12M_STUB_LOG(); }
+    void STDMETHODCALLTYPE SetDescriptorHeaps(UINT NumDescriptorHeaps, ID3D12DescriptorHeap *const *ppDescriptorHeaps) override;
+    void STDMETHODCALLTYPE SetComputeRootSignature(ID3D12RootSignature *) override { D3D12M_STUB_LOG(); }
+    void STDMETHODCALLTYPE SetGraphicsRootSignature(ID3D12RootSignature *pRootSignature) override;
+    void STDMETHODCALLTYPE SetComputeRootDescriptorTable(UINT, D3D12_GPU_DESCRIPTOR_HANDLE) override { D3D12M_STUB_LOG(); }
+    void STDMETHODCALLTYPE SetGraphicsRootDescriptorTable(UINT RootParameterIndex, D3D12_GPU_DESCRIPTOR_HANDLE BaseDescriptor) override;
+    void STDMETHODCALLTYPE SetComputeRoot32BitConstant(UINT, UINT, UINT) override { D3D12M_STUB_LOG(); }
+    void STDMETHODCALLTYPE SetGraphicsRoot32BitConstant(UINT RootParameterIndex, UINT SrcData, UINT DestOffsetIn32BitValues) override;
+    void STDMETHODCALLTYPE SetComputeRoot32BitConstants(UINT, UINT, const void *, UINT) override { D3D12M_STUB_LOG(); }
+    void STDMETHODCALLTYPE SetGraphicsRoot32BitConstants(UINT RootParameterIndex, UINT Num32BitValuesToSet, const void *pSrcData, UINT DestOffsetIn32BitValues) override;
+    void STDMETHODCALLTYPE SetComputeRootConstantBufferView(UINT, D3D12_GPU_VIRTUAL_ADDRESS) override { D3D12M_STUB_LOG(); }
+    void STDMETHODCALLTYPE SetGraphicsRootConstantBufferView(UINT RootParameterIndex, D3D12_GPU_VIRTUAL_ADDRESS BufferLocation) override;
+    void STDMETHODCALLTYPE SetComputeRootShaderResourceView(UINT, D3D12_GPU_VIRTUAL_ADDRESS) override { D3D12M_STUB_LOG(); }
+    void STDMETHODCALLTYPE SetGraphicsRootShaderResourceView(UINT RootParameterIndex, D3D12_GPU_VIRTUAL_ADDRESS BufferLocation) override;
+    void STDMETHODCALLTYPE SetComputeRootUnorderedAccessView(UINT, D3D12_GPU_VIRTUAL_ADDRESS) override { D3D12M_STUB_LOG(); }
+    void STDMETHODCALLTYPE SetGraphicsRootUnorderedAccessView(UINT RootParameterIndex, D3D12_GPU_VIRTUAL_ADDRESS BufferLocation) override;
+    void STDMETHODCALLTYPE IASetIndexBuffer(const D3D12_INDEX_BUFFER_VIEW *pView) override;
+    void STDMETHODCALLTYPE IASetVertexBuffers(UINT StartSlot, UINT NumViews, const D3D12_VERTEX_BUFFER_VIEW *pViews) override;
+    void STDMETHODCALLTYPE SOSetTargets(UINT, UINT, const D3D12_STREAM_OUTPUT_BUFFER_VIEW *) override { D3D12M_STUB_LOG(); }
+    void STDMETHODCALLTYPE OMSetRenderTargets(UINT NumRenderTargetDescriptors, const D3D12_CPU_DESCRIPTOR_HANDLE *pRenderTargetDescriptors, BOOL RTsSingleHandleToDescriptorRange, const D3D12_CPU_DESCRIPTOR_HANDLE *pDepthStencilDescriptor) override;
+    void STDMETHODCALLTYPE ClearDepthStencilView(D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_CLEAR_FLAGS, FLOAT, UINT8, UINT, const D3D12_RECT *) override { D3D12M_STUB_LOG(); }
+    void STDMETHODCALLTYPE ClearRenderTargetView(D3D12_CPU_DESCRIPTOR_HANDLE RenderTargetView, const FLOAT ColorRGBA[ 4 ], UINT NumRects, const D3D12_RECT *pRects) override;
+    void STDMETHODCALLTYPE ClearUnorderedAccessViewUint(D3D12_GPU_DESCRIPTOR_HANDLE, D3D12_CPU_DESCRIPTOR_HANDLE, ID3D12Resource *, const UINT[ 4 ], UINT, const D3D12_RECT *) override { D3D12M_STUB_LOG(); }
+    void STDMETHODCALLTYPE ClearUnorderedAccessViewFloat(D3D12_GPU_DESCRIPTOR_HANDLE, D3D12_CPU_DESCRIPTOR_HANDLE, ID3D12Resource *, const FLOAT[ 4 ], UINT, const D3D12_RECT *) override { D3D12M_STUB_LOG(); }
+    void STDMETHODCALLTYPE DiscardResource(ID3D12Resource *, const D3D12_DISCARD_REGION *) override { D3D12M_STUB_LOG(); }
+    void STDMETHODCALLTYPE BeginQuery(ID3D12QueryHeap *, D3D12_QUERY_TYPE, UINT) override { D3D12M_STUB_LOG(); }
+    void STDMETHODCALLTYPE EndQuery(ID3D12QueryHeap *, D3D12_QUERY_TYPE, UINT) override { D3D12M_STUB_LOG(); }
+    void STDMETHODCALLTYPE ResolveQueryData(ID3D12QueryHeap *, D3D12_QUERY_TYPE, UINT, UINT, ID3D12Resource *, UINT64) override { D3D12M_STUB_LOG(); }
+    void STDMETHODCALLTYPE SetPredication(ID3D12Resource *, UINT64, D3D12_PREDICATION_OP) override { D3D12M_STUB_LOG(); }
+    void STDMETHODCALLTYPE SetMarker(UINT, const void *, UINT) override { D3D12M_STUB_LOG(); }
+    void STDMETHODCALLTYPE BeginEvent(UINT, const void *, UINT) override { D3D12M_STUB_LOG(); }
+    void STDMETHODCALLTYPE EndEvent() override { D3D12M_STUB_LOG(); }
+    void STDMETHODCALLTYPE ExecuteIndirect(ID3D12CommandSignature *, UINT, ID3D12Resource *, UINT64, ID3D12Resource *, UINT64) override { D3D12M_STUB_LOG(); }
+    // ID3D12GraphicsCommandList1
+    void STDMETHODCALLTYPE AtomicCopyBufferUINT(ID3D12Resource *, UINT64, ID3D12Resource *, UINT64, UINT, ID3D12Resource *const *, const D3D12_SUBRESOURCE_RANGE_UINT64 *) override { D3D12M_STUB_LOG(); }
+    void STDMETHODCALLTYPE AtomicCopyBufferUINT64(ID3D12Resource *, UINT64, ID3D12Resource *, UINT64, UINT, ID3D12Resource *const *, const D3D12_SUBRESOURCE_RANGE_UINT64 *) override { D3D12M_STUB_LOG(); }
+    void STDMETHODCALLTYPE OMSetDepthBounds(FLOAT, FLOAT) override { D3D12M_STUB_LOG(); }
+    void STDMETHODCALLTYPE SetSamplePositions(UINT, UINT, D3D12_SAMPLE_POSITION *) override { D3D12M_STUB_LOG(); }
+    void STDMETHODCALLTYPE ResolveSubresourceRegion(ID3D12Resource *, UINT, UINT, UINT, ID3D12Resource *, UINT, D3D12_RECT *, DXGI_FORMAT, D3D12_RESOLVE_MODE) override { D3D12M_STUB_LOG(); }
+    void STDMETHODCALLTYPE SetViewInstanceMask(UINT) override { D3D12M_STUB_LOG(); }
+
+private:
+    struct Target {
+        RenderTargetDescriptor rtv{};
+        bool clear = false;  // clear on the next pass start
+        float color[4] = {};
+    };
+
+    CommandList(Device *device, D3D12_COMMAND_LIST_TYPE type) : ChildImpl(device), type_(type) {}
+    ~CommandList() override;
+
+    void reset_state();
+    template <typename T>
+    T *append(mtlb_cmd_type type, size_t extra_bytes = 0);
+    void begin_pass();
+    void end_pass();
+    void flush_clears();
+    void emit_clear_pass(const RenderTargetDescriptor &rtv, const float color[4]);
+    bool prepare_draw();
+    const RootSignature::Slot *find_slot(UINT index, D3D12_ROOT_PARAMETER_TYPE type);
+    void set_root_address(UINT index, D3D12_ROOT_PARAMETER_TYPE type, uint64_t address);
+
+    D3D12_COMMAND_LIST_TYPE type_;
+    bool closed_ = false;
+    std::vector<uint8_t> stream_;
+
+    Target targets_[MTLB_MAX_RENDER_TARGETS];
+    UINT num_targets_ = 0;
+    bool pass_open_ = false;
+
+    bool has_pipeline_ = false;
+    RootSignature *root_signature_ = nullptr;  // owned reference
+    std::vector<uint8_t> root_args_;
+    bool root_args_dirty_ = false;
+};
+
+} // namespace d3d12m

@@ -1,0 +1,77 @@
+// Device creation, feature queries, and queue/fence synchronisation.
+#include "test_context.h"
+
+int main()
+{
+    Com<IDXGIFactory4> factory;
+    CHECK_HR(CreateDXGIFactory2(0, IID_PPV_ARGS(factory.put())));
+    Com<IDXGIAdapter1> adapter;
+    CHECK_HR(factory->EnumAdapters1(0, adapter.put()));
+    Com<IDXGIAdapter1> no_adapter;
+    CHECK(factory->EnumAdapters1(1, no_adapter.put()) == DXGI_ERROR_NOT_FOUND);
+
+    DXGI_ADAPTER_DESC1 adapter_desc = {};
+    CHECK_HR(adapter->GetDesc1(&adapter_desc));
+    CHECK(adapter_desc.DedicatedVideoMemory > 0);
+
+    Com<ID3D12Device> device;
+    CHECK_HR(D3D12CreateDevice(adapter.get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(device.put())));
+    Com<ID3D12Device2> device2;
+    CHECK_HR(device->QueryInterface(IID_PPV_ARGS(device2.put())));
+    CHECK(device->GetNodeCount() == 1);
+
+    // Feature support.
+    D3D12_FEATURE_DATA_D3D12_OPTIONS options = {};
+    CHECK_HR(device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS, &options, sizeof(options)));
+
+    const D3D_FEATURE_LEVEL requested[] = {D3D_FEATURE_LEVEL_12_1, D3D_FEATURE_LEVEL_12_0, D3D_FEATURE_LEVEL_11_0};
+    D3D12_FEATURE_DATA_FEATURE_LEVELS levels = {3, requested, D3D_FEATURE_LEVEL_11_0};
+    CHECK_HR(device->CheckFeatureSupport(D3D12_FEATURE_FEATURE_LEVELS, &levels, sizeof(levels)));
+    CHECK(levels.MaxSupportedFeatureLevel >= D3D_FEATURE_LEVEL_12_0 || levels.MaxSupportedFeatureLevel == D3D_FEATURE_LEVEL_11_0);
+
+    D3D12_FEATURE_DATA_ARCHITECTURE architecture = {};
+    CHECK_HR(device->CheckFeatureSupport(D3D12_FEATURE_ARCHITECTURE, &architecture, sizeof(architecture)));
+
+    D3D12_FEATURE_DATA_SHADER_MODEL shader_model = {D3D_SHADER_MODEL_6_7};
+    CHECK_HR(device->CheckFeatureSupport(D3D12_FEATURE_SHADER_MODEL, &shader_model, sizeof(shader_model)));
+    CHECK(shader_model.HighestShaderModel == D3D_SHADER_MODEL_6_6);
+
+    D3D12_FEATURE_DATA_ROOT_SIGNATURE root_signature = {D3D_ROOT_SIGNATURE_VERSION_1_1};
+    CHECK_HR(device->CheckFeatureSupport(D3D12_FEATURE_ROOT_SIGNATURE, &root_signature, sizeof(root_signature)));
+    CHECK(root_signature.HighestVersion == D3D_ROOT_SIGNATURE_VERSION_1_1);
+
+    D3D12_FEATURE_DATA_FORMAT_SUPPORT format = {};
+    format.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    CHECK_HR(device->CheckFeatureSupport(D3D12_FEATURE_FORMAT_SUPPORT, &format, sizeof(format)));
+    CHECK(format.Support1 & D3D12_FORMAT_SUPPORT1_RENDER_TARGET);
+    format = {};
+    format.Format = DXGI_FORMAT_BC7_UNORM;
+    CHECK_HR(device->CheckFeatureSupport(D3D12_FEATURE_FORMAT_SUPPORT, &format, sizeof(format)));
+    CHECK(format.Support1 & D3D12_FORMAT_SUPPORT1_TEXTURE2D);
+
+    // Queue and fence.
+    D3D12_COMMAND_QUEUE_DESC queue_desc = {};
+    queue_desc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+    Com<ID3D12CommandQueue> queue;
+    CHECK_HR(device->CreateCommandQueue(&queue_desc, IID_PPV_ARGS(queue.put())));
+    Com<ID3D12Pageable> pageable;
+    CHECK_HR(queue->QueryInterface(IID_PPV_ARGS(pageable.put())));
+
+    Com<ID3D12Fence> fence;
+    CHECK_HR(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(fence.put())));
+    CHECK(fence->GetCompletedValue() == 0);
+
+    CHECK_HR(queue->Signal(fence.get(), 5));
+    CHECK_HR(fence->SetEventOnCompletion(5, nullptr));
+    CHECK(fence->GetCompletedValue() == 5);
+
+    // CPU signal, then a GPU wait followed by a GPU signal.
+    CHECK_HR(fence->Signal(7));
+    CHECK(fence->GetCompletedValue() == 7);
+    CHECK_HR(queue->Wait(fence.get(), 7));
+    CHECK_HR(queue->Signal(fence.get(), 9));
+    CHECK_HR(fence->SetEventOnCompletion(9, nullptr));
+    CHECK(fence->GetCompletedValue() == 9);
+
+    return 0;
+}

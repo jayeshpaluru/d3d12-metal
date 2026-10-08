@@ -1,0 +1,382 @@
+/*
+ * mtlb: the bridge between the D3D12/DXGI front-end and the Metal backend.
+ *
+ * Plain C, opaque 64-bit handles and POD structs only. No Metal or D3D types
+ * cross this interface, so the same API can later be called through a Wine
+ * unix-call thunk (every pointer argument is either an input blob or a small
+ * out-struct, and every handle is a uint64_t).
+ */
+#ifndef MTLB_H
+#define MTLB_H
+
+#include <stddef.h>
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#define MTLB_EXPORT __attribute__((visibility("default")))
+
+/* ------------------------------------------------------------------------ */
+/* Results and handles                                                      */
+/* ------------------------------------------------------------------------ */
+
+typedef int32_t mtlb_result;
+enum {
+    MTLB_OK = 0,
+    MTLB_ERROR_INVALID_ARGUMENT = -1,
+    MTLB_ERROR_OUT_OF_MEMORY = -2,
+    MTLB_ERROR_UNSUPPORTED = -3,
+    MTLB_ERROR_COMPILE_FAILED = -4,   /* shader conversion or pipeline build */
+    MTLB_ERROR_TIMEOUT = -5,
+    MTLB_ERROR_DEVICE = -6,           /* no Metal device or other Metal failure */
+};
+
+/* Description of the most recent failure on the calling thread. */
+MTLB_EXPORT const char *mtlb_last_error(void);
+
+/* Opaque handles. Zero is never a valid handle. */
+typedef uint64_t mtlb_device;
+typedef uint64_t mtlb_buffer;
+typedef uint64_t mtlb_texture;
+typedef uint64_t mtlb_pipeline;
+typedef uint64_t mtlb_queue;
+typedef uint64_t mtlb_event;
+
+/* ------------------------------------------------------------------------ */
+/* Formats                                                                  */
+/* ------------------------------------------------------------------------ */
+
+/* Enumerator values deliberately equal the DXGI_FORMAT values so the front-end
+ * converts with a cast; the bridge does not otherwise depend on DXGI. */
+typedef enum mtlb_format {
+    MTLB_FORMAT_UNKNOWN = 0,
+    MTLB_FORMAT_R32G32B32A32_FLOAT = 2,
+    MTLB_FORMAT_R32G32B32A32_UINT = 3,
+    MTLB_FORMAT_R32G32B32A32_SINT = 4,
+    MTLB_FORMAT_R32G32B32_FLOAT = 6,
+    MTLB_FORMAT_R32G32B32_UINT = 7,
+    MTLB_FORMAT_R32G32B32_SINT = 8,
+    MTLB_FORMAT_R16G16B16A16_FLOAT = 10,
+    MTLB_FORMAT_R16G16B16A16_UNORM = 11,
+    MTLB_FORMAT_R16G16B16A16_UINT = 12,
+    MTLB_FORMAT_R16G16B16A16_SNORM = 13,
+    MTLB_FORMAT_R16G16B16A16_SINT = 14,
+    MTLB_FORMAT_R32G32_FLOAT = 16,
+    MTLB_FORMAT_R32G32_UINT = 17,
+    MTLB_FORMAT_R32G32_SINT = 18,
+    MTLB_FORMAT_R10G10B10A2_UNORM = 24,
+    MTLB_FORMAT_R10G10B10A2_UINT = 25,
+    MTLB_FORMAT_R11G11B10_FLOAT = 26,
+    MTLB_FORMAT_R8G8B8A8_TYPELESS = 27,
+    MTLB_FORMAT_R8G8B8A8_UNORM = 28,
+    MTLB_FORMAT_R8G8B8A8_UNORM_SRGB = 29,
+    MTLB_FORMAT_R8G8B8A8_UINT = 30,
+    MTLB_FORMAT_R8G8B8A8_SNORM = 31,
+    MTLB_FORMAT_R8G8B8A8_SINT = 32,
+    MTLB_FORMAT_R16G16_FLOAT = 34,
+    MTLB_FORMAT_R16G16_UNORM = 35,
+    MTLB_FORMAT_R16G16_UINT = 36,
+    MTLB_FORMAT_R16G16_SNORM = 37,
+    MTLB_FORMAT_R16G16_SINT = 38,
+    MTLB_FORMAT_D32_FLOAT = 40,
+    MTLB_FORMAT_R32_FLOAT = 41,
+    MTLB_FORMAT_R32_UINT = 42,
+    MTLB_FORMAT_R32_SINT = 43,
+    MTLB_FORMAT_D24_UNORM_S8_UINT = 45,
+    MTLB_FORMAT_R8G8_UNORM = 49,
+    MTLB_FORMAT_R8G8_UINT = 50,
+    MTLB_FORMAT_R8G8_SNORM = 51,
+    MTLB_FORMAT_R8G8_SINT = 52,
+    MTLB_FORMAT_R16_FLOAT = 54,
+    MTLB_FORMAT_D16_UNORM = 55,
+    MTLB_FORMAT_R16_UNORM = 56,
+    MTLB_FORMAT_R16_UINT = 57,
+    MTLB_FORMAT_R16_SNORM = 58,
+    MTLB_FORMAT_R16_SINT = 59,
+    MTLB_FORMAT_R8_UNORM = 61,
+    MTLB_FORMAT_R8_UINT = 62,
+    MTLB_FORMAT_R8_SNORM = 63,
+    MTLB_FORMAT_R8_SINT = 64,
+    MTLB_FORMAT_BC1_UNORM = 71,
+    MTLB_FORMAT_BC1_UNORM_SRGB = 72,
+    MTLB_FORMAT_BC2_UNORM = 74,
+    MTLB_FORMAT_BC2_UNORM_SRGB = 75,
+    MTLB_FORMAT_BC3_UNORM = 77,
+    MTLB_FORMAT_BC3_UNORM_SRGB = 78,
+    MTLB_FORMAT_BC4_UNORM = 80,
+    MTLB_FORMAT_BC4_SNORM = 81,
+    MTLB_FORMAT_BC5_UNORM = 83,
+    MTLB_FORMAT_BC5_SNORM = 84,
+    MTLB_FORMAT_B8G8R8A8_UNORM = 87,
+    MTLB_FORMAT_B8G8R8A8_TYPELESS = 90,
+    MTLB_FORMAT_B8G8R8A8_UNORM_SRGB = 91,
+    MTLB_FORMAT_BC6H_UF16 = 95,
+    MTLB_FORMAT_BC6H_SF16 = 96,
+    MTLB_FORMAT_BC7_UNORM = 98,
+    MTLB_FORMAT_BC7_UNORM_SRGB = 99,
+} mtlb_format;
+
+enum {
+    MTLB_FORMAT_FLAG_COLOR = 1u << 0,
+    MTLB_FORMAT_FLAG_DEPTH = 1u << 1,
+    MTLB_FORMAT_FLAG_STENCIL = 1u << 2,
+    MTLB_FORMAT_FLAG_COMPRESSED = 1u << 3,
+    MTLB_FORMAT_FLAG_TEXTURE = 1u << 4,        /* usable as a sampled texture */
+    MTLB_FORMAT_FLAG_RENDER_TARGET = 1u << 5,
+    MTLB_FORMAT_FLAG_BLENDABLE = 1u << 6,
+    MTLB_FORMAT_FLAG_VERTEX = 1u << 7,         /* usable as a vertex attribute */
+    MTLB_FORMAT_FLAG_SRGB = 1u << 8,
+    MTLB_FORMAT_FLAG_TYPELESS = 1u << 9,
+    MTLB_FORMAT_FLAG_SHADER_WRITE = 1u << 10,  /* usable as a UAV */
+};
+
+typedef struct mtlb_format_info {
+    uint32_t block_width;      /* texels per block, 1 for uncompressed */
+    uint32_t block_height;
+    uint32_t bytes_per_block;  /* bytes per texel for uncompressed formats */
+    uint32_t flags;            /* MTLB_FORMAT_FLAG_* */
+} mtlb_format_info;
+
+/* Pure lookup, no device needed. Returns MTLB_ERROR_UNSUPPORTED for formats the
+ * bridge does not know. */
+MTLB_EXPORT mtlb_result mtlb_format_get_info(mtlb_format format, mtlb_format_info *out);
+
+/* ------------------------------------------------------------------------ */
+/* Device                                                                   */
+/* ------------------------------------------------------------------------ */
+
+typedef struct mtlb_device_caps {
+    char name[256];
+    uint64_t registry_id;
+    uint64_t recommended_max_working_set_size;
+    uint64_t max_buffer_length;
+    uint32_t has_unified_memory;
+    uint32_t reserved;
+} mtlb_device_caps;
+
+MTLB_EXPORT mtlb_result mtlb_device_create(mtlb_device *out);
+MTLB_EXPORT void mtlb_device_destroy(mtlb_device device);
+MTLB_EXPORT mtlb_result mtlb_device_get_caps(mtlb_device device, mtlb_device_caps *out);
+
+/* ------------------------------------------------------------------------ */
+/* Buffers                                                                  */
+/* ------------------------------------------------------------------------ */
+
+typedef enum mtlb_storage {
+    MTLB_STORAGE_SHARED = 0,   /* CPU-visible */
+    MTLB_STORAGE_PRIVATE = 1,  /* GPU only */
+} mtlb_storage;
+
+typedef struct mtlb_buffer_info {
+    void *cpu_ptr;             /* NULL for private storage */
+    uint64_t gpu_address;
+    uint64_t size;
+} mtlb_buffer_info;
+
+/* Buffers are zero-initialised. */
+MTLB_EXPORT mtlb_result mtlb_buffer_create(mtlb_device device, uint64_t size, mtlb_storage storage,
+                                           mtlb_buffer *out, mtlb_buffer_info *info);
+MTLB_EXPORT void mtlb_buffer_destroy(mtlb_buffer buffer);
+
+/* ------------------------------------------------------------------------ */
+/* Descriptor heaps                                                         */
+/* ------------------------------------------------------------------------ */
+
+/* One slot of a shader-visible descriptor heap. Layout-identical to the Metal
+ * shader converter's IRDescriptorTableEntry (checked by the backend). */
+typedef struct mtlb_descriptor {
+    uint64_t gpu_address;      /* buffer address */
+    uint64_t texture_id;       /* texture resource id */
+    uint64_t metadata;         /* buffer length (low 32 bits) or texture min LOD */
+} mtlb_descriptor;
+
+static inline void mtlb_descriptor_set_buffer(mtlb_descriptor *d, uint64_t gpu_address, uint32_t size_bytes)
+{
+    d->gpu_address = gpu_address;
+    d->texture_id = 0;
+    d->metadata = size_bytes;
+}
+
+/* Creates a zeroed, CPU-visible buffer of `count` mtlb_descriptor entries.
+ * info->gpu_address is the GPU descriptor handle base. */
+MTLB_EXPORT mtlb_result mtlb_descriptor_heap_create(mtlb_device device, uint32_t count,
+                                                    mtlb_buffer *out, mtlb_buffer_info *info);
+
+/* ------------------------------------------------------------------------ */
+/* Textures                                                                 */
+/* ------------------------------------------------------------------------ */
+
+typedef enum mtlb_texture_dimension {
+    MTLB_TEXTURE_1D = 1,
+    MTLB_TEXTURE_2D = 2,
+    MTLB_TEXTURE_3D = 3,
+} mtlb_texture_dimension;
+
+enum {
+    MTLB_TEXTURE_USAGE_SHADER_READ = 1u << 0,
+    MTLB_TEXTURE_USAGE_SHADER_WRITE = 1u << 1,
+    MTLB_TEXTURE_USAGE_RENDER_TARGET = 1u << 2,  /* colour or depth/stencil attachment */
+};
+
+typedef struct mtlb_texture_desc {
+    uint32_t dimension;        /* mtlb_texture_dimension */
+    uint32_t format;           /* mtlb_format */
+    uint32_t width;
+    uint32_t height;
+    uint32_t depth_or_array_size;
+    uint32_t mip_levels;
+    uint32_t sample_count;
+    uint32_t usage;            /* MTLB_TEXTURE_USAGE_* */
+    uint32_t storage;          /* mtlb_storage */
+    uint32_t reserved;
+} mtlb_texture_desc;
+
+typedef struct mtlb_texture_info {
+    uint64_t resource_id;      /* value stored in mtlb_descriptor::texture_id */
+} mtlb_texture_info;
+
+MTLB_EXPORT mtlb_result mtlb_texture_create(mtlb_device device, const mtlb_texture_desc *desc,
+                                            mtlb_texture *out, mtlb_texture_info *info);
+MTLB_EXPORT void mtlb_texture_destroy(mtlb_texture texture);
+
+/* ------------------------------------------------------------------------ */
+/* Pipelines                                                                */
+/* ------------------------------------------------------------------------ */
+
+/* Enumerator values below equal the corresponding D3D12 enum values. */
+
+typedef enum mtlb_blend {
+    MTLB_BLEND_ZERO = 1, MTLB_BLEND_ONE = 2, MTLB_BLEND_SRC_COLOR = 3, MTLB_BLEND_INV_SRC_COLOR = 4,
+    MTLB_BLEND_SRC_ALPHA = 5, MTLB_BLEND_INV_SRC_ALPHA = 6, MTLB_BLEND_DEST_ALPHA = 7,
+    MTLB_BLEND_INV_DEST_ALPHA = 8, MTLB_BLEND_DEST_COLOR = 9, MTLB_BLEND_INV_DEST_COLOR = 10,
+    MTLB_BLEND_SRC_ALPHA_SAT = 11, MTLB_BLEND_BLEND_FACTOR = 14, MTLB_BLEND_INV_BLEND_FACTOR = 15,
+    MTLB_BLEND_SRC1_COLOR = 16, MTLB_BLEND_INV_SRC1_COLOR = 17, MTLB_BLEND_SRC1_ALPHA = 18,
+    MTLB_BLEND_INV_SRC1_ALPHA = 19,
+} mtlb_blend;
+
+typedef enum mtlb_blend_op {
+    MTLB_BLEND_OP_ADD = 1, MTLB_BLEND_OP_SUBTRACT = 2, MTLB_BLEND_OP_REV_SUBTRACT = 3,
+    MTLB_BLEND_OP_MIN = 4, MTLB_BLEND_OP_MAX = 5,
+} mtlb_blend_op;
+
+typedef enum mtlb_compare {
+    MTLB_COMPARE_NEVER = 1, MTLB_COMPARE_LESS = 2, MTLB_COMPARE_EQUAL = 3, MTLB_COMPARE_LESS_EQUAL = 4,
+    MTLB_COMPARE_GREATER = 5, MTLB_COMPARE_NOT_EQUAL = 6, MTLB_COMPARE_GREATER_EQUAL = 7,
+    MTLB_COMPARE_ALWAYS = 8,
+} mtlb_compare;
+
+typedef enum mtlb_stencil_op {
+    MTLB_STENCIL_OP_KEEP = 1, MTLB_STENCIL_OP_ZERO = 2, MTLB_STENCIL_OP_REPLACE = 3,
+    MTLB_STENCIL_OP_INCR_SAT = 4, MTLB_STENCIL_OP_DECR_SAT = 5, MTLB_STENCIL_OP_INVERT = 6,
+    MTLB_STENCIL_OP_INCR = 7, MTLB_STENCIL_OP_DECR = 8,
+} mtlb_stencil_op;
+
+typedef enum mtlb_cull_mode { MTLB_CULL_NONE = 1, MTLB_CULL_FRONT = 2, MTLB_CULL_BACK = 3 } mtlb_cull_mode;
+typedef enum mtlb_fill_mode { MTLB_FILL_WIREFRAME = 2, MTLB_FILL_SOLID = 3 } mtlb_fill_mode;
+
+typedef enum mtlb_topology_type {
+    MTLB_TOPOLOGY_TYPE_POINT = 1, MTLB_TOPOLOGY_TYPE_LINE = 2, MTLB_TOPOLOGY_TYPE_TRIANGLE = 3,
+} mtlb_topology_type;
+
+typedef enum mtlb_input_class { MTLB_INPUT_PER_VERTEX = 0, MTLB_INPUT_PER_INSTANCE = 1 } mtlb_input_class;
+
+#define MTLB_MAX_RENDER_TARGETS 8
+#define MTLB_MAX_INPUT_ELEMENTS 31
+#define MTLB_MAX_VERTEX_BUFFERS 31
+
+typedef struct mtlb_input_element {
+    char semantic_name[32];
+    uint32_t semantic_index;
+    uint32_t format;           /* mtlb_format, must have MTLB_FORMAT_FLAG_VERTEX */
+    uint32_t input_slot;
+    uint32_t byte_offset;
+    uint32_t input_class;      /* mtlb_input_class */
+    uint32_t step_rate;
+} mtlb_input_element;
+
+typedef struct mtlb_stencil_face {
+    uint32_t fail_op, depth_fail_op, pass_op;  /* mtlb_stencil_op */
+    uint32_t func;                             /* mtlb_compare */
+} mtlb_stencil_face;
+
+typedef struct mtlb_render_target_blend {
+    uint32_t blend_enable;
+    uint32_t src_blend, dest_blend, blend_op;              /* colour */
+    uint32_t src_blend_alpha, dest_blend_alpha, blend_op_alpha;
+    uint32_t write_mask;                                   /* bit0=R .. bit3=A */
+} mtlb_render_target_blend;
+
+typedef struct mtlb_pipeline_desc {
+    /* DXIL blobs; a missing stage has size 0. */
+    const void *vs_dxil; uint64_t vs_size;
+    const void *ps_dxil; uint64_t ps_size;
+    const char *vs_entry;      /* NULL: the entry point named in the DXIL */
+    const char *ps_entry;
+    /* Serialized root signature (DXBC container or bare RTS0 blob). */
+    const void *root_signature; uint64_t root_signature_size;
+
+    uint32_t num_render_targets;
+    uint32_t rtv_formats[MTLB_MAX_RENDER_TARGETS];  /* mtlb_format */
+    uint32_t dsv_format;
+    uint32_t sample_count;
+    uint32_t topology_type;    /* mtlb_topology_type */
+
+    uint32_t independent_blend;
+    mtlb_render_target_blend blend[MTLB_MAX_RENDER_TARGETS];
+
+    uint32_t cull_mode;        /* mtlb_cull_mode */
+    uint32_t front_counter_clockwise;
+    uint32_t fill_mode;        /* mtlb_fill_mode */
+    int32_t depth_bias;
+    float depth_bias_clamp;
+    float slope_scaled_depth_bias;
+    uint32_t depth_clip_enable;
+
+    uint32_t depth_enable;
+    uint32_t depth_write_enable;
+    uint32_t depth_func;       /* mtlb_compare */
+    uint32_t stencil_enable;
+    uint32_t stencil_read_mask;
+    uint32_t stencil_write_mask;
+    mtlb_stencil_face front_face, back_face;
+
+    uint32_t num_input_elements;
+    mtlb_input_element input_elements[MTLB_MAX_INPUT_ELEMENTS];
+} mtlb_pipeline_desc;
+
+/* Converts the DXIL with the Metal shader converter against the root signature
+ * and builds the render pipeline and depth-stencil state. */
+MTLB_EXPORT mtlb_result mtlb_pipeline_create(mtlb_device device, const mtlb_pipeline_desc *desc,
+                                             mtlb_pipeline *out);
+MTLB_EXPORT void mtlb_pipeline_destroy(mtlb_pipeline pipeline);
+
+/* ------------------------------------------------------------------------ */
+/* Queues and events                                                        */
+/* ------------------------------------------------------------------------ */
+
+MTLB_EXPORT mtlb_result mtlb_queue_create(mtlb_device device, mtlb_queue *out);
+MTLB_EXPORT void mtlb_queue_destroy(mtlb_queue queue);
+
+/* Replays a command stream (see mtlb_cmd.h) into one command buffer and
+ * commits it. Returns once the work is committed, not completed. */
+MTLB_EXPORT mtlb_result mtlb_queue_submit(mtlb_queue queue, const uint8_t *stream, size_t length);
+
+/* GPU-timeline signal and wait, ordered with respect to prior submissions. */
+MTLB_EXPORT mtlb_result mtlb_queue_signal(mtlb_queue queue, mtlb_event event, uint64_t value);
+MTLB_EXPORT mtlb_result mtlb_queue_wait(mtlb_queue queue, mtlb_event event, uint64_t value);
+
+MTLB_EXPORT mtlb_result mtlb_event_create(mtlb_device device, uint64_t initial_value, mtlb_event *out);
+MTLB_EXPORT void mtlb_event_destroy(mtlb_event event);
+MTLB_EXPORT uint64_t mtlb_event_completed_value(mtlb_event event);
+MTLB_EXPORT void mtlb_event_signal_cpu(mtlb_event event, uint64_t value);
+/* Blocks until the event reaches `value`; timeout_ms of UINT64_MAX waits forever.
+ * Returns MTLB_ERROR_TIMEOUT on timeout. */
+MTLB_EXPORT mtlb_result mtlb_event_wait_cpu(mtlb_event event, uint64_t value, uint64_t timeout_ms);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* MTLB_H */

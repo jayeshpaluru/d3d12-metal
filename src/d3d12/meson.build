@@ -1,0 +1,17 @@
+d3d12_sources += files(
+  '../common/blob.cpp',
+  'command_list.cpp',
+  'command_queue.cpp',
+  'descriptor_heap.cpp',
+  'device.cpp',
+  'exports.cpp',
+  'fence.cpp',
+  'formats.cpp',
+  'object.cpp',
+  'pipeline_state.cpp',
+  'resource.cpp',
+  'root_signature.cpp',
+  'root_signature_blob.cpp',
+  'root_signature_deserializer.cpp',
+  'root_signature_exports.cpp',
+)

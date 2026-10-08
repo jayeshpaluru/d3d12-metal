@@ -29,9 +29,23 @@ The layer ships replacement `d3d12.dll` / `dxgi.dll` that implement the D3D12/DX
 
 ## Prerequisites
 
-- macOS on Apple Silicon, full Xcode
-- [Metal Shader Converter](https://developer.apple.com/metal/shader-converter/)
-- `brew install --cask wine-stable` and `brew install mingw-w64 meson ninja`
+- macOS on Apple Silicon (arm64) with the Xcode Command Line Tools
+- [Metal Shader Converter](https://developer.apple.com/metal/shader-converter/) (headers in `/usr/local/include`, `libmetalirconverter.dylib` in `/usr/local/lib`)
+- `brew install meson ninja directx-headers` (DirectX-Headers provides `d3d12.h`)
+- A DXC build (HLSL to DXIL) for the test shaders; point meson at it with `-Ddxc=/path/to/dxc` (default `/Users/jsp/code/deps/dxc-build/bin/dxc`)
+- For the later Wine milestones: `brew install --cask wine-stable` and `brew install mingw-w64`
+
+## Building and testing
+
+```sh
+meson setup build
+meson compile -C build
+meson test -C build
+```
+
+If DirectX-Headers is not installed under `/opt/homebrew` and `pkg-config` is unavailable, pass `-Ddirectx_headers_prefix=<prefix>` to `meson setup`.
+
+The tests are headless: they render offscreen on the default Metal device and read the pixels back.
 
 ## Prior art
 
