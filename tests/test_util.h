@@ -7,6 +7,10 @@
 
 #include "common/d3d12_uuids.h"
 
+#include <wsl/wrladapter.h>
+
+using Microsoft::WRL::ComPtr;
+
 // d3d12.dll entry points (not declared by DirectX-Headers).
 extern "C" {
 HRESULT D3D12CreateDevice(IUnknown *pAdapter, D3D_FEATURE_LEVEL MinimumFeatureLevel, REFIID riid, void **ppDevice);
@@ -33,42 +37,3 @@ HRESULT D3D12GetDebugInterface(REFIID riid, void **ppvDebug);
             std::exit(1);                                                          \
         }                                                                          \
     } while (0)
-
-// Minimal RAII wrapper so tests do not leak COM objects.
-template <typename T>
-class Com {
-public:
-    Com() = default;
-    Com(const Com &) = delete;
-    Com &operator=(const Com &) = delete;
-    Com(Com &&other) noexcept : p_(other.p_) { other.p_ = nullptr; }
-    Com &operator=(Com &&other) noexcept
-    {
-        if (this != &other) {
-            reset();
-            p_ = other.p_;
-            other.p_ = nullptr;
-        }
-        return *this;
-    }
-    ~Com() { reset(); }
-
-    T *operator->() const { return p_; }
-    T *get() const { return p_; }
-    // Receives a new reference, releasing any held one.
-    T **put()
-    {
-        reset();
-        return &p_;
-    }
-    void reset()
-    {
-        if (p_) {
-            p_->Release();
-            p_ = nullptr;
-        }
-    }
-
-private:
-    T *p_ = nullptr;
-};

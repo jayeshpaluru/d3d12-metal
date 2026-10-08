@@ -288,16 +288,16 @@ void test_roundtrip_11()
     versioned.Version = D3D_ROOT_SIGNATURE_VERSION_1_1;
     versioned.Desc_1_1 = sig.desc11;
 
-    Com<ID3DBlob> blob, error;
-    CHECK_HR(D3D12SerializeVersionedRootSignature(&versioned, blob.put(), error.put()));
-    CHECK(!error.get());
+    ComPtr<ID3DBlob> blob, error;
+    CHECK_HR(D3D12SerializeVersionedRootSignature(&versioned, blob.ReleaseAndGetAddressOf(), error.ReleaseAndGetAddressOf()));
+    CHECK(!error.Get());
     CHECK(blob->GetBufferSize() > 44);
     CHECK(std::memcmp(blob->GetBufferPointer(), "DXBC", 4) == 0);
 
-    Com<ID3D12VersionedRootSignatureDeserializer> des;
+    ComPtr<ID3D12VersionedRootSignatureDeserializer> des;
     CHECK_HR(D3D12CreateVersionedRootSignatureDeserializer(blob->GetBufferPointer(), blob->GetBufferSize(),
                                                            __uuidof(ID3D12VersionedRootSignatureDeserializer),
-                                                           reinterpret_cast<void **>(des.put())));
+                                                           reinterpret_cast<void **>(des.ReleaseAndGetAddressOf())));
 
     const D3D12_VERSIONED_ROOT_SIGNATURE_DESC *d = des->GetUnconvertedRootSignatureDesc();
     CHECK(d && d->Version == D3D_ROOT_SIGNATURE_VERSION_1_1);
@@ -317,15 +317,15 @@ void test_roundtrip_11()
     CHECK(des->GetRootSignatureDescAtVersion(D3D_ROOT_SIGNATURE_VERSION_1_0, nullptr) == E_INVALIDARG);
 
     // The non-versioned interface exposes the 1.0 form of the same blob.
-    Com<ID3D12RootSignatureDeserializer> plain;
+    ComPtr<ID3D12RootSignatureDeserializer> plain;
     CHECK_HR(D3D12CreateRootSignatureDeserializer(blob->GetBufferPointer(), blob->GetBufferSize(),
                                                   __uuidof(ID3D12RootSignatureDeserializer),
-                                                  reinterpret_cast<void **>(plain.put())));
+                                                  reinterpret_cast<void **>(plain.ReleaseAndGetAddressOf())));
     check_desc10_eq(*plain->GetRootSignatureDesc(), sig.desc10);
 
     // A 1.0 blob is smaller than the 1.1 one (no flag fields).
-    Com<ID3DBlob> blob10;
-    CHECK_HR(D3D12SerializeRootSignature(&sig.desc10, D3D_ROOT_SIGNATURE_VERSION_1_0, blob10.put(), nullptr));
+    ComPtr<ID3DBlob> blob10;
+    CHECK_HR(D3D12SerializeRootSignature(&sig.desc10, D3D_ROOT_SIGNATURE_VERSION_1_0, blob10.ReleaseAndGetAddressOf(), nullptr));
     CHECK(blob10->GetBufferSize() < blob->GetBufferSize());
 }
 
@@ -334,15 +334,15 @@ void test_roundtrip_10()
     TestSignature sig;
     DefaultFlagSignature expected11;
 
-    Com<ID3DBlob> blob, error;
-    CHECK_HR(D3D12SerializeRootSignature(&sig.desc10, D3D_ROOT_SIGNATURE_VERSION_1_0, blob.put(), error.put()));
-    CHECK(!error.get());
+    ComPtr<ID3DBlob> blob, error;
+    CHECK_HR(D3D12SerializeRootSignature(&sig.desc10, D3D_ROOT_SIGNATURE_VERSION_1_0, blob.ReleaseAndGetAddressOf(), error.ReleaseAndGetAddressOf()));
+    CHECK(!error.Get());
     CHECK(std::memcmp(blob->GetBufferPointer(), "DXBC", 4) == 0);
 
-    Com<ID3D12VersionedRootSignatureDeserializer> des;
+    ComPtr<ID3D12VersionedRootSignatureDeserializer> des;
     CHECK_HR(D3D12CreateVersionedRootSignatureDeserializer(blob->GetBufferPointer(), blob->GetBufferSize(),
                                                            __uuidof(ID3D12VersionedRootSignatureDeserializer),
-                                                           reinterpret_cast<void **>(des.put())));
+                                                           reinterpret_cast<void **>(des.ReleaseAndGetAddressOf())));
     const D3D12_VERSIONED_ROOT_SIGNATURE_DESC *d = des->GetUnconvertedRootSignatureDesc();
     CHECK(d->Version == D3D_ROOT_SIGNATURE_VERSION_1_0);
     check_desc10_eq(d->Desc_1_0, sig.desc10);
@@ -357,12 +357,12 @@ void test_roundtrip_10()
     check_desc10_eq(d->Desc_1_0, sig.desc10);
 
     // Asking the 1.0 serializer for a 1.1 blob converts the description up.
-    Com<ID3DBlob> blob11;
-    CHECK_HR(D3D12SerializeRootSignature(&sig.desc10, D3D_ROOT_SIGNATURE_VERSION_1_1, blob11.put(), nullptr));
-    Com<ID3D12VersionedRootSignatureDeserializer> des11;
+    ComPtr<ID3DBlob> blob11;
+    CHECK_HR(D3D12SerializeRootSignature(&sig.desc10, D3D_ROOT_SIGNATURE_VERSION_1_1, blob11.ReleaseAndGetAddressOf(), nullptr));
+    ComPtr<ID3D12VersionedRootSignatureDeserializer> des11;
     CHECK_HR(D3D12CreateVersionedRootSignatureDeserializer(blob11->GetBufferPointer(), blob11->GetBufferSize(),
                                                            __uuidof(ID3D12VersionedRootSignatureDeserializer),
-                                                           reinterpret_cast<void **>(des11.put())));
+                                                           reinterpret_cast<void **>(des11.ReleaseAndGetAddressOf())));
     d = des11->GetUnconvertedRootSignatureDesc();
     CHECK(d->Version == D3D_ROOT_SIGNATURE_VERSION_1_1);
     check_desc11_eq(d->Desc_1_1, expected11.desc);
@@ -371,19 +371,19 @@ void test_roundtrip_10()
 void test_com_semantics()
 {
     TestSignature sig;
-    Com<ID3DBlob> blob;
-    CHECK_HR(D3D12SerializeRootSignature(&sig.desc10, D3D_ROOT_SIGNATURE_VERSION_1_0, blob.put(), nullptr));
+    ComPtr<ID3DBlob> blob;
+    CHECK_HR(D3D12SerializeRootSignature(&sig.desc10, D3D_ROOT_SIGNATURE_VERSION_1_0, blob.ReleaseAndGetAddressOf(), nullptr));
 
-    Com<ID3D12VersionedRootSignatureDeserializer> des;
+    ComPtr<ID3D12VersionedRootSignatureDeserializer> des;
     CHECK_HR(D3D12CreateVersionedRootSignatureDeserializer(blob->GetBufferPointer(), blob->GetBufferSize(),
                                                            __uuidof(ID3D12VersionedRootSignatureDeserializer),
-                                                           reinterpret_cast<void **>(des.put())));
-    Com<IUnknown> unk;
-    CHECK_HR(des->QueryInterface(__uuidof(IUnknown), reinterpret_cast<void **>(unk.put())));
-    CHECK(unk.get() == static_cast<IUnknown *>(des.get()));
+                                                           reinterpret_cast<void **>(des.ReleaseAndGetAddressOf())));
+    ComPtr<IUnknown> unk;
+    CHECK_HR(des->QueryInterface(__uuidof(IUnknown), reinterpret_cast<void **>(unk.ReleaseAndGetAddressOf())));
+    CHECK(unk.Get() == static_cast<IUnknown *>(des.Get()));
     CHECK(des->AddRef() == 3);
     CHECK(des->Release() == 2);
-    unk.reset();
+    unk.Reset();
 
     void *other = &sig;
     CHECK(des->QueryInterface(__uuidof(ID3D12RootSignatureDeserializer), &other) == E_NOINTERFACE);
@@ -398,22 +398,22 @@ void test_com_semantics()
                                                       __uuidof(ID3D12RootSignatureDeserializer), nullptr)));
 
     // The blob is a real COM object too.
-    Com<IUnknown> blob_unk;
-    CHECK_HR(blob->QueryInterface(__uuidof(IUnknown), reinterpret_cast<void **>(blob_unk.put())));
+    ComPtr<IUnknown> blob_unk;
+    CHECK_HR(blob->QueryInterface(__uuidof(IUnknown), reinterpret_cast<void **>(blob_unk.ReleaseAndGetAddressOf())));
 }
 
 void test_malformed()
 {
     TestSignature sig;
-    Com<ID3DBlob> blob;
-    CHECK_HR(D3D12SerializeRootSignature(&sig.desc10, D3D_ROOT_SIGNATURE_VERSION_1_1, blob.put(), nullptr));
-    const std::vector<uint8_t> good = bytes_of(blob.get());
+    ComPtr<ID3DBlob> blob;
+    CHECK_HR(D3D12SerializeRootSignature(&sig.desc10, D3D_ROOT_SIGNATURE_VERSION_1_1, blob.ReleaseAndGetAddressOf(), nullptr));
+    const std::vector<uint8_t> good = bytes_of(blob.Get());
 
     auto parses = [](const std::vector<uint8_t> &b) {
-        Com<ID3D12VersionedRootSignatureDeserializer> des;
+        ComPtr<ID3D12VersionedRootSignatureDeserializer> des;
         return D3D12CreateVersionedRootSignatureDeserializer(
             b.data(), b.size(), __uuidof(ID3D12VersionedRootSignatureDeserializer),
-            reinterpret_cast<void **>(des.put()));
+            reinterpret_cast<void **>(des.ReleaseAndGetAddressOf()));
     };
     CHECK_HR(parses(good));
 
@@ -459,16 +459,16 @@ void test_malformed()
 void test_serialize_errors()
 {
     TestSignature sig;
-    Com<ID3DBlob> blob, error;
+    ComPtr<ID3DBlob> blob, error;
 
-    CHECK(D3D12SerializeRootSignature(nullptr, D3D_ROOT_SIGNATURE_VERSION_1_0, blob.put(), nullptr) == E_INVALIDARG);
+    CHECK(D3D12SerializeRootSignature(nullptr, D3D_ROOT_SIGNATURE_VERSION_1_0, blob.ReleaseAndGetAddressOf(), nullptr) == E_INVALIDARG);
     CHECK(D3D12SerializeRootSignature(&sig.desc10, D3D_ROOT_SIGNATURE_VERSION_1_0, nullptr, nullptr) ==
           E_INVALIDARG);
-    CHECK(D3D12SerializeRootSignature(&sig.desc10, D3D_ROOT_SIGNATURE_VERSION(0), blob.put(), error.put()) ==
+    CHECK(D3D12SerializeRootSignature(&sig.desc10, D3D_ROOT_SIGNATURE_VERSION(0), blob.ReleaseAndGetAddressOf(), error.ReleaseAndGetAddressOf()) ==
           E_INVALIDARG);
-    CHECK(!blob.get());
-    CHECK(error.get() && error->GetBufferSize() > 0);
-    CHECK(D3D12SerializeRootSignature(&sig.desc10, D3D_ROOT_SIGNATURE_VERSION_1_2, blob.put(), nullptr) ==
+    CHECK(!blob.Get());
+    CHECK(error.Get() && error->GetBufferSize() > 0);
+    CHECK(D3D12SerializeRootSignature(&sig.desc10, D3D_ROOT_SIGNATURE_VERSION_1_2, blob.ReleaseAndGetAddressOf(), nullptr) ==
           E_INVALIDARG);
 
     D3D12_ROOT_SIGNATURE_DESC bad = sig.desc10;
@@ -477,61 +477,61 @@ void test_serialize_errors()
     bad.pParameters = bad_params;
 
     bad_params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE(9);
-    CHECK(D3D12SerializeRootSignature(&bad, D3D_ROOT_SIGNATURE_VERSION_1_0, blob.put(), error.put()) ==
+    CHECK(D3D12SerializeRootSignature(&bad, D3D_ROOT_SIGNATURE_VERSION_1_0, blob.ReleaseAndGetAddressOf(), error.ReleaseAndGetAddressOf()) ==
           E_INVALIDARG);
-    CHECK(!blob.get() && error.get());
+    CHECK(!blob.Get() && error.Get());
     bad_params[0] = sig.params10[0];
 
     bad_params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY(42);
-    CHECK(D3D12SerializeRootSignature(&bad, D3D_ROOT_SIGNATURE_VERSION_1_0, blob.put(), nullptr) == E_INVALIDARG);
+    CHECK(D3D12SerializeRootSignature(&bad, D3D_ROOT_SIGNATURE_VERSION_1_0, blob.ReleaseAndGetAddressOf(), nullptr) == E_INVALIDARG);
     bad_params[0] = sig.params10[0];
 
     bad_params[2].DescriptorTable.pDescriptorRanges = nullptr;
-    CHECK(D3D12SerializeRootSignature(&bad, D3D_ROOT_SIGNATURE_VERSION_1_0, blob.put(), nullptr) == E_INVALIDARG);
+    CHECK(D3D12SerializeRootSignature(&bad, D3D_ROOT_SIGNATURE_VERSION_1_0, blob.ReleaseAndGetAddressOf(), nullptr) == E_INVALIDARG);
     bad_params[2] = sig.params10[2];
 
     D3D12_DESCRIPTOR_RANGE bad_range = sig.ranges10[0];
     bad_range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE(7);
     bad_params[2].DescriptorTable.pDescriptorRanges = &bad_range;
     bad_params[2].DescriptorTable.NumDescriptorRanges = 1;
-    CHECK(D3D12SerializeRootSignature(&bad, D3D_ROOT_SIGNATURE_VERSION_1_0, blob.put(), nullptr) == E_INVALIDARG);
+    CHECK(D3D12SerializeRootSignature(&bad, D3D_ROOT_SIGNATURE_VERSION_1_0, blob.ReleaseAndGetAddressOf(), nullptr) == E_INVALIDARG);
 
     bad = sig.desc10;
     bad.pParameters = nullptr;
-    CHECK(D3D12SerializeRootSignature(&bad, D3D_ROOT_SIGNATURE_VERSION_1_0, blob.put(), nullptr) == E_INVALIDARG);
+    CHECK(D3D12SerializeRootSignature(&bad, D3D_ROOT_SIGNATURE_VERSION_1_0, blob.ReleaseAndGetAddressOf(), nullptr) == E_INVALIDARG);
     bad = sig.desc10;
     bad.pStaticSamplers = nullptr;
-    CHECK(D3D12SerializeRootSignature(&bad, D3D_ROOT_SIGNATURE_VERSION_1_0, blob.put(), nullptr) == E_INVALIDARG);
+    CHECK(D3D12SerializeRootSignature(&bad, D3D_ROOT_SIGNATURE_VERSION_1_0, blob.ReleaseAndGetAddressOf(), nullptr) == E_INVALIDARG);
 
     D3D12_VERSIONED_ROOT_SIGNATURE_DESC versioned{};
     versioned.Version = D3D_ROOT_SIGNATURE_VERSION(5);
-    CHECK(D3D12SerializeVersionedRootSignature(&versioned, blob.put(), error.put()) == E_INVALIDARG);
-    CHECK(error.get() && error->GetBufferSize() > 0);
-    CHECK(D3D12SerializeVersionedRootSignature(nullptr, blob.put(), nullptr) == E_INVALIDARG);
+    CHECK(D3D12SerializeVersionedRootSignature(&versioned, blob.ReleaseAndGetAddressOf(), error.ReleaseAndGetAddressOf()) == E_INVALIDARG);
+    CHECK(error.Get() && error->GetBufferSize() > 0);
+    CHECK(D3D12SerializeVersionedRootSignature(nullptr, blob.ReleaseAndGetAddressOf(), nullptr) == E_INVALIDARG);
 
     // Empty signatures and tables without ranges are allowed.
     D3D12_ROOT_SIGNATURE_DESC empty{};
-    CHECK_HR(D3D12SerializeRootSignature(&empty, D3D_ROOT_SIGNATURE_VERSION_1_1, blob.put(), nullptr));
-    Com<ID3D12RootSignatureDeserializer> des;
+    CHECK_HR(D3D12SerializeRootSignature(&empty, D3D_ROOT_SIGNATURE_VERSION_1_1, blob.ReleaseAndGetAddressOf(), nullptr));
+    ComPtr<ID3D12RootSignatureDeserializer> des;
     CHECK_HR(D3D12CreateRootSignatureDeserializer(blob->GetBufferPointer(), blob->GetBufferSize(),
                                                   __uuidof(ID3D12RootSignatureDeserializer),
-                                                  reinterpret_cast<void **>(des.put())));
+                                                  reinterpret_cast<void **>(des.ReleaseAndGetAddressOf())));
     CHECK(des->GetRootSignatureDesc()->NumParameters == 0);
 
     D3D12_ROOT_PARAMETER table{};
     table.ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     D3D12_ROOT_SIGNATURE_DESC with_table{1, &table, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_NONE};
-    CHECK_HR(D3D12SerializeRootSignature(&with_table, D3D_ROOT_SIGNATURE_VERSION_1_0, blob.put(), nullptr));
+    CHECK_HR(D3D12SerializeRootSignature(&with_table, D3D_ROOT_SIGNATURE_VERSION_1_0, blob.ReleaseAndGetAddressOf(), nullptr));
 }
 
 // Accepts containers produced by the DirectX Shader Compiler and reproduces
 // them byte for byte (checksum included).
 void test_dxc_interop()
 {
-    Com<ID3D12VersionedRootSignatureDeserializer> des;
+    ComPtr<ID3D12VersionedRootSignatureDeserializer> des;
     CHECK_HR(D3D12CreateVersionedRootSignatureDeserializer(kDxcRootSig10, sizeof(kDxcRootSig10),
                                                            __uuidof(ID3D12VersionedRootSignatureDeserializer),
-                                                           reinterpret_cast<void **>(des.put())));
+                                                           reinterpret_cast<void **>(des.ReleaseAndGetAddressOf())));
     const D3D12_VERSIONED_ROOT_SIGNATURE_DESC *d = des->GetUnconvertedRootSignatureDesc();
     CHECK(d->Version == D3D_ROOT_SIGNATURE_VERSION_1_0);
     const D3D12_ROOT_SIGNATURE_DESC &r = d->Desc_1_0;
@@ -552,15 +552,15 @@ void test_dxc_interop()
     CHECK(r.pStaticSamplers[0].ShaderRegister == 0);
     CHECK(r.pStaticSamplers[0].Filter == D3D12_FILTER_ANISOTROPIC);
 
-    Com<ID3DBlob> again;
-    CHECK_HR(D3D12SerializeVersionedRootSignature(d, again.put(), nullptr));
-    CHECK(bytes_of(again.get()) == std::vector<uint8_t>(kDxcRootSig10, kDxcRootSig10 + sizeof(kDxcRootSig10)));
+    ComPtr<ID3DBlob> again;
+    CHECK_HR(D3D12SerializeVersionedRootSignature(d, again.ReleaseAndGetAddressOf(), nullptr));
+    CHECK(bytes_of(again.Get()) == std::vector<uint8_t>(kDxcRootSig10, kDxcRootSig10 + sizeof(kDxcRootSig10)));
 
     // The 1.1 container.
-    Com<ID3D12VersionedRootSignatureDeserializer> des11;
+    ComPtr<ID3D12VersionedRootSignatureDeserializer> des11;
     CHECK_HR(D3D12CreateVersionedRootSignatureDeserializer(kDxcRootSig11, sizeof(kDxcRootSig11),
                                                            __uuidof(ID3D12VersionedRootSignatureDeserializer),
-                                                           reinterpret_cast<void **>(des11.put())));
+                                                           reinterpret_cast<void **>(des11.ReleaseAndGetAddressOf())));
     d = des11->GetUnconvertedRootSignatureDesc();
     CHECK(d->Version == D3D_ROOT_SIGNATURE_VERSION_1_1);
     const D3D12_ROOT_SIGNATURE_DESC1 &s = d->Desc_1_1;
@@ -584,16 +584,16 @@ void test_dxc_interop()
     CHECK(ss.MinLOD == 1.0f && ss.MaxLOD == 9.0f && ss.ShaderRegister == 2 && ss.RegisterSpace == 3);
     CHECK(ss.ShaderVisibility == D3D12_SHADER_VISIBILITY_PIXEL);
 
-    CHECK_HR(D3D12SerializeVersionedRootSignature(d, again.put(), nullptr));
-    CHECK(bytes_of(again.get()) == std::vector<uint8_t>(kDxcRootSig11, kDxcRootSig11 + sizeof(kDxcRootSig11)));
+    CHECK_HR(D3D12SerializeVersionedRootSignature(d, again.ReleaseAndGetAddressOf(), nullptr));
+    CHECK(bytes_of(again.Get()) == std::vector<uint8_t>(kDxcRootSig11, kDxcRootSig11 + sizeof(kDxcRootSig11)));
 
     // A corrupted DXC container is rejected by the checksum.
     std::vector<uint8_t> bad(kDxcRootSig11, kDxcRootSig11 + sizeof(kDxcRootSig11));
     bad[bad.size() - 1] ^= 1;
-    Com<ID3D12VersionedRootSignatureDeserializer> none;
+    ComPtr<ID3D12VersionedRootSignatureDeserializer> none;
     CHECK(FAILED(D3D12CreateVersionedRootSignatureDeserializer(
         bad.data(), bad.size(), __uuidof(ID3D12VersionedRootSignatureDeserializer),
-        reinterpret_cast<void **>(none.put()))));
+        reinterpret_cast<void **>(none.ReleaseAndGetAddressOf()))));
 }
 
 } // namespace

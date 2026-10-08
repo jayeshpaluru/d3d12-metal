@@ -9,9 +9,9 @@ int main()
     TestContext ctx;
     constexpr UINT64 kSize = 4096;
 
-    Com<ID3D12Resource> upload = ctx.create_buffer(D3D12_HEAP_TYPE_UPLOAD, kSize);
-    Com<ID3D12Resource> gpu = ctx.create_buffer(D3D12_HEAP_TYPE_DEFAULT, kSize);
-    Com<ID3D12Resource> readback = ctx.create_buffer(D3D12_HEAP_TYPE_READBACK, kSize);
+    ComPtr<ID3D12Resource> upload = ctx.create_buffer(D3D12_HEAP_TYPE_UPLOAD, kSize);
+    ComPtr<ID3D12Resource> gpu = ctx.create_buffer(D3D12_HEAP_TYPE_DEFAULT, kSize);
+    ComPtr<ID3D12Resource> readback = ctx.create_buffer(D3D12_HEAP_TYPE_READBACK, kSize);
     CHECK(upload->GetGPUVirtualAddress() != 0);
     CHECK(upload->GetDesc().Width == kSize);
 
@@ -23,11 +23,11 @@ int main()
     std::memcpy(mapped, pattern.data(), kSize);
     upload->Unmap(0, nullptr);
 
-    Com<ID3D12GraphicsCommandList> list = ctx.create_list();
-    list->CopyBufferRegion(gpu.get(), 0, upload.get(), 0, kSize);
-    list->CopyResource(readback.get(), gpu.get());
+    ComPtr<ID3D12GraphicsCommandList> list = ctx.create_list();
+    list->CopyBufferRegion(gpu.Get(), 0, upload.Get(), 0, kSize);
+    list->CopyResource(readback.Get(), gpu.Get());
     CHECK_HR(list->Close());
-    ctx.execute_and_wait(list.get());
+    ctx.execute_and_wait(list.Get());
 
     CHECK_HR(readback->Map(0, nullptr, &mapped));
     CHECK(std::memcmp(mapped, pattern.data(), kSize) == 0);
@@ -35,10 +35,10 @@ int main()
 
     // The list can be recorded again after Reset.
     CHECK_HR(ctx.allocators.back()->Reset());
-    CHECK_HR(list->Reset(ctx.allocators.back().get(), nullptr));
-    list->CopyBufferRegion(readback.get(), 16, upload.get(), 0, 64);
+    CHECK_HR(list->Reset(ctx.allocators.back().Get(), nullptr));
+    list->CopyBufferRegion(readback.Get(), 16, upload.Get(), 0, 64);
     CHECK_HR(list->Close());
-    ctx.execute_and_wait(list.get());
+    ctx.execute_and_wait(list.Get());
     CHECK_HR(readback->Map(0, nullptr, &mapped));
     CHECK(std::memcmp(static_cast<uint8_t *>(mapped) + 16, pattern.data(), 64) == 0);
     readback->Unmap(0, nullptr);

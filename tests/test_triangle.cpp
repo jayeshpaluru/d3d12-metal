@@ -7,28 +7,22 @@ int main()
     RenderContext ctx;
 
     // Root signature: four 32-bit constants (the colour) at b0 for the pixel shader.
-    D3D12_ROOT_PARAMETER1 param = {};
-    param.ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-    param.Constants = {0, 0, 4};
-    param.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
-    D3D12_ROOT_SIGNATURE_DESC1 rs_desc = {};
-    rs_desc.NumParameters = 1;
-    rs_desc.pParameters = &param;
-    rs_desc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
-    Com<ID3D12RootSignature> signature = ctx.create_root_signature(rs_desc);
-    Com<ID3D12PipelineState> pso = ctx.create_color_pso(signature.get());
+    CD3DX12_ROOT_PARAMETER1 param;
+    param.InitAsConstants(4, 0, 0, D3D12_SHADER_VISIBILITY_PIXEL);
+    ComPtr<ID3D12RootSignature> signature = ctx.create_root_signature(&param, 1);
+    ComPtr<ID3D12PipelineState> pso = ctx.create_color_pso(signature.Get());
 
     const float vertices[] = {-0.5f, -0.5f, 0.0f, 0.0f, 0.5f, 0.0f, 0.5f, -0.5f, 0.0f};
-    Com<ID3D12Resource> vertex_buffer = ctx.create_upload_buffer(vertices, sizeof(vertices));
+    ComPtr<ID3D12Resource> vertex_buffer = ctx.create_upload_buffer(vertices, sizeof(vertices));
     D3D12_VERTEX_BUFFER_VIEW vbv = {vertex_buffer->GetGPUVirtualAddress(), sizeof(vertices), 3 * sizeof(float)};
 
-    Com<ID3D12GraphicsCommandList> list = ctx.create_list(pso.get());
+    ComPtr<ID3D12GraphicsCommandList> list = ctx.create_list(pso.Get());
 
     const float clear_color[4] = {0.0f, 0.0f, 1.0f, 1.0f};
     const float triangle_color[4] = {1.0f, 0.0f, 0.0f, 1.0f};
     D3D12_CPU_DESCRIPTOR_HANDLE rtv = ctx.rtv();
-    list->SetGraphicsRootSignature(signature.get());
-    ctx.set_viewport_and_scissor(list.get());
+    list->SetGraphicsRootSignature(signature.Get());
+    ctx.set_viewport_and_scissor(list.Get());
     list->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
     list->ClearRenderTargetView(rtv, clear_color, 0, nullptr);
     list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -37,11 +31,11 @@ int main()
     list->DrawInstanced(3, 1, 0, 0);
 
     UINT row_pitch = 0;
-    Com<ID3D12Resource> readback = ctx.record_readback(list.get(), &row_pitch);
+    ComPtr<ID3D12Resource> readback = ctx.record_readback(list.Get(), &row_pitch);
     CHECK_HR(list->Close());
-    ctx.execute_and_wait(list.get());
+    ctx.execute_and_wait(list.Get());
 
-    check_pixel("center", read_pixel(readback.get(), row_pitch, 32, 32), {255, 0, 0, 255});
-    check_pixel("corner", read_pixel(readback.get(), row_pitch, 0, 0), {0, 0, 255, 255});
+    check_pixel("center", read_pixel(readback.Get(), row_pitch, 32, 32), {255, 0, 0, 255});
+    check_pixel("corner", read_pixel(readback.Get(), row_pitch, 0, 0), {0, 0, 255, 255});
     return 0;
 }

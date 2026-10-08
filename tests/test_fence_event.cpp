@@ -15,7 +15,7 @@ int main()
     // Not reached yet: stays unsignaled until the queue signals the fence.
     CHECK_HR(ctx.fence->SetEventOnCompletion(10, event));
     CHECK(!d3d12metal_native_wait_event(event, 50));
-    CHECK_HR(ctx.queue->Signal(ctx.fence.get(), 10));
+    CHECK_HR(ctx.queue->Signal(ctx.fence.Get(), 10));
     CHECK(d3d12metal_native_wait_event(event, 5000));
     CHECK(ctx.fence->GetCompletedValue() >= 10);
 
@@ -31,10 +31,10 @@ int main()
 
     // Waits on several fences are served by the one device waiter.
     constexpr int kFences = 4;
-    Com<ID3D12Fence> fences[kFences];
+    ComPtr<ID3D12Fence> fences[kFences];
     HANDLE events[kFences];
     for (int i = 0; i < kFences; ++i) {
-        CHECK_HR(ctx.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(fences[i].put())));
+        CHECK_HR(ctx.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(fences[i].ReleaseAndGetAddressOf())));
         events[i] = d3d12metal_native_create_event();
         CHECK_HR(fences[i]->SetEventOnCompletion(i + 1, events[i]));
     }
@@ -47,10 +47,10 @@ int main()
         d3d12metal_native_destroy_event(events[i]);
 
     // Releasing a fence with a pending wait must not hang or crash.
-    Com<ID3D12Fence> pending;
-    CHECK_HR(ctx.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(pending.put())));
+    ComPtr<ID3D12Fence> pending;
+    CHECK_HR(ctx.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(pending.ReleaseAndGetAddressOf())));
     CHECK_HR(pending->SetEventOnCompletion(100, event));
-    pending.reset();
+    pending.Reset();
 
     d3d12metal_native_destroy_event(second);
     d3d12metal_native_destroy_event(event);
