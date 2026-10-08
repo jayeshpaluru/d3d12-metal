@@ -5,6 +5,9 @@
 #include "fill_cs.h"
 #include "t12.h"
 
+#include <chrono>
+#include <thread>
+
 namespace {
 
 constexpr UINT kSize = 64;
@@ -157,6 +160,32 @@ int main()
                     double(t1 - t0) * 1000.0 / double(frequency));
         CHECK(t0 != 0 && t1 > t0);
         CHECK(double(t1 - t0) / double(frequency) < 5.0);  // seconds
+
+        // A timestamp resolve does not block the queue: a wait for a fence that another thread signals later,
+        // encoded ahead of it in the same command buffer, must not deadlock the submit.
+        {
+            ComPtr<ID3D12Fence> late;
+            CHECK_HR(gpu.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(late.GetAddressOf())));
+            ComPtr<ID3D12Resource> results2 = gpu.buffer(D3D12_HEAP_TYPE_READBACK, 4 * 8);
+            ComPtr<ID3D12GraphicsCommandList> list = gpu.list();
+            list->EndQuery(heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 3);
+            list->ResolveQueryData(heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 3, 1, results2.Get(), 0);
+            CHECK_HR(list->Close());
+            CHECK_HR(gpu.queue->Wait(late.Get(), 1));
+            gpu.execute(list.Get());
+            std::thread signaller([&] {
+                std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                late->Signal(1);
+            });
+            gpu.wait_idle();
+            signaller.join();
+            void *mapped2 = nullptr;
+            CHECK_HR(results2->Map(0, nullptr, &mapped2));
+            uint64_t late_stamp;
+            std::memcpy(&late_stamp, mapped2, 8);
+            results2->Unmap(0, nullptr);
+            CHECK(late_stamp > t1);
+        }
 
         UINT64 gpu_clock = 0, cpu_clock = 0;
         CHECK_HR(gpu.queue->GetClockCalibration(&gpu_clock, &cpu_clock));

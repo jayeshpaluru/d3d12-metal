@@ -111,11 +111,37 @@ public:
     void finish()
     {
         end_encoders();
+        if (!timestamp_resolves_.empty()) {
+            Queue *queue = queue_;
+            if (!queue->resolve_event)
+                queue->resolve_event = [queue->device->device newSharedEvent];
+            const uint64_t value = ++queue->resolve_value;
+            queue->resolve_wait = value;
+            id<MTLSharedEvent> event = queue->resolve_event;
+            auto resolves = std::move(timestamp_resolves_);
+            [cb_ addCompletedHandler:^(id<MTLCommandBuffer>) {
+                for (const TimestampResolve &r : resolves) {
+                    NSData *data = [r.samples resolveCounterRange:NSMakeRange(r.start, r.count)];
+                    if (data.length >= uint64_t(r.count) * 8)
+                        std::memcpy(static_cast<uint8_t *>(r.destination.contents) + r.offset, data.bytes, uint64_t(r.count) * 8);
+                }
+                event.signaledValue = value;
+            }];
+        }
         for (; debug_depth_ > 0; --debug_depth_)
             [cb_ popDebugGroup];
     }
 
 private:
+    // A timestamp resolve the completion handler of the command buffer performs.
+    struct TimestampResolve {
+        id<MTLCounterSampleBuffer> samples;
+        id<MTLBuffer> destination;
+        uint64_t offset;
+        uint32_t start, count;
+    };
+    std::vector<TimestampResolve> timestamp_resolves_;
+
     enum Dirty : uint32_t {
         kPipeline = 1u << 0,
         kViewports = 1u << 1,
@@ -992,29 +1018,18 @@ mtlb_result Replay::resolve_query(const mtlb_cmd_resolve_query &cmd)
         return fail(MTLB_ERROR_INVALID_ARGUMENT, "query results do not fit the destination");
     if (!bytes)
         return MTLB_OK;
-    // Counter samples are not visible to a blit encoder in the same command buffer (it read zeros for the later
-    // samples), so the work that wrote them is finished first.
-    if (cmd.type == MTLB_QUERY_TIMESTAMP && heap->samples) {
-        end_blit();
-        end_compute();
-        mtlb_result result = flush_clears(false);
-        if (result != MTLB_OK)
-            return result;
-        id<MTLCommandBuffer> previous = cb_;
-        commit_open(queue_);
-        [previous waitUntilCompleted];
-        cb_ = open_command_buffer(queue_);
-        sync_needed_ = false;
+    // A blit in the same command buffer reads zeros for samples written by earlier passes (Apple GPUs flush
+    // counters lazily), so timestamps are copied on the CPU when this command buffer completes. Work that
+    // follows on the queue waits for that copy through an event, without blocking here (see finish()).
+    if (cmd.type == MTLB_QUERY_TIMESTAMP && heap->samples && dst->buffer.contents) {
+        timestamp_resolves_.push_back({heap->samples, dst->buffer, cmd.dst_offset, cmd.start, cmd.count});
+        return MTLB_OK;
     }
     id<MTLBlitCommandEncoder> enc = blit();
     if (element != 8 || cmd.type == MTLB_QUERY_PIPELINE_STATISTICS || cmd.type == MTLB_QUERY_SO_STATISTICS) {
         [enc fillBuffer:dst->buffer range:NSMakeRange(cmd.dst_offset, bytes) value:0];
     } else if (cmd.type == MTLB_QUERY_TIMESTAMP) {
-        if (heap->samples)
-            [enc resolveCounters:heap->samples inRange:NSMakeRange(cmd.start, cmd.count) destinationBuffer:dst->buffer
-               destinationOffset:cmd.dst_offset];
-        else
-            [enc fillBuffer:dst->buffer range:NSMakeRange(cmd.dst_offset, bytes) value:0];
+        [enc fillBuffer:dst->buffer range:NSMakeRange(cmd.dst_offset, bytes) value:0];
     } else if (heap->results) {
         [enc copyFromBuffer:heap->results sourceOffset:uint64_t(cmd.start) * 8 toBuffer:dst->buffer
           destinationOffset:cmd.dst_offset size:bytes];
@@ -1466,6 +1481,11 @@ id<MTLCommandBuffer> open_command_buffer(Queue *queue)
     if (!queue->open) {
         commit_residency(queue->device);
         queue->open = [queue->queue commandBuffer];
+        if (queue->resolve_wait) {
+            // Timestamps of an earlier buffer are copied by its completion handler; what follows sees them.
+            [queue->open encodeWaitForEvent:queue->resolve_event value:queue->resolve_wait];
+            queue->resolve_wait = 0;
+        }
         [queue->open addCompletedHandler:^(id<MTLCommandBuffer> done) {
             if (done.error)
                 std::fprintf(stderr, "d3d12-metal: command buffer failed: %s\n", done.error.localizedDescription.UTF8String);
