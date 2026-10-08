@@ -6,6 +6,7 @@
 #include <iterator>
 
 #include <cstdlib>
+#include <cwchar>
 
 #include "common/com.h"
 #include "common/config.h"
@@ -28,6 +29,20 @@ UINT config_hex(const char *key, UINT fallback)
     const char *value = config_get(key);
     return value && *value ? static_cast<UINT>(std::strtoul(value, nullptr, 16)) : fallback;
 }
+
+#ifdef _WIN32
+// The PCI identity Wine registered for the display adapter (HKLM\\System\\CurrentControlSet\\Enum\\PCI\\VEN_..&DEV_..),
+// which is what the adapter's DeviceID string of EnumDisplayDevices names. Games look the driver up through that key
+// (Spider-Man reads DriverVersion there and reports "no graphics card" when the key for the ids they were given is missing).
+bool query_pci_ids(UINT &vendor, UINT &device, UINT &subsystem, UINT &revision)
+{
+    DISPLAY_DEVICEW adapter = {};
+    adapter.cb = sizeof(adapter);
+    if (!EnumDisplayDevicesW(nullptr, 0, &adapter, 0))
+        return false;
+    return swscanf(adapter.DeviceID, L"PCI\\VEN_%x&DEV_%x&SUBSYS_%x&REV_%x", &vendor, &device, &subsystem, &revision) == 4;
+}
+#endif
 
 // Copies the members shared by all three adapter description structs.
 template <typename Desc>
@@ -56,8 +71,14 @@ public:
         for (size_t i = 0; i < max_chars && caps.name[i]; i++)
             desc_.Description[i] = static_cast<unsigned char>(caps.name[i]);
 
-        desc_.VendorId = config_hex("VENDOR_ID", kVendorIdApple);
-        desc_.DeviceId = config_hex("DEVICE_ID", 0);
+        UINT vendor = kVendorIdApple, device = 0, subsystem = 0, revision = 0;
+#ifdef _WIN32
+        query_pci_ids(vendor, device, subsystem, revision);
+#endif
+        desc_.VendorId = config_hex("VENDOR_ID", vendor);
+        desc_.DeviceId = config_hex("DEVICE_ID", device);
+        desc_.SubSysId = subsystem;
+        desc_.Revision = revision;
         desc_.DedicatedVideoMemory = caps.recommended_max_working_set_size;
         desc_.SharedSystemMemory = caps.recommended_max_working_set_size;
         desc_.AdapterLuid = luid_from_registry_id(caps.registry_id);
