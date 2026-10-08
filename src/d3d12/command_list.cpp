@@ -18,22 +18,32 @@ namespace d3d12m {
 
 namespace {
 
-const RenderTargetDescriptor &rtv_from_handle(D3D12_CPU_DESCRIPTOR_HANDLE handle)
-{
-    return *reinterpret_cast<const RenderTargetDescriptor *>(handle.ptr);
-}
-
-mtlb_render_target to_render_target(const RenderTargetDescriptor &rtv)
-{
-    return {rtv.texture, rtv.view_format, rtv.mip_level, rtv.array_slice, 0};
-}
-
-const RenderTargetDescriptor &dsv_from_handle(D3D12_CPU_DESCRIPTOR_HANDLE handle)
-{
-    return *reinterpret_cast<const RenderTargetDescriptor *>(handle.ptr);
-}
-
 } // namespace
+
+bool CommandList::resolve_attachment(D3D12_CPU_DESCRIPTOR_HANDLE handle, D3D12_DESCRIPTOR_HEAP_TYPE type,
+                                     mtlb_render_target *target, uint32_t *flags)
+{
+    *target = {};
+    if (flags)
+        *flags = 0;
+    if (!device()->validate_cpu_range(handle, 1, type)) {
+        log_bad_handle("render target or depth-stencil view");
+        return false;
+    }
+    const auto &view = *reinterpret_cast<const RenderTargetDescriptor *>(handle.ptr);
+    if (!view.resource_id)
+        return true;  // a null view: the slot stays unbound
+    Resource *resource = device()->acquire_attachment(view.resource_id);
+    if (!resource) {
+        D3D12M_LOG("a render target or depth-stencil view names a resource that has been destroyed: treated as null");
+        return true;
+    }
+    refs_.adopt(static_cast<IUnknown *>(resource));
+    *target = {resource->texture(), view.view_format, view.mip_level, view.array_slice, 0};
+    if (flags)
+        *flags = view.flags;
+    return true;
+}
 
 HRESULT CommandList::create(Device *device, D3D12_COMMAND_LIST_TYPE type, ID3D12CommandAllocator *allocator,
                             ID3D12PipelineState *initial_state, REFIID riid, void **out)
@@ -56,6 +66,7 @@ CommandList::~CommandList()
     safe_release(graphics_.signature);
     safe_release(compute_.signature);
     drop_pass();
+    refs_.clear();
 }
 
 template <typename T>
@@ -68,6 +79,7 @@ void CommandList::reset_state()
 {
     stream_.clear();
     drop_pass();
+    refs_.clear();
     has_graphics_pipeline_ = has_compute_pipeline_ = false;
     for (RootState *state : {&graphics_, &compute_}) {
         safe_release(state->signature);
@@ -129,7 +141,7 @@ HRESULT CommandList::Reset(ID3D12CommandAllocator *allocator, ID3D12PipelineStat
 
 void CommandList::SetPipelineState(ID3D12PipelineState *pso)
 {
-    auto *state = ours<PipelineState>(pso);
+    auto *state = hold<PipelineState>(pso);
     if (!state) {
         if (pso)
             D3D12M_LOG("SetPipelineState: the pipeline state is not from this layer");
@@ -226,23 +238,25 @@ void CommandList::set_render_targets(UINT count, const D3D12_CPU_DESCRIPTOR_HAND
 {
     if (closed_ || count > MTLB_MAX_RENDER_TARGETS || (count && !rtvs) || (dsv && !dsv->ptr))
         return;
+    mtlb_render_target targets[MTLB_MAX_RENDER_TARGETS];
     for (UINT i = 0; i < count; ++i) {
         if (!rtvs[single_handle_to_range ? 0 : i].ptr)
             return;
+        const D3D12_CPU_DESCRIPTOR_HANDLE handle = single_handle_to_range
+                                                       ? D3D12_CPU_DESCRIPTOR_HANDLE{rtvs[0].ptr + i * kDescriptorSize}
+                                                       : rtvs[i];
+        if (!resolve_attachment(handle, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, &targets[i], nullptr))
+            return;
     }
+    mtlb_render_target depth = {};
+    uint32_t depth_flags = 0;
+    if (dsv && !resolve_attachment(*dsv, D3D12_DESCRIPTOR_HEAP_TYPE_DSV, &depth, &depth_flags))
+        return;
     auto *cmd = append<mtlb_cmd_set_render_targets>(MTLB_CMD_SET_RENDER_TARGETS, count * sizeof(mtlb_render_target));
     cmd->count = count;
-    if (dsv) {
-        const RenderTargetDescriptor &view = dsv_from_handle(*dsv);
-        cmd->depth = to_render_target(view);
-        cmd->depth_flags = view.flags | extra_depth_flags;
-    }
-    for (UINT i = 0; i < count; ++i) {
-        D3D12_CPU_DESCRIPTOR_HANDLE handle = single_handle_to_range
-                                                 ? D3D12_CPU_DESCRIPTOR_HANDLE{rtvs[0].ptr + i * kDescriptorSize}
-                                                 : rtvs[i];
-        cmd->targets[i] = to_render_target(rtv_from_handle(handle));
-    }
+    cmd->depth = depth;
+    cmd->depth_flags = dsv ? depth_flags | extra_depth_flags : 0;
+    std::copy_n(targets, count, cmd->targets);
 }
 
 // ---- Render passes ----------------------------------------------------------------
@@ -342,13 +356,13 @@ void CommandList::ClearRenderTargetView(D3D12_CPU_DESCRIPTOR_HANDLE view, const 
 {
     if (closed_ || !view.ptr || !color)
         return;
-    const RenderTargetDescriptor &rtv = rtv_from_handle(view);
-    if (!rtv.texture)
+    mtlb_render_target target;
+    if (!resolve_attachment(view, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, &target, nullptr) || !target.texture)
         return;
     if (num_rects)
         D3D12M_LOG("ClearRenderTargetView: clear rectangles are ignored, the whole view is cleared");
     auto *cmd = append<mtlb_cmd_clear_rtv>(MTLB_CMD_CLEAR_RTV);
-    cmd->target = to_render_target(rtv);
+    cmd->target = target;
     std::copy_n(color, 4, cmd->color);
 }
 
@@ -357,13 +371,13 @@ void CommandList::ClearDepthStencilView(D3D12_CPU_DESCRIPTOR_HANDLE view, D3D12_
 {
     if (closed_ || !view.ptr || !(flags & (D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL)))
         return;
-    const RenderTargetDescriptor &dsv = dsv_from_handle(view);
-    if (!dsv.texture)
+    mtlb_render_target target;
+    if (!resolve_attachment(view, D3D12_DESCRIPTOR_HEAP_TYPE_DSV, &target, nullptr) || !target.texture)
         return;
     if (num_rects)
         D3D12M_LOG("ClearDepthStencilView: clear rectangles are ignored, the whole view is cleared");
     auto *cmd = append<mtlb_cmd_clear_dsv>(MTLB_CMD_CLEAR_DSV);
-    cmd->target = to_render_target(dsv);
+    cmd->target = target;
     cmd->flags = ((flags & D3D12_CLEAR_FLAG_DEPTH) ? MTLB_CLEAR_DEPTH : 0) | ((flags & D3D12_CLEAR_FLAG_STENCIL) ? MTLB_CLEAR_STENCIL : 0);
     cmd->depth = depth;
     cmd->stencil = stencil;
@@ -521,7 +535,7 @@ void CommandList::ResourceBarrier(UINT count, const D3D12_RESOURCE_BARRIER *barr
             continue;
         }
         if (resource) {
-            auto *r = ours<Resource>(resource);
+            auto *r = hold<Resource>(resource);
             if (!r) {
                 D3D12M_LOG("ResourceBarrier: a resource is not from this layer");
                 continue;
@@ -531,7 +545,7 @@ void CommandList::ResourceBarrier(UINT count, const D3D12_RESOURCE_BARRIER *barr
         entries.push_back(entry);
         // An aliasing barrier names two resources: the memory is reused, so both need the synchronisation.
         if (b.Type == D3D12_RESOURCE_BARRIER_TYPE_ALIASING && b.Aliasing.pResourceBefore && b.Aliasing.pResourceAfter) {
-            if (auto *before = ours<Resource>(b.Aliasing.pResourceBefore)) {
+            if (auto *before = hold<Resource>(b.Aliasing.pResourceBefore)) {
                 mtlb_barrier second{MTLB_BARRIER_ALIASING, 0, 0, 0};
                 (before->is_buffer() ? second.buffer : second.texture) = before->is_buffer() ? before->buffer() : before->texture();
                 entries.push_back(second);
@@ -552,7 +566,7 @@ void CommandList::SetDescriptorHeaps(UINT count, ID3D12DescriptorHeap *const *he
 {
     uint64_t resource_heap = 0, sampler_heap = 0;
     for (UINT i = 0; i < count && heaps; ++i) {
-        auto *heap = ours<DescriptorHeap>(heaps[i]);
+        auto *heap = hold<DescriptorHeap>(heaps[i]);
         if (!heap)
             continue;
         if (heap->type() == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV)
@@ -595,7 +609,7 @@ void CommandList::DrawIndexedInstanced(UINT index_count, UINT instance_count, UI
 
 void CommandList::BeginQuery(ID3D12QueryHeap *heap_ptr, D3D12_QUERY_TYPE type, UINT index)
 {
-    auto *heap = ours<QueryHeap>(heap_ptr);
+    auto *heap = hold<QueryHeap>(heap_ptr);
     if (closed_ || !heap || index >= heap->count() || !query_matches_heap(type, heap->type())) {
         D3D12M_LOG("BeginQuery: invalid query heap, index or type");
         return;
@@ -608,7 +622,7 @@ void CommandList::BeginQuery(ID3D12QueryHeap *heap_ptr, D3D12_QUERY_TYPE type, U
 
 void CommandList::EndQuery(ID3D12QueryHeap *heap_ptr, D3D12_QUERY_TYPE type, UINT index)
 {
-    auto *heap = ours<QueryHeap>(heap_ptr);
+    auto *heap = hold<QueryHeap>(heap_ptr);
     if (closed_ || !heap || index >= heap->count() || !query_matches_heap(type, heap->type())) {
         D3D12M_LOG("EndQuery: invalid query heap, index or type");
         return;
@@ -622,8 +636,8 @@ void CommandList::EndQuery(ID3D12QueryHeap *heap_ptr, D3D12_QUERY_TYPE type, UIN
 void CommandList::ResolveQueryData(ID3D12QueryHeap *heap_ptr, D3D12_QUERY_TYPE type, UINT start, UINT count,
                                    ID3D12Resource *destination, UINT64 offset)
 {
-    auto *heap = ours<QueryHeap>(heap_ptr);
-    auto *dst = ours<Resource>(destination);
+    auto *heap = hold<QueryHeap>(heap_ptr);
+    auto *dst = hold<Resource>(destination);
     if (closed_ || !heap || !dst || !dst->is_buffer() || uint64_t(start) + count > heap->count()
         || !query_matches_heap(type, heap->type())) {
         D3D12M_LOG("ResolveQueryData: invalid query heap, range or destination");
@@ -694,6 +708,7 @@ void CommandList::ExecuteBundle(ID3D12GraphicsCommandList *bundle_ptr)
     const size_t skip = mtlb_cmd_align(sizeof(mtlb_cmd_reset_state));
     const std::vector<uint8_t> &source = bundle->stream_;
     stream_.insert(stream_.end(), source.begin() + skip, source.end());
+    refs_.append(bundle->refs_);
     for (RootState *state : {&bundle->graphics_, &bundle->compute_}) {
         if (!state->signature)
             continue;
@@ -730,7 +745,7 @@ void CommandList::ClearUnorderedAccessViewFloat(D3D12_GPU_DESCRIPTOR_HANDLE, D3D
 void CommandList::clear_uav(D3D12_CPU_DESCRIPTOR_HANDLE view_handle, ID3D12Resource *resource_ptr,
                             const uint32_t values[4], bool from_float, UINT num_rects, const D3D12_RECT *rects)
 {
-    auto *resource = ours<Resource>(resource_ptr);
+    auto *resource = hold<Resource>(resource_ptr);
     const ViewInfo *view = device()->view_info(view_handle);
     if (closed_ || !resource || !view || view->kind == ViewInfo::None) {
         D3D12M_LOG("ClearUnorderedAccessView: the view or the resource is not known to this layer");
@@ -847,8 +862,8 @@ void CommandList::clear_uav(D3D12_CPU_DESCRIPTOR_HANDLE view_handle, ID3D12Resou
 void CommandList::ResolveSubresource(ID3D12Resource *dst_ptr, UINT dst_subresource, ID3D12Resource *src_ptr,
                                      UINT src_subresource, DXGI_FORMAT format)
 {
-    auto *dst = ours<Resource>(dst_ptr);
-    auto *src = ours<Resource>(src_ptr);
+    auto *dst = hold<Resource>(dst_ptr);
+    auto *src = hold<Resource>(src_ptr);
     if (closed_ || !dst || !src || dst->is_buffer() || src->is_buffer()) {
         D3D12M_LOG("ResolveSubresource needs two textures of this layer");
         return;
@@ -883,9 +898,9 @@ void CommandList::ResolveSubresourceRegion(ID3D12Resource *dst, UINT dst_subreso
 void CommandList::ExecuteIndirect(ID3D12CommandSignature *signature_ptr, UINT max_count, ID3D12Resource *argument_buffer,
                                   UINT64 argument_offset, ID3D12Resource *count_buffer, UINT64 count_offset)
 {
-    auto *signature = ours<CommandSignature>(signature_ptr);
-    auto *arguments = ours<Resource>(argument_buffer);
-    auto *count = ours<Resource>(count_buffer);
+    auto *signature = hold<CommandSignature>(signature_ptr);
+    auto *arguments = hold<Resource>(argument_buffer);
+    auto *count = hold<Resource>(count_buffer);
     if (closed_ || !signature || !arguments || !arguments->is_buffer() || (count_buffer && (!count || !count->is_buffer()))) {
         D3D12M_LOG("ExecuteIndirect needs an open list and a command signature and buffers of this layer");
         return;
@@ -976,8 +991,8 @@ void CommandList::Dispatch(UINT x, UINT y, UINT z)
 void CommandList::CopyBufferRegion(ID3D12Resource *dst, UINT64 dst_offset, ID3D12Resource *src, UINT64 src_offset,
                                    UINT64 size)
 {
-    auto *d = ours<Resource>(dst);
-    auto *s = ours<Resource>(src);
+    auto *d = hold<Resource>(dst);
+    auto *s = hold<Resource>(src);
     if (!d || !s || !d->is_buffer() || !s->is_buffer()) {
         D3D12M_LOG("CopyBufferRegion needs two buffers of this layer");
         return;
@@ -992,8 +1007,8 @@ void CommandList::CopyBufferRegion(ID3D12Resource *dst, UINT64 dst_offset, ID3D1
 
 void CommandList::CopyResource(ID3D12Resource *dst, ID3D12Resource *src)
 {
-    auto *d = ours<Resource>(dst);
-    auto *s = ours<Resource>(src);
+    auto *d = hold<Resource>(dst);
+    auto *s = hold<Resource>(src);
     if (!d || !s || d->is_buffer() != s->is_buffer()) {
         D3D12M_LOG("CopyResource needs two buffers or two textures of this layer");
         return;
@@ -1018,8 +1033,8 @@ void CommandList::CopyResource(ID3D12Resource *dst, ID3D12Resource *src)
 void CommandList::copy_texture_to_texture(const D3D12_TEXTURE_COPY_LOCATION &dst, UINT dst_x, UINT dst_y, UINT dst_z,
                                           const D3D12_TEXTURE_COPY_LOCATION &src, const D3D12_BOX *src_box)
 {
-    auto *d = ours<Resource>(dst.pResource);
-    auto *s = ours<Resource>(src.pResource);
+    auto *d = hold<Resource>(dst.pResource);
+    auto *s = hold<Resource>(src.pResource);
     if (!d || !s || d->is_buffer() || s->is_buffer()) {
         D3D12M_LOG("CopyTextureRegion: texture copy locations need textures of this layer");
         return;
@@ -1069,8 +1084,8 @@ void CommandList::CopyTextureRegion(const D3D12_TEXTURE_COPY_LOCATION *dst, UINT
         return;
     }
 
-    auto *buffer_resource = ours<Resource>((to_buffer ? dst : src)->pResource);
-    auto *texture_resource = ours<Resource>((to_buffer ? src : dst)->pResource);
+    auto *buffer_resource = hold<Resource>((to_buffer ? dst : src)->pResource);
+    auto *texture_resource = hold<Resource>((to_buffer ? src : dst)->pResource);
     const D3D12_PLACED_SUBRESOURCE_FOOTPRINT &placed = (to_buffer ? dst : src)->PlacedFootprint;
     const UINT subresource = (to_buffer ? src : dst)->SubresourceIndex;
     mtlb_format_info info;

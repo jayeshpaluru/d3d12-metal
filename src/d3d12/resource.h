@@ -25,6 +25,8 @@ public:
     bool is_buffer() const { return desc_.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER; }
     mtlb_buffer buffer() const { return buffer_; }
     mtlb_texture texture() const { return texture_; }
+    // The id RTV and DSV descriptors refer to this texture by (0: not a render target or depth-stencil).
+    uint64_t attachment_id() const { return attachment_id_; }
     const D3D12_RESOURCE_DESC &desc() const { return desc_; }
 
     // The resource id of a view of this texture for descriptors (see mtlb_texture_view). Applications
@@ -74,6 +76,8 @@ private:
     uint64_t gpu_address_ = 0;
     Heap *placed_in_ = nullptr;  // owned reference
     bool needs_init_ = false;
+    uint64_t attachment_id_ = 0;
+    void register_attachment();
 
     std::mutex views_mutex_;
     std::map<std::array<uint32_t, 8>, uint64_t> views_;

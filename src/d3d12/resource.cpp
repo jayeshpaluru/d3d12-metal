@@ -45,6 +45,7 @@ HRESULT Resource::create_committed(Device *device, const D3D12_HEAP_PROPERTIES &
         resource->Release();
         return hr;
     }
+    resource->register_attachment();
     return hand_out(resource, riid, out);
 }
 
@@ -63,6 +64,7 @@ HRESULT Resource::create_placed(Device *device, Heap *heap, UINT64 offset, const
         resource->Release();
         return hr;
     }
+    resource->register_attachment();
     // Memory that other resources used keeps their contents. A render target or depth-stencil placed over it
     // is cleared before its first use, so nothing aliased is ever read as colour or depth (vkd3d-proton's
     // "forced initial transition"; see Device::take_pending_init).
@@ -179,8 +181,16 @@ HRESULT Resource::buffer_view(const mtlb_buffer_view_desc &desc, mtlb_descriptor
     return S_OK;
 }
 
+void Resource::register_attachment()
+{
+    if (!is_buffer() && (desc_.Flags & (D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET | D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL)))
+        attachment_id_ = device()->register_attachment(this);
+}
+
 Resource::~Resource()
 {
+    if (attachment_id_)
+        device()->unregister_attachment(attachment_id_);  // waits for lookups that hold this resource
     if (needs_init_)
         device()->remove_pending_init(this);
     if (buffer_)

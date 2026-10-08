@@ -179,6 +179,8 @@ mtlb_descriptor Device::null_descriptor(uint32_t kind)
 void Device::CreateShaderResourceView(ID3D12Resource *resource_ptr, const D3D12_SHADER_RESOURCE_VIEW_DESC *desc,
                                       D3D12_CPU_DESCRIPTOR_HANDLE dest)
 {
+    if (!validate_cpu_range(dest, 1, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV))
+        return log_bad_handle("CreateShaderResourceView");
     mtlb_descriptor *slot = slot_of(dest);
     auto *resource = ours<Resource>(resource_ptr);
     if (!resource) {
@@ -319,19 +321,22 @@ void Device::CreateShaderResourceView(ID3D12Resource *resource_ptr, const D3D12_
 void Device::CreateUnorderedAccessView(ID3D12Resource *resource_ptr, ID3D12Resource *counter_ptr,
                                        const D3D12_UNORDERED_ACCESS_VIEW_DESC *desc, D3D12_CPU_DESCRIPTOR_HANDLE dest)
 {
+    size_t index = 0;
+    DescriptorHeap *heap = validate_cpu_range(dest, 1, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, &index);
+    if (!heap)
+        return log_bad_handle("CreateUnorderedAccessView");
     mtlb_descriptor *slot = slot_of(dest);
     // The shadow view info is stored on every way out (a failed or null view leaves "none").
     ViewInfo info;
     struct Store {
-        Device *device;
-        D3D12_CPU_DESCRIPTOR_HANDLE handle;
+        ViewInfo *shadow;
         ViewInfo &info;
         ~Store()
         {
-            if (ViewInfo *shadow = device->view_info(handle))
+            if (shadow)
                 *shadow = info;
         }
-    } store{this, dest, info};
+    } store{heap->shadow(static_cast<uint32_t>(index)), info};
     auto *resource = ours<Resource>(resource_ptr);
     if (!resource || !desc) {
         const bool typed = desc && desc->Format != DXGI_FORMAT_UNKNOWN && !(desc->Buffer.Flags & D3D12_BUFFER_UAV_FLAG_RAW);
@@ -448,6 +453,8 @@ HRESULT Device::sampler_descriptor(const mtlb_sampler_desc &desc, mtlb_descripto
 
 void Device::CreateSampler(const D3D12_SAMPLER_DESC *desc, D3D12_CPU_DESCRIPTOR_HANDLE dest)
 {
+    if (!validate_cpu_range(dest, 1, D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER))
+        return log_bad_handle("CreateSampler");
     mtlb_descriptor *slot = slot_of(dest);
     if (!desc) {
         *slot = {};

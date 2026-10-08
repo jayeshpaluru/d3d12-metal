@@ -11,7 +11,7 @@ namespace d3d12m {
 // Descriptor slot of an RTV or DSV heap. Every heap type uses 24-byte slots, the size
 // of a shader-visible mtlb_descriptor, so copies between heaps are plain memcpy.
 struct RenderTargetDescriptor {
-    mtlb_texture texture;
+    uint64_t resource_id;  // Resource::attachment_id() of the texture; 0 = a null view
     uint32_t view_format;  // mtlb_format to view the texture as; 0 = its own format
     uint32_t mip_level;
     uint32_t array_slice;  // array slice; the depth plane of a 3D texture

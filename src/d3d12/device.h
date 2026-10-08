@@ -2,6 +2,7 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <vector>
 #include <map>
 #include <mutex>
@@ -16,6 +17,9 @@
 namespace d3d12m {
 
 class Resource;
+
+// Logs (once) that a descriptor handle was refused; see Device::validate_cpu_range.
+void log_bad_handle(const char *what);
 
 class Device final : public ObjectImpl<ID3D12Device10> {
 public:
@@ -41,6 +45,20 @@ public:
     // Descriptor heaps by CPU memory, to find the heap behind a CPU descriptor handle.
     void register_heap(DescriptorHeap *heap);
     void unregister_heap(DescriptorHeap *heap);
+    // The heap of type `type` that holds `count` descriptors from the CPU handle on, or null when the handle is not
+    // inside a heap of this device (or runs past its end, or is not on a descriptor boundary). `index` receives
+    // the position of the first descriptor in the heap. Cheap: a thread-local cache of the last heap answers
+    // repeated queries without a lock.
+    DescriptorHeap *validate_cpu_range(D3D12_CPU_DESCRIPTOR_HANDLE handle, UINT count, D3D12_DESCRIPTOR_HEAP_TYPE type,
+                                       size_t *index = nullptr);
+
+    // Render targets and depth-stencils by id, for the RTV/DSV descriptors (which hold an id, not a pointer: a
+    // descriptor outlives its resource when the application never clears it). acquire_attachment returns the
+    // resource with a new reference, or null once it is destroyed.
+    uint64_t register_attachment(Resource *resource);
+    void unregister_attachment(uint64_t id);
+    Resource *acquire_attachment(uint64_t id);
+
     // The shadow view info (see ViewInfo) of the CBV/SRV/UAV descriptor at `handle`, or null.
     ViewInfo *view_info(D3D12_CPU_DESCRIPTOR_HANDLE handle);
     DescriptorHeap *locate_view_heap(D3D12_CPU_DESCRIPTOR_HANDLE handle, size_t *index) const;
@@ -196,6 +214,10 @@ private:
     bool resource_size_align(const D3D12_RESOURCE_DESC &desc, mtlb_size_align *out) const;
     std::shared_mutex heaps_mutex_;
     std::map<uintptr_t, DescriptorHeap *> heaps_;
+    std::atomic<uint64_t> heap_generation_{1};  // changes whenever a heap is registered or unregistered
+    std::shared_mutex attachments_mutex_;
+    std::unordered_map<uint64_t, Resource *> attachments_;
+    std::atomic<uint64_t> next_attachment_id_{1};
     std::mutex sampler_mutex_;
     struct SamplerKeyHash {
         size_t operator()(const std::array<uint32_t, 16> &k) const;

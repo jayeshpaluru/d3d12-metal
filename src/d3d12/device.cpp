@@ -360,6 +360,7 @@ void Device::register_heap(DescriptorHeap *heap)
         return;
     std::unique_lock lock(heaps_mutex_);
     heaps_[reinterpret_cast<uintptr_t>(heap->storage())] = heap;
+    heap_generation_.fetch_add(1, std::memory_order_release);
 }
 
 void Device::unregister_heap(DescriptorHeap *heap)
@@ -368,6 +369,62 @@ void Device::unregister_heap(DescriptorHeap *heap)
         return;
     std::unique_lock lock(heaps_mutex_);
     heaps_.erase(reinterpret_cast<uintptr_t>(heap->storage()));
+    heap_generation_.fetch_add(1, std::memory_order_release);
+}
+
+DescriptorHeap *Device::validate_cpu_range(D3D12_CPU_DESCRIPTOR_HANDLE handle, UINT count, D3D12_DESCRIPTOR_HEAP_TYPE type,
+                                           size_t *index)
+{
+    struct Cache {
+        const Device *device;
+        uint64_t generation;
+        uintptr_t begin, end;
+        DescriptorHeap *heap;
+    };
+    thread_local Cache cache = {};
+    const uint64_t generation = heap_generation_.load(std::memory_order_acquire);
+    if (cache.device != this || cache.generation != generation || handle.ptr < cache.begin || handle.ptr >= cache.end) {
+        std::shared_lock lock(heaps_mutex_);
+        auto it = heaps_.upper_bound(handle.ptr);
+        if (it == heaps_.begin())
+            return nullptr;
+        --it;
+        DescriptorHeap *heap = it->second;
+        const uintptr_t end = it->first + size_t(heap->count()) * kDescriptorSize;
+        if (handle.ptr >= end)
+            return nullptr;
+        cache = {this, generation, it->first, end, heap};
+    }
+    DescriptorHeap *heap = cache.heap;
+    const size_t offset = handle.ptr - cache.begin;
+    if (heap->type() != type || offset % kDescriptorSize != 0
+        || size_t(count) * kDescriptorSize > cache.end - handle.ptr)
+        return nullptr;
+    if (index)
+        *index = offset / kDescriptorSize;
+    return heap;
+}
+
+uint64_t Device::register_attachment(Resource *resource)
+{
+    const uint64_t id = next_attachment_id_++;
+    std::unique_lock lock(attachments_mutex_);
+    attachments_[id] = resource;
+    return id;
+}
+
+void Device::unregister_attachment(uint64_t id)
+{
+    std::unique_lock lock(attachments_mutex_);
+    attachments_.erase(id);
+}
+
+Resource *Device::acquire_attachment(uint64_t id)
+{
+    std::shared_lock lock(attachments_mutex_);
+    auto it = attachments_.find(id);
+    // A resource whose last reference is gone is being destroyed (its destructor waits for this lock).
+    return it != attachments_.end() && it->second->try_add_ref() ? it->second : nullptr;
 }
 
 // The CBV/SRV/UAV heap that holds a CPU handle and the index of the handle in it. The caller holds heaps_mutex_.
@@ -464,8 +521,32 @@ std::vector<Resource *> Device::take_pending_init(std::vector<uint8_t> &stream)
 
 // ---- Descriptors -----------------------------------------------------------
 
+// A descriptor write whose handle is not inside a heap of the right type is dropped (logged once): the
+// application passed a stale or foreign handle, and writing there would corrupt memory.
+void log_bad_handle(const char *what)
+{
+    static std::atomic<bool> logged{false};
+    if (!logged.exchange(true))
+        D3D12M_LOG("%s: the descriptor handle is not inside a descriptor heap of the right type (further cases are not logged)", what);
+}
+
+namespace {
+
+// A view of this mip level and slice must exist (a depth plane for 3D textures).
+bool attachment_range_valid(const D3D12_RESOURCE_DESC &rd, UINT mip, UINT slice)
+{
+    if (mip >= resolve_mip_levels(rd))
+        return false;
+    const UINT slices = rd.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE3D ? mip_extent(rd.DepthOrArraySize, mip) : array_size(rd);
+    return slice < slices;
+}
+
+} // namespace
+
 void Device::CreateConstantBufferView(const D3D12_CONSTANT_BUFFER_VIEW_DESC *desc, D3D12_CPU_DESCRIPTOR_HANDLE dest)
 {
+    if (!validate_cpu_range(dest, 1, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV))
+        return log_bad_handle("CreateConstantBufferView");
     auto *entry = reinterpret_cast<mtlb_descriptor *>(dest.ptr);
     if (desc)
         mtlb_descriptor_set_buffer(entry, desc->BufferLocation, desc->SizeInBytes);
@@ -473,92 +554,97 @@ void Device::CreateConstantBufferView(const D3D12_CONSTANT_BUFFER_VIEW_DESC *des
         *entry = {};
 }
 
+// Shared by RTVs and DSVs: the slot gets the resource id and the view's format, mip and slice when the view
+// is valid, and stays a null view otherwise.
+static void fill_attachment(Resource *resource, D3D12_RESOURCE_FLAGS required, DXGI_FORMAT format, UINT mip, UINT slice,
+                            RenderTargetDescriptor *slot)
+{
+    *slot = {};
+    if (!resource || resource->is_buffer() || !resource->attachment_id() || !(resource->desc().Flags & required))
+        return;
+    if (!attachment_range_valid(resource->desc(), mip, slice)) {
+        D3D12M_LOG("render target or depth-stencil view of mip %u, slice %u: the resource has no such subresource", mip, slice);
+        return;
+    }
+    slot->resource_id = resource->attachment_id();
+    slot->mip_level = mip;
+    slot->array_slice = slice;
+    // A view of a different format than the texture's own needs a texture view;
+    // DXGI_FORMAT_UNKNOWN means the texture's format.
+    if (format != DXGI_FORMAT_UNKNOWN && to_mtlb_format(format) != to_mtlb_format(resource->desc().Format))
+        slot->view_format = to_mtlb_format(format);
+}
+
 void Device::CreateRenderTargetView(ID3D12Resource *resource, const D3D12_RENDER_TARGET_VIEW_DESC *desc,
                                     D3D12_CPU_DESCRIPTOR_HANDLE dest)
 {
+    if (!validate_cpu_range(dest, 1, D3D12_DESCRIPTOR_HEAP_TYPE_RTV))
+        return log_bad_handle("CreateRenderTargetView");
     auto *slot = reinterpret_cast<RenderTargetDescriptor *>(dest.ptr);
-    *slot = {};
-    auto *texture = ours<Resource>(resource);
-    if (!texture || texture->is_buffer())
-        return;
-
-    slot->texture = texture->texture();
-    if (!desc)
-        return;
-    // A view of a different format than the texture's own needs a texture view;
-    // DXGI_FORMAT_UNKNOWN means the texture's format.
-    if (desc->Format != DXGI_FORMAT_UNKNOWN && to_mtlb_format(desc->Format) != to_mtlb_format(texture->desc().Format))
-        slot->view_format = to_mtlb_format(desc->Format);
     // One mip level and one slice (a layered view renders to its first slice).
-    switch (desc->ViewDimension) {
-    case D3D12_RTV_DIMENSION_TEXTURE1D:
-        slot->mip_level = desc->Texture1D.MipSlice;
-        break;
-    case D3D12_RTV_DIMENSION_TEXTURE1DARRAY:
-        slot->mip_level = desc->Texture1DArray.MipSlice;
-        slot->array_slice = desc->Texture1DArray.FirstArraySlice;
-        break;
-    case D3D12_RTV_DIMENSION_TEXTURE2D:
-        slot->mip_level = desc->Texture2D.MipSlice;
-        break;
-    case D3D12_RTV_DIMENSION_TEXTURE2DARRAY:
-        slot->mip_level = desc->Texture2DArray.MipSlice;
-        slot->array_slice = desc->Texture2DArray.FirstArraySlice;
-        break;
-    case D3D12_RTV_DIMENSION_TEXTURE2DMSARRAY:
-        slot->array_slice = desc->Texture2DMSArray.FirstArraySlice;
-        break;
-    case D3D12_RTV_DIMENSION_TEXTURE3D:
-        slot->mip_level = desc->Texture3D.MipSlice;
-        slot->array_slice = desc->Texture3D.FirstWSlice;
-        break;
-    default:
-        break;
+    UINT mip = 0, slice = 0;
+    DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
+    if (desc) {
+        format = desc->Format;
+        switch (desc->ViewDimension) {
+        case D3D12_RTV_DIMENSION_TEXTURE1D: mip = desc->Texture1D.MipSlice; break;
+        case D3D12_RTV_DIMENSION_TEXTURE1DARRAY:
+            mip = desc->Texture1DArray.MipSlice;
+            slice = desc->Texture1DArray.FirstArraySlice;
+            break;
+        case D3D12_RTV_DIMENSION_TEXTURE2D: mip = desc->Texture2D.MipSlice; break;
+        case D3D12_RTV_DIMENSION_TEXTURE2DARRAY:
+            mip = desc->Texture2DArray.MipSlice;
+            slice = desc->Texture2DArray.FirstArraySlice;
+            break;
+        case D3D12_RTV_DIMENSION_TEXTURE2DMSARRAY: slice = desc->Texture2DMSArray.FirstArraySlice; break;
+        case D3D12_RTV_DIMENSION_TEXTURE3D:
+            mip = desc->Texture3D.MipSlice;
+            slice = desc->Texture3D.FirstWSlice;
+            break;
+        default: break;
+        }
     }
+    fill_attachment(ours<Resource>(resource), D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, format, mip, slice, slot);
 }
 
 void Device::CreateDepthStencilView(ID3D12Resource *resource, const D3D12_DEPTH_STENCIL_VIEW_DESC *desc,
                                     D3D12_CPU_DESCRIPTOR_HANDLE dest)
 {
+    if (!validate_cpu_range(dest, 1, D3D12_DESCRIPTOR_HEAP_TYPE_DSV))
+        return log_bad_handle("CreateDepthStencilView");
     auto *slot = reinterpret_cast<RenderTargetDescriptor *>(dest.ptr);
-    *slot = {};
-    auto *texture = ours<Resource>(resource);
-    if (!texture || texture->is_buffer())
-        return;
-
-    slot->texture = texture->texture();
-    if (!desc)
-        return;
-    if (desc->Format != DXGI_FORMAT_UNKNOWN && to_mtlb_format(desc->Format) != to_mtlb_format(texture->desc().Format))
-        slot->view_format = to_mtlb_format(desc->Format);
-    if (desc->Flags & D3D12_DSV_FLAG_READ_ONLY_DEPTH)
-        slot->flags |= MTLB_DEPTH_READ_ONLY;
-    if (desc->Flags & D3D12_DSV_FLAG_READ_ONLY_STENCIL)
-        slot->flags |= MTLB_STENCIL_READ_ONLY;
-    switch (desc->ViewDimension) {
-    case D3D12_DSV_DIMENSION_TEXTURE1D:
-        slot->mip_level = desc->Texture1D.MipSlice;
-        break;
-    case D3D12_DSV_DIMENSION_TEXTURE1DARRAY:
-        slot->mip_level = desc->Texture1DArray.MipSlice;
-        slot->array_slice = desc->Texture1DArray.FirstArraySlice;
-        break;
-    case D3D12_DSV_DIMENSION_TEXTURE2D:
-        slot->mip_level = desc->Texture2D.MipSlice;
-        break;
-    case D3D12_DSV_DIMENSION_TEXTURE2DARRAY:
-        slot->mip_level = desc->Texture2DArray.MipSlice;
-        slot->array_slice = desc->Texture2DArray.FirstArraySlice;
-        break;
-    case D3D12_DSV_DIMENSION_TEXTURE2DMSARRAY:
-        slot->array_slice = desc->Texture2DMSArray.FirstArraySlice;
-        break;
-    default:
-        break;
+    UINT mip = 0, slice = 0;
+    DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
+    uint32_t flags = 0;
+    if (desc) {
+        format = desc->Format;
+        if (desc->Flags & D3D12_DSV_FLAG_READ_ONLY_DEPTH)
+            flags |= MTLB_DEPTH_READ_ONLY;
+        if (desc->Flags & D3D12_DSV_FLAG_READ_ONLY_STENCIL)
+            flags |= MTLB_STENCIL_READ_ONLY;
+        switch (desc->ViewDimension) {
+        case D3D12_DSV_DIMENSION_TEXTURE1D: mip = desc->Texture1D.MipSlice; break;
+        case D3D12_DSV_DIMENSION_TEXTURE1DARRAY:
+            mip = desc->Texture1DArray.MipSlice;
+            slice = desc->Texture1DArray.FirstArraySlice;
+            break;
+        case D3D12_DSV_DIMENSION_TEXTURE2D: mip = desc->Texture2D.MipSlice; break;
+        case D3D12_DSV_DIMENSION_TEXTURE2DARRAY:
+            mip = desc->Texture2DArray.MipSlice;
+            slice = desc->Texture2DArray.FirstArraySlice;
+            break;
+        case D3D12_DSV_DIMENSION_TEXTURE2DMSARRAY: slice = desc->Texture2DMSArray.FirstArraySlice; break;
+        default: break;
+        }
     }
+    fill_attachment(ours<Resource>(resource), D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL, format, mip, slice, slot);
+    if (slot->resource_id)
+        slot->flags = flags;
 }
 
-// All descriptor types use same-sized slots, so copying is a memcpy per range.
+// All descriptor types use same-sized slots, so copying is a memcpy per range. Ranges outside the heaps (of
+// the right type) are skipped.
 void Device::CopyDescriptors(UINT num_dest_ranges, const D3D12_CPU_DESCRIPTOR_HANDLE *dest_starts,
                              const UINT *dest_sizes, UINT num_src_ranges,
                              const D3D12_CPU_DESCRIPTOR_HANDLE *src_starts, const UINT *src_sizes,
@@ -572,10 +658,15 @@ void Device::CopyDescriptors(UINT num_dest_ranges, const D3D12_CPU_DESCRIPTOR_HA
         const UINT dest_size = dest_sizes ? dest_sizes[d] : 1;
         const UINT src_size = src_sizes ? src_sizes[s] : 1;
         const UINT n = std::min(dest_size - d_used, src_size - s_used);
-        std::memcpy(reinterpret_cast<void *>(dest_starts[d].ptr + size_t(d_used) * size),
-                    reinterpret_cast<const void *>(src_starts[s].ptr + size_t(s_used) * size), size_t(n) * size);
-        if (type == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV)
-            copy_view_info({dest_starts[d].ptr + size_t(d_used) * size}, {src_starts[s].ptr + size_t(s_used) * size}, n);
+        const D3D12_CPU_DESCRIPTOR_HANDLE to = {dest_starts[d].ptr + size_t(d_used) * size};
+        const D3D12_CPU_DESCRIPTOR_HANDLE from = {src_starts[s].ptr + size_t(s_used) * size};
+        if (n && validate_cpu_range(to, n, type) && validate_cpu_range(from, n, type)) {
+            std::memmove(reinterpret_cast<void *>(to.ptr), reinterpret_cast<const void *>(from.ptr), size_t(n) * size);
+            if (type == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV)
+                copy_view_info(to, from, n);
+        } else if (n) {
+            log_bad_handle("CopyDescriptors");
+        }
         d_used += n;
         s_used += n;
         if (d_used == dest_size) { ++d; d_used = 0; }
@@ -586,8 +677,12 @@ void Device::CopyDescriptors(UINT num_dest_ranges, const D3D12_CPU_DESCRIPTOR_HA
 void Device::CopyDescriptorsSimple(UINT count, D3D12_CPU_DESCRIPTOR_HANDLE dest, D3D12_CPU_DESCRIPTOR_HANDLE src,
                                    D3D12_DESCRIPTOR_HEAP_TYPE type)
 {
-    std::memcpy(reinterpret_cast<void *>(dest.ptr), reinterpret_cast<const void *>(src.ptr),
-                size_t(count) * descriptor_size(type));
+    const size_t size = descriptor_size(type);
+    if (!size || !count)
+        return;
+    if (!validate_cpu_range(dest, count, type) || !validate_cpu_range(src, count, type))
+        return log_bad_handle("CopyDescriptorsSimple");
+    std::memmove(reinterpret_cast<void *>(dest.ptr), reinterpret_cast<const void *>(src.ptr), size_t(count) * size);
     if (type == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV)
         copy_view_info(dest, src, count);
 }

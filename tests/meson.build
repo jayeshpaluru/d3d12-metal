@@ -47,6 +47,8 @@ tests = [
   ['test_queue_sync', []],
   ['test_rootsig', []],
   ['test_descriptors', []],
+  ['test_hardening', []],
+  ['test_backend_ranges', []],
   ['test_shader_cache', ['instanced'], ['fill']],
   ['test_triangle', ['color']],
   ['test_cbv_table', ['color']],

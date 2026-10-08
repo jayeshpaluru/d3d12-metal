@@ -16,6 +16,67 @@
 
 namespace d3d12m {
 
+// Strong references to the objects a recorded stream names by handle (pipelines, resources, query heaps, ...).
+// The backend dereferences those handles when the list is executed, so an application that releases an object
+// between recording and execution (D3D12 does not allow it, but must not crash this layer) cannot free what the
+// stream still points at. Released when the list is reset or destroyed.
+class ObjectRefs {
+public:
+    ObjectRefs() = default;
+    ObjectRefs(const ObjectRefs &) = delete;
+    ObjectRefs &operator=(const ObjectRefs &) = delete;
+    ~ObjectRefs() { clear(); }
+
+    // Takes a reference of its own.
+    void add(IUnknown *object)
+    {
+        if (!object || seen(object))
+            return;
+        object->AddRef();
+        all_.push_back(object);
+    }
+    // Takes over the caller's reference (which is dropped when the object is already held).
+    void adopt(IUnknown *object)
+    {
+        if (!object)
+            return;
+        if (seen(object)) {
+            object->Release();
+            return;
+        }
+        all_.push_back(object);
+    }
+    void append(const ObjectRefs &other)
+    {
+        for (IUnknown *object : other.all_)
+            add(object);
+    }
+    void clear()
+    {
+        for (IUnknown *object : all_)
+            object->Release();
+        all_.clear();
+        for (IUnknown *&slot : recent_)
+            slot = nullptr;
+    }
+    size_t size() const { return all_.size(); }
+
+private:
+    // A small direct-mapped table of the objects added lately keeps a draw-heavy list from taking a reference
+    // per draw; collisions only cost an extra reference (released in the end all the same).
+    bool seen(IUnknown *object)
+    {
+        IUnknown *&slot = recent_[(reinterpret_cast<uintptr_t>(object) >> 4) % kRecent];
+        if (slot == object)
+            return true;
+        slot = object;
+        return false;
+    }
+    static constexpr size_t kRecent = 64;
+    IUnknown *recent_[kRecent] = {};
+    std::vector<IUnknown *> all_;
+};
+
 class CommandList final : public ChildImpl<ID3D12GraphicsCommandList7> {
 public:
     // Creates a list in the recording state.
@@ -143,6 +204,19 @@ private:
     bool in_pass_ = false;
 
     void reset_state();
+    // ours<T>(p) that also keeps the object alive until the list is reset (see ObjectRefs).
+    template <typename T, typename P>
+    T *hold(P *p)
+    {
+        T *object = ours<T>(p);
+        if (object)
+            refs_.add(static_cast<IUnknown *>(object));
+        return object;
+    }
+    // The texture an RTV or DSV descriptor names, as a record's render target. False when the handle is not a
+    // descriptor of that heap type; an unbound (null) view or a destroyed resource gives an empty target.
+    bool resolve_attachment(D3D12_CPU_DESCRIPTOR_HANDLE handle, D3D12_DESCRIPTOR_HEAP_TYPE type,
+                            mtlb_render_target *target, uint32_t *flags);
     template <typename T>
     T *append(mtlb_cmd_type type, size_t extra_bytes = 0);
     bool prepare_draw();
@@ -160,6 +234,7 @@ private:
     D3D12_COMMAND_LIST_TYPE type_;
     bool closed_ = false;
     std::vector<uint8_t> stream_;
+    ObjectRefs refs_;
 
     bool has_graphics_pipeline_ = false;
     bool has_compute_pipeline_ = false;

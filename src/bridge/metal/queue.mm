@@ -62,6 +62,70 @@ struct Target {
     }
 };
 
+// ---- Range checks ------------------------------------------------------------------------------------
+// The front-end validates what the application passes, but the backend does not trust a stream: Metal's
+// blit and render calls abort (or fault the GPU) on ranges outside a resource.
+
+bool range_fits(uint64_t offset, uint64_t size, uint64_t total)
+{
+    return offset <= total && size <= total - offset;
+}
+
+uint64_t mip_dimension(NSUInteger base, uint32_t mip)
+{
+    return std::max<uint64_t>(uint64_t(base) >> std::min<uint32_t>(mip, 31), 1);
+}
+
+NSUInteger slice_count_of(id<MTLTexture> texture)
+{
+    return std::max<NSUInteger>(texture.arrayLength, 1);
+}
+
+bool subresource_exists(id<MTLTexture> texture, uint32_t mip, uint32_t slice)
+{
+    return mip < texture.mipmapLevelCount && slice < slice_count_of(texture);
+}
+
+// The box [x, x + width) x ... lies inside the mip level of the texture.
+bool box_fits(id<MTLTexture> texture, uint32_t mip, uint32_t x, uint32_t y, uint32_t z, uint32_t width, uint32_t height,
+              uint32_t depth)
+{
+    if (mip >= texture.mipmapLevelCount)
+        return false;
+    const uint64_t w = mip_dimension(texture.width, mip), h = mip_dimension(texture.height, mip);
+    const uint64_t d = texture.textureType == MTLTextureType3D ? mip_dimension(texture.depth, mip) : 1;
+    return range_fits(x, width, w) && range_fits(y, height, h) && range_fits(z, depth, d);
+}
+
+// Bytes a buffer must hold for a texture copy of `region` (row pitch and image pitch as given).
+bool copy_region_bytes(Texture *texture, const mtlb_texture_copy_region &r, uint64_t *bytes)
+{
+    mtlb_format_info info;
+    uint32_t bytes_per_block, block_width, block_height;
+    if (texture->texture.pixelFormat == MTLPixelFormatDepth32Float_Stencil8) {
+        bytes_per_block = r.plane == 0 ? 4 : 1;
+        block_width = block_height = 1;
+    } else if (mtlb_format_get_info(texture->format, &info) == MTLB_OK) {
+        bytes_per_block = info.bytes_per_block;
+        block_width = info.block_width;
+        block_height = info.block_height;
+    } else {
+        return false;
+    }
+    if (!r.width || !r.height || !r.depth) {
+        *bytes = 0;
+        return true;
+    }
+    const uint64_t row_bytes = uint64_t((r.width + block_width - 1) / block_width) * bytes_per_block;
+    const uint64_t rows = (r.height + block_height - 1) / block_height;
+    if ((rows > 1 || r.depth > 1) && r.bytes_per_row < row_bytes)
+        return false;
+    if (r.depth > 1 && r.bytes_per_image < uint64_t(r.bytes_per_row) * (rows - 1) + row_bytes)
+        return false;
+    *bytes = uint64_t(r.bytes_per_image) * (r.depth - 1) + uint64_t(r.bytes_per_row) * (rows - 1) + row_bytes;
+    return true;
+}
+
 // The state that persists from record to record. A fresh DrawState is what a
 // command list starts from.
 struct DrawState {
@@ -424,6 +488,11 @@ mtlb_result Replay::resolve_target(const mtlb_render_target &t, Target *out)
     Texture *texture = from_handle<Texture>(t.texture);
     if (!texture)
         return fail(MTLB_ERROR_INVALID_ARGUMENT, "invalid render target texture");
+    id<MTLTexture> base = texture->texture;
+    const bool is_3d = base.textureType == MTLTextureType3D;
+    if (t.mip_level >= base.mipmapLevelCount
+        || t.array_slice >= (is_3d ? mip_dimension(base.depth, t.mip_level) : slice_count_of(base)))
+        return fail(MTLB_ERROR_INVALID_ARGUMENT, "render target mip level or slice outside the texture");
     *out = {texture, t.view_format == texture->format ? 0u : t.view_format, t.mip_level, t.array_slice};
     return MTLB_OK;
 }
@@ -797,6 +866,13 @@ mtlb_result Replay::copy_texture(const mtlb_texture_copy_region &r, bool to_buff
     id<MTLBlitCommandEncoder> enc = blit();
     if (!texture || !buffer || !enc)
         return fail(MTLB_ERROR_INVALID_ARGUMENT, "invalid texture copy");
+    uint64_t bytes = 0;
+    if (!subresource_exists(texture->texture, r.mip_level, r.array_slice)
+        || !box_fits(texture->texture, r.mip_level, r.x, r.y, r.z, r.width, r.height, r.depth)
+        || !copy_region_bytes(texture, r, &bytes) || !range_fits(r.buffer_offset, bytes, buffer->size))
+        return fail(MTLB_ERROR_INVALID_ARGUMENT, "texture copy outside the texture or the buffer");
+    if (!r.width || !r.height || !r.depth)
+        return MTLB_OK;
     MTLOrigin origin = {r.x, r.y, r.z};
     MTLSize size = {r.width, r.height, r.depth};
     // A depth-stencil texture is copied one plane at a time.
@@ -1161,6 +1237,10 @@ mtlb_result Replay::resolve(const mtlb_cmd_resolve &cmd)
     Texture *dst = from_handle<Texture>(cmd.dst), *src = from_handle<Texture>(cmd.src);
     if (!dst || !src || src->texture.sampleCount < 2 || dst->texture.sampleCount != 1)
         return fail(MTLB_ERROR_INVALID_ARGUMENT, "resolve needs a multisampled source and a single-sampled destination");
+    if (!subresource_exists(src->texture, cmd.src_mip, cmd.src_slice) || !subresource_exists(dst->texture, cmd.dst_mip, cmd.dst_slice)
+        || mip_dimension(src->texture.width, cmd.src_mip) != mip_dimension(dst->texture.width, cmd.dst_mip)
+        || mip_dimension(src->texture.height, cmd.src_mip) != mip_dimension(dst->texture.height, cmd.dst_mip))
+        return fail(MTLB_ERROR_INVALID_ARGUMENT, "resolve between subresources that do not exist or differ in size");
     // Earlier clears and draws land first.
     end_blit();
     end_compute();
@@ -1465,6 +1545,16 @@ mtlb_result Replay::copy_texture_texture(const mtlb_cmd_copy_texture_texture &cm
     Texture *dst = from_handle<Texture>(cmd.dst), *src = from_handle<Texture>(cmd.src);
     if (!dst || !src)
         return fail(MTLB_ERROR_INVALID_ARGUMENT, "invalid texture copy");
+    if (cmd.whole) {
+        if (src->texture.mipmapLevelCount != dst->texture.mipmapLevelCount || slice_count_of(src->texture) != slice_count_of(dst->texture)
+            || src->texture.width != dst->texture.width || src->texture.height != dst->texture.height
+            || src->texture.depth != dst->texture.depth)
+            return fail(MTLB_ERROR_INVALID_ARGUMENT, "whole-resource copy between textures of different shapes");
+    } else if (!subresource_exists(src->texture, cmd.src_mip, cmd.src_slice) || !subresource_exists(dst->texture, cmd.dst_mip, cmd.dst_slice)
+               || !box_fits(src->texture, cmd.src_mip, cmd.src_x, cmd.src_y, cmd.src_z, cmd.width, cmd.height, cmd.depth)
+               || !box_fits(dst->texture, cmd.dst_mip, cmd.dst_x, cmd.dst_y, cmd.dst_z, cmd.width, cmd.height, cmd.depth)) {
+        return fail(MTLB_ERROR_INVALID_ARGUMENT, "texture copy outside its textures");
+    }
     id<MTLBlitCommandEncoder> enc = blit();
     id<MTLTexture> source = reinterpreted(src, dst->texture.pixelFormat);
     if (!source)
@@ -1488,6 +1578,12 @@ mtlb_result Replay::copy_buffer(const mtlb_cmd_copy_buffer &cmd)
     Buffer *dst = from_handle<Buffer>(cmd.dst), *src = from_handle<Buffer>(cmd.src);
     if (!dst || !src)
         return fail(MTLB_ERROR_INVALID_ARGUMENT, "invalid buffer copy");
+    if (!range_fits(cmd.src_offset, cmd.size, src->size) || !range_fits(cmd.dst_offset, cmd.size, dst->size))
+        return fail(MTLB_ERROR_INVALID_ARGUMENT, "buffer copy outside its buffers");
+    if (src == dst && cmd.src_offset < cmd.dst_offset + cmd.size && cmd.dst_offset < cmd.src_offset + cmd.size && cmd.size)
+        return fail(MTLB_ERROR_INVALID_ARGUMENT, "buffer copy within one buffer overlaps");
+    if (!cmd.size)
+        return MTLB_OK;
     [blit() copyFromBuffer:src->buffer sourceOffset:cmd.src_offset toBuffer:dst->buffer
          destinationOffset:cmd.dst_offset size:cmd.size];
     return MTLB_OK;
