@@ -28,7 +28,12 @@ HWND platform_root_window(HWND window)
 
 HANDLE platform_create_event(bool signaled)
 {
-    return CreateEventW(nullptr, FALSE, signaled ? TRUE : FALSE, nullptr);
+    return CreateEventW(nullptr, TRUE, signaled ? TRUE : FALSE, nullptr);
+}
+
+void platform_reset_event(HANDLE event)
+{
+    ResetEvent(event);
 }
 
 HANDLE platform_duplicate_event(HANDLE event)
@@ -86,6 +91,10 @@ HWND platform_root_window(HWND window)
 HANDLE platform_create_event(bool)
 {
     return nullptr;
+}
+
+void platform_reset_event(HANDLE)
+{
 }
 
 HANDLE platform_duplicate_event(HANDLE)

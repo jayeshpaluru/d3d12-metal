@@ -71,23 +71,26 @@ void run_on_main(void (^block)(void))
         dispatch_sync(dispatch_get_main_queue(), block);
 }
 
-mtlb_result build_pipeline(Swapchain *swapchain, MTLPixelFormat pixel_format)
+// Builds the pass pipeline for drawables of `pixel_format`; nil (with fail() set) on error.
+id<MTLRenderPipelineState> make_pipeline(Swapchain *swapchain, MTLPixelFormat pixel_format)
 {
     if (!swapchain->library) {
         NSError *error = nil;
         swapchain->library = [swapchain->device->device newLibraryWithSource:@(kPresentSource) options:nil error:&error];
-        if (!swapchain->library)
-            return fail(MTLB_ERROR_COMPILE_FAILED, std::string("present shader: ") + error.localizedDescription.UTF8String);
+        if (!swapchain->library) {
+            fail(MTLB_ERROR_COMPILE_FAILED, std::string("present shader: ") + error.localizedDescription.UTF8String);
+            return nil;
+        }
     }
     MTLRenderPipelineDescriptor *desc = [MTLRenderPipelineDescriptor new];
     desc.vertexFunction = [swapchain->library newFunctionWithName:@"present_vs"];
     desc.fragmentFunction = [swapchain->library newFunctionWithName:@"present_fs"];
     desc.colorAttachments[0].pixelFormat = pixel_format;
     NSError *error = nil;
-    swapchain->pipeline = [swapchain->device->device newRenderPipelineStateWithDescriptor:desc error:&error];
-    if (!swapchain->pipeline)
-        return fail(MTLB_ERROR_COMPILE_FAILED, std::string("present pipeline: ") + error.localizedDescription.UTF8String);
-    return MTLB_OK;
+    id<MTLRenderPipelineState> pipeline = [swapchain->device->device newRenderPipelineStateWithDescriptor:desc error:&error];
+    if (!pipeline)
+        fail(MTLB_ERROR_COMPILE_FAILED, std::string("present pipeline: ") + error.localizedDescription.UTF8String);
+    return pipeline;
 }
 
 // Writes a BGRA8 texture as a PNG.
@@ -99,14 +102,18 @@ void write_png(id<MTLTexture> texture, const std::string &path)
     CGColorSpaceRef color_space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
     CGContextRef context = CGBitmapContextCreate(pixels.mutableBytes, width, height, 8, pitch, color_space,
                                                  kCGImageAlphaNoneSkipFirst | kCGBitmapByteOrder32Little);
-    CGImageRef image = CGBitmapContextCreateImage(context);
+    CGImageRef image = context ? CGBitmapContextCreateImage(context) : nullptr;
     NSURL *url = [NSURL fileURLWithPath:@(path.c_str())];
     CGImageDestinationRef destination =
         CGImageDestinationCreateWithURL((__bridge CFURLRef)url, CFSTR("public.png"), 1, nullptr);
-    CGImageDestinationAddImage(destination, image, nullptr);
-    const bool ok = CGImageDestinationFinalize(destination);
+    bool ok = false;
+    if (image && destination) {
+        CGImageDestinationAddImage(destination, image, nullptr);
+        ok = CGImageDestinationFinalize(destination);
+    }
     fprintf(stderr, "d3d12-metal: %s present dump %s\n", ok ? "wrote" : "failed to write", path.c_str());
-    CFRelease(destination);
+    if (destination)
+        CFRelease(destination);
     CGImageRelease(image);
     CGContextRelease(context);
     CGColorSpaceRelease(color_space);
@@ -116,6 +123,21 @@ void configure_layer(CAMetalLayer *layer, MTLPixelFormat pixel_format, uint32_t 
 {
     layer.pixelFormat = pixel_format;
     layer.drawableSize = CGSizeMake(width, height);
+}
+
+// Draws `source` over all of `target` with the present pipeline.
+void draw_present_pass(id<MTLCommandBuffer> command_buffer, id<MTLTexture> target,
+                       id<MTLRenderPipelineState> pipeline, id<MTLTexture> source)
+{
+    MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
+    pass.colorAttachments[0].texture = target;
+    pass.colorAttachments[0].loadAction = MTLLoadActionDontCare;
+    pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+    id<MTLRenderCommandEncoder> encoder = [command_buffer renderCommandEncoderWithDescriptor:pass];
+    [encoder setRenderPipelineState:pipeline];
+    [encoder setFragmentTexture:source atIndex:0];
+    [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+    [encoder endEncoding];
 }
 
 } // namespace
@@ -132,8 +154,7 @@ LayerProvider layer_provider()
     return g_layer_provider;
 }
 
-mtlb_result encode_present(id<MTLCommandBuffer> command_buffer, Swapchain *swapchain, Texture *texture,
-                           uint32_t sync_interval)
+Drawable acquire_drawable(Swapchain *swapchain, uint32_t sync_interval)
 {
     const bool sync = sync_interval > 0;
     if (swapchain->display_sync.exchange(sync) != sync) {
@@ -141,45 +162,43 @@ mtlb_result encode_present(id<MTLCommandBuffer> command_buffer, Swapchain *swapc
         dispatch_async(dispatch_get_main_queue(), ^{ layer.displaySyncEnabled = sync; });
     }
 
-    id<CAMetalDrawable> drawable = [swapchain->layer nextDrawable];
-    if (!drawable) {
+    Drawable result;
+    {
+        std::lock_guard<std::mutex> lock(swapchain->mutex);
+        result.pipeline = swapchain->pipeline;
+    }
+    // Blocks while every drawable is in flight, which paces the application (and
+    // for about a second when the window shows nothing); no lock may be held.
+    result.drawable = [swapchain->layer nextDrawable];
+    if (!result.drawable) {
         static std::atomic<bool> logged{false};
         if (!logged.exchange(true))
             fprintf(stderr, "d3d12-metal: no drawable available, skipping presents\n");
-        return MTLB_OK;
     }
+    return result;
+}
 
-    MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
-    pass.colorAttachments[0].texture = drawable.texture;
-    pass.colorAttachments[0].loadAction = MTLLoadActionDontCare;
-    pass.colorAttachments[0].storeAction = MTLStoreActionStore;
-    id<MTLRenderCommandEncoder> encoder = [command_buffer renderCommandEncoderWithDescriptor:pass];
-    [encoder setRenderPipelineState:swapchain->pipeline];
-    [encoder setFragmentTexture:texture->texture atIndex:0];
-    [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
-    [encoder endEncoding];
+void encode_present(id<MTLCommandBuffer> command_buffer, Swapchain *swapchain, Texture *texture,
+                    const Drawable &drawable)
+{
+    draw_present_pass(command_buffer, drawable.drawable.texture, drawable.pipeline, texture->texture);
 
     const uint64_t present = ++swapchain->presents;
     if (!swapchain->dump_path.empty() && present == swapchain->dump_frame) {
         // The same pass again into a texture the CPU can read.
-        MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:drawable.texture.pixelFormat
-                                                                                       width:drawable.texture.width
-                                                                                      height:drawable.texture.height
+        id<MTLTexture> target = drawable.drawable.texture;
+        MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:target.pixelFormat
+                                                                                       width:target.width
+                                                                                      height:target.height
                                                                                    mipmapped:NO];
         td.usage = MTLTextureUsageRenderTarget;
         td.storageMode = MTLStorageModeShared;
         id<MTLTexture> capture = [swapchain->device->device newTextureWithDescriptor:td];
-        pass.colorAttachments[0].texture = capture;
-        id<MTLRenderCommandEncoder> again = [command_buffer renderCommandEncoderWithDescriptor:pass];
-        [again setRenderPipelineState:swapchain->pipeline];
-        [again setFragmentTexture:texture->texture atIndex:0];
-        [again drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
-        [again endEncoding];
+        draw_present_pass(command_buffer, capture, drawable.pipeline, texture->texture);
         const std::string path = swapchain->dump_path;
         [command_buffer addCompletedHandler:^(id<MTLCommandBuffer>) { write_png(capture, path); }];
     }
-    [command_buffer presentDrawable:drawable];
-    return MTLB_OK;
+    [command_buffer presentDrawable:drawable.drawable];
 }
 
 } // namespace mtlb
@@ -206,20 +225,20 @@ mtlb_result mtlb_swapchain_create(mtlb_device handle, const mtlb_swapchain_desc 
     if (!layer)
         return fail(MTLB_ERROR_DEVICE, "window " + std::to_string(desc->window) + " has no Metal layer");
 
-    auto *swapchain = new Swapchain();
+    auto swapchain = std::make_unique<Swapchain>();
     swapchain->device = device;
     swapchain->layer = layer;
-    swapchain->format = static_cast<mtlb_format>(desc->format);
-    if (const char *dump = getenv("D3D12METAL_DUMP_PRESENT"); dump && pixel_format != MTLPixelFormatRGBA16Float
-        && pixel_format != MTLPixelFormatRGB10A2Unorm) {
+    swapchain->pixel_format = pixel_format;
+    // The dump is a BGRA8 PNG: not available for the wider formats.
+    if (const char *dump = getenv("D3D12METAL_DUMP_PRESENT");
+        dump && pixel_format != MTLPixelFormatRGBA16Float && pixel_format != MTLPixelFormatRGB10A2Unorm) {
         const char *frame = getenv("D3D12METAL_DUMP_PRESENT_FRAME");
         swapchain->dump_path = dump;
         swapchain->dump_frame = frame ? strtoull(frame, nullptr, 10) : 30;
     }
-    if (mtlb_result result = build_pipeline(swapchain, pixel_format); result != MTLB_OK) {
-        delete swapchain;
-        return result;
-    }
+    swapchain->pipeline = make_pipeline(swapchain.get(), pixel_format);
+    if (!swapchain->pipeline)
+        return MTLB_ERROR_COMPILE_FAILED;
     const uint32_t drawables = desc->buffer_count >= 3 ? 3 : 2;
     run_on_main(^{
         layer.device = device->device;
@@ -228,7 +247,7 @@ mtlb_result mtlb_swapchain_create(mtlb_device handle, const mtlb_swapchain_desc 
         layer.displaySyncEnabled = YES;
         configure_layer(layer, pixel_format, desc->width, desc->height);
     });
-    *out = to_handle(swapchain);
+    *out = to_handle(swapchain.release());
     return MTLB_OK;
 }
 
@@ -245,13 +264,24 @@ mtlb_result mtlb_swapchain_resize(mtlb_swapchain handle, uint32_t width, uint32_
     const MTLPixelFormat pixel_format = layer_pixel_format(format);
     if (pixel_format == MTLPixelFormatInvalid)
         return fail(MTLB_ERROR_UNSUPPORTED, "unsupported swap chain format " + std::to_string(format));
-    if (pixel_format != swapchain->layer.pixelFormat) {
-        if (mtlb_result result = build_pipeline(swapchain, pixel_format); result != MTLB_OK)
-            return result;
+
+    // Build the new pipeline first so that a failure changes nothing.
+    id<MTLRenderPipelineState> pipeline = nil;
+    {
+        std::lock_guard<std::mutex> lock(swapchain->mutex);
+        if (pixel_format != swapchain->pixel_format) {
+            pipeline = make_pipeline(swapchain, pixel_format);
+            if (!pipeline)
+                return MTLB_ERROR_COMPILE_FAILED;
+        }
     }
-    swapchain->format = static_cast<mtlb_format>(format);
     CAMetalLayer *layer = swapchain->layer;
     run_on_main(^{ configure_layer(layer, pixel_format, width, height); });
+    if (pipeline) {
+        std::lock_guard<std::mutex> lock(swapchain->mutex);
+        swapchain->pipeline = pipeline;
+        swapchain->pixel_format = pixel_format;
+    }
     return MTLB_OK;
 }
 

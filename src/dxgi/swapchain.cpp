@@ -1,6 +1,8 @@
 #include "dxgi/swapchain.h"
 
 #include <algorithm>
+#include <atomic>
+#include <memory>
 #include <mutex>
 #include <vector>
 
@@ -30,6 +32,60 @@ bool is_flip(DXGI_SWAP_EFFECT effect)
 {
     return effect == DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL || effect == DXGI_SWAP_EFFECT_FLIP_DISCARD;
 }
+
+// The state behind the frame latency waitable object: a manual-reset event that is
+// signaled while fewer than `maximum` presented frames are still on the GPU. Shared
+// with the fence callbacks that finish frames, which may outlive the swap chain.
+class Latency {
+public:
+    explicit Latency(HANDLE event) : event_(event) {}
+    ~Latency() { platform_close_event(event_); }
+
+    HANDLE event() const { return event_; }
+    HANDLE duplicate_event() const { return platform_duplicate_event(event_); }
+
+    void frame_presented()
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        ++in_flight_;
+        update();
+    }
+
+    void frame_finished()
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (in_flight_)
+            --in_flight_;
+        update();
+    }
+
+    void set_maximum(UINT maximum)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        maximum_ = maximum;
+        update();
+    }
+
+    UINT maximum()
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return maximum_;
+    }
+
+private:
+    void update()
+    {
+        if (in_flight_ < maximum_)
+            platform_set_event(event_);
+        else
+            platform_reset_event(event_);
+    }
+
+    HANDLE event_;
+    std::mutex mutex_;
+    UINT in_flight_ = 0;
+    UINT maximum_ = 1;
+};
 
 class SwapChain final : public WithPrivateData<RefCounted<IDXGISwapChain4>> {
 public:
@@ -255,27 +311,26 @@ public:
 
     HRESULT STDMETHODCALLTYPE SetMaximumFrameLatency(UINT latency) override
     {
-        if (!latency_event_ || latency == 0)
+        if (!latency_ || latency == 0 || latency > kMaxBuffers)
             return DXGI_ERROR_INVALID_CALL;
-        max_latency_ = latency;
+        latency_->set_maximum(latency);
         return S_OK;
     }
 
     HRESULT STDMETHODCALLTYPE GetMaximumFrameLatency(UINT *latency) override
     {
-        if (!latency)
+        if (!latency || !latency_)
             return DXGI_ERROR_INVALID_CALL;
-        if (!latency_event_)
-            return DXGI_ERROR_INVALID_CALL;
-        *latency = max_latency_;
+        *latency = latency_->maximum();
         return S_OK;
     }
 
-    // The event is signaled when a presented frame has finished on the GPU; it
-    // starts signaled so the first wait passes. Each call returns a new handle.
+    // The event is signaled while fewer than the maximum latency's number of
+    // presented frames are on the GPU, and starts signaled. Each call returns a
+    // new handle to it.
     HANDLE STDMETHODCALLTYPE GetFrameLatencyWaitableObject() override
     {
-        return latency_event_ ? platform_duplicate_event(latency_event_) : nullptr;
+        return latency_ ? latency_->duplicate_event() : nullptr;
     }
 
     HRESULT STDMETHODCALLTYPE SetMatrixTransform(const DXGI_MATRIX_3X2_F *) override { D3D12M_STUB_HR(); }
@@ -324,8 +379,6 @@ private:
         if (handle_)
             mtlb_swapchain_destroy(handle_);
         safe_release(fence_);
-        if (latency_event_)
-            platform_close_event(latency_event_);
         queue_->Release();
         factory_->Release();
     }
@@ -360,9 +413,12 @@ private:
             return hr;
 
         if (desc_.Flags & DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT) {
-            latency_event_ = platform_create_event(true);
+            HANDLE event = platform_create_event(true);
+            if (!event)
+                return E_FAIL;
+            latency_ = std::make_shared<Latency>(event);
             void *fence = nullptr;
-            if (!latency_event_ || FAILED(Fence::create(queue_->device(), 0, __uuidof(ID3D12Fence), &fence)))
+            if (FAILED(Fence::create(queue_->device(), 0, __uuidof(ID3D12Fence), &fence)))
                 return E_FAIL;
             fence_ = static_cast<ID3D12Fence *>(fence);
         }
@@ -416,23 +472,45 @@ private:
             return S_OK;
         if (sync_interval > 4)
             return DXGI_ERROR_INVALID_CALL;
-        std::lock_guard<std::mutex> lock(mutex_);
-        auto *buffer = static_cast<Resource *>(buffers_[current_]);
-        if (mtlb_result result = mtlb_queue_present(queue_->handle(), handle_, buffer->texture(), sync_interval);
-            result != MTLB_OK) {
+        // The bridge call can wait for a drawable: not under the lock.
+        Resource *buffer;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            buffer = static_cast<Resource *>(buffers_[current_]);
+            buffer->AddRef();
+            if (is_flip(desc_.SwapEffect))
+                current_ = (current_ + 1) % static_cast<UINT>(buffers_.size());
+        }
+        const mtlb_result result = mtlb_queue_present(queue_->handle(), handle_, buffer->texture(), sync_interval);
+        buffer->Release();
+        if (result != MTLB_OK) {
             D3D12M_LOG("present failed: %s", mtlb_last_error());
             return to_hresult(result);
         }
-        if (is_flip(desc_.SwapEffect))
-            current_ = (current_ + 1) % static_cast<UINT>(buffers_.size());
         ++present_count_;
-
-        if (fence_) {
-            const UINT64 value = ++fence_value_;
-            mtlb_queue_signal(queue_->handle(), static_cast<Fence *>(fence_)->event(), value);
-            fence_->SetEventOnCompletion(value, latency_event_);
-        }
+        if (latency_)
+            track_frame_latency();
         return S_OK;
+    }
+
+    // Counts the frame just presented as in flight until the GPU has passed a fence
+    // signalled behind it.
+    void track_frame_latency()
+    {
+        std::lock_guard<std::mutex> lock(latency_mutex_);
+        const UINT64 value = ++fence_value_;
+        std::shared_ptr<Latency> latency = latency_;
+        latency->frame_presented();
+        const mtlb_result signalled = mtlb_queue_signal(queue_->handle(), static_cast<Fence *>(fence_)->event(), value);
+        const HRESULT waiting =
+            signalled == MTLB_OK ? queue_->device()->fence_waiter().add(static_cast<Fence *>(fence_), value,
+                                                                         [latency] { latency->frame_finished(); })
+                                 : to_hresult(signalled);
+        if (FAILED(waiting)) {
+            // Never leave the application waiting on a frame nobody will finish.
+            D3D12M_LOG("frame latency tracking failed: 0x%08x", static_cast<unsigned>(waiting));
+            latency->frame_finished();
+        }
     }
 
     HRESULT resize(UINT count, UINT width, UINT height, DXGI_FORMAT format, UINT flags)
@@ -454,7 +532,9 @@ private:
             desc_.Width = width;
         if (height)
             desc_.Height = height;
-        desc_.Flags = flags ? flags : desc_.Flags;
+        // The flags are replaced, except that the latency object cannot appear or go away.
+        desc_.Flags = (flags & ~DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT)
+                      | (desc_.Flags & DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT);
         if (desc_.BufferCount > kMaxBuffers || desc_.Width == 0 || desc_.Height == 0) {
             desc_ = saved;
             return DXGI_ERROR_INVALID_CALL;
@@ -479,13 +559,14 @@ private:
     std::mutex mutex_;  // guards the buffers, their count and size, and the current index
     std::vector<ID3D12Resource *> buffers_;
     UINT current_ = 0;
-    UINT present_count_ = 0;
+    std::atomic<UINT> present_count_{0};
 
-    // Frame latency waitable object (see GetFrameLatencyWaitableObject).
-    HANDLE latency_event_ = nullptr;
+    // Frame latency waitable object (see GetFrameLatencyWaitableObject): a fence
+    // signalled behind each presented frame tells when the frame has finished.
+    std::shared_ptr<Latency> latency_;
     ID3D12Fence *fence_ = nullptr;
+    std::mutex latency_mutex_;  // keeps fence values in step with the order of signals
     UINT64 fence_value_ = 0;
-    UINT max_latency_ = 1;
 };
 
 } // namespace

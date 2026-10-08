@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <mutex>
 #include <thread>
 #include <tuple>
 #include <vector>
@@ -58,6 +59,28 @@ Display query_display()
 }
 #endif
 
+// The display with its sorted, deduplicated mode list. Applications ask for outputs
+// often (on resize, per frame in some engines) and enumerating modes is costly
+// under Wine, so the answer is reused for a couple of seconds.
+Display current_display()
+{
+    static std::mutex mutex;
+    static Display cached;
+    static std::chrono::steady_clock::time_point stamp;
+    static bool valid = false;
+
+    std::lock_guard<std::mutex> lock(mutex);
+    const auto now = std::chrono::steady_clock::now();
+    if (!valid || now - stamp > std::chrono::seconds(2)) {
+        cached = query_display();
+        std::sort(cached.modes.begin(), cached.modes.end());
+        cached.modes.erase(std::unique(cached.modes.begin(), cached.modes.end()), cached.modes.end());
+        stamp = now;
+        valid = true;
+    }
+    return cached;
+}
+
 bool is_displayable(DXGI_FORMAT format)
 {
     switch (format) {
@@ -75,11 +98,9 @@ bool is_displayable(DXGI_FORMAT format)
 
 class Output final : public WithPrivateData<RefCounted<IDXGIOutput6>> {
 public:
-    explicit Output(IDXGIAdapter *parent) : parent_(parent), display_(query_display())
+    explicit Output(IDXGIAdapter *parent) : parent_(parent), display_(current_display())
     {
         parent_->AddRef();
-        std::sort(display_.modes.begin(), display_.modes.end());
-        display_.modes.erase(std::unique(display_.modes.begin(), display_.modes.end()), display_.modes.end());
     }
 
     ~Output() override { parent_->Release(); }

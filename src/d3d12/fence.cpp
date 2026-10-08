@@ -54,6 +54,16 @@ FenceWaiter::~FenceWaiter()
 
 HRESULT FenceWaiter::add(Fence *fence, UINT64 value, HANDLE event)
 {
+    return add_wait(fence, value, {event, nullptr});
+}
+
+HRESULT FenceWaiter::add(Fence *fence, UINT64 value, std::function<void()> callback)
+{
+    return add_wait(fence, value, {nullptr, std::move(callback)});
+}
+
+HRESULT FenceWaiter::add_wait(Fence *fence, UINT64 value, Wait wait_entry)
+{
     std::lock_guard<std::mutex> lock(mutex_);
     if (!queue_) {
         if (mtlb_result result = mtlb_notify_create(&queue_); result != MTLB_OK)
@@ -61,7 +71,7 @@ HRESULT FenceWaiter::add(Fence *fence, UINT64 value, HANDLE event)
         thread_ = std::thread([this] { run(); });
     }
     auto &pending = waits_[fence];
-    const auto wait = pending.emplace(value, event);
+    const auto wait = pending.emplace(value, std::move(wait_entry));
     // Registered under the lock so the entry exists before the notification can
     // arrive; the bridge fires at once if the value was reached meanwhile.
     const mtlb_result result = mtlb_event_notify(fence->event(), value, queue_, reinterpret_cast<uint64_t>(fence));
@@ -83,7 +93,7 @@ void FenceWaiter::run()
 {
     mtlb_notification batch[16];
     uint32_t count = 0;
-    std::vector<HANDLE> reached;
+    std::vector<Wait> reached;
     while (mtlb_notify_wait(queue_, batch, 16, &count) == MTLB_OK && count) {
         reached.clear();
         {
@@ -97,15 +107,19 @@ void FenceWaiter::run()
                 const UINT64 completed = it->first->GetCompletedValue();
                 auto &pending = it->second;
                 while (!pending.empty() && pending.begin()->first <= completed) {
-                    reached.push_back(pending.begin()->second);
+                    reached.push_back(std::move(pending.begin()->second));
                     pending.erase(pending.begin());
                 }
                 if (pending.empty())
                     waits_.erase(it);
             }
         }
-        for (HANDLE event : reached)
-            platform_set_event(event);
+        for (Wait &wait : reached) {
+            if (wait.callback)
+                wait.callback();
+            else
+                platform_set_event(wait.event);
+        }
     }
 }
 

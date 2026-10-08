@@ -55,8 +55,11 @@ Transport connect()
 {
     Transport t;
     HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
-    auto query = reinterpret_cast<NtQueryVirtualMemoryFn>(GetProcAddress(ntdll, "NtQueryVirtualMemory"));
-    t.dispatcher = reinterpret_cast<DispatcherFn *>(GetProcAddress(ntdll, "__wine_unix_call_dispatcher"));
+    auto query = reinterpret_cast<NtQueryVirtualMemoryFn>(
+        reinterpret_cast<void *>(GetProcAddress(ntdll, "NtQueryVirtualMemory")));
+    // The export is a pointer to the dispatcher, not the dispatcher.
+    t.dispatcher = reinterpret_cast<DispatcherFn *>(
+        reinterpret_cast<void *>(GetProcAddress(ntdll, "__wine_unix_call_dispatcher")));
     if (!query || !t.dispatcher || !GetProcAddress(ntdll, "wine_get_version")) {
         t.error = "not running under Wine (ntdll has no unix call dispatcher)";
         return t;

@@ -114,9 +114,12 @@ struct Queue {
 struct Swapchain {
     Device *device;
     CAMetalLayer *layer;
-    id<MTLLibrary> library;               // present_vs / present_fs
+    id<MTLLibrary> library;  // present_vs / present_fs
+
+    std::mutex mutex;        // guards pipeline and pixel_format against a resize
     id<MTLRenderPipelineState> pipeline;  // fullscreen triangle sampling the back buffer
-    mtlb_format format;                   // of the application's back buffers
+    MTLPixelFormat pixel_format;          // of the layer's drawables
+
     std::atomic<bool> display_sync{true};
 
     // Debug aid: D3D12METAL_DUMP_PRESENT=<file.png> writes what the Nth present
@@ -152,10 +155,19 @@ Buffer *find_buffer(Device *device, uint64_t address, uint64_t *offset);
 // Commits pending residency set changes; call before submitting work.
 void commit_residency(Device *device);
 
-// Encodes drawing `texture` onto the swap chain's next drawable and presenting
-// it into `command_buffer`. A missing drawable (a hidden window) skips the frame.
-mtlb_result encode_present(id<MTLCommandBuffer> command_buffer, Swapchain *swapchain, Texture *texture,
-                           uint32_t sync_interval);
+// A drawable of a swap chain with the pipeline that draws onto it.
+struct Drawable {
+    id<CAMetalDrawable> drawable = nil;  // nil when none was available (a hidden window)
+    id<MTLRenderPipelineState> pipeline = nil;
+};
+
+// Takes the swap chain's next drawable and applies the sync interval. Blocks while
+// every drawable is in flight, so call it without holding locks.
+Drawable acquire_drawable(Swapchain *swapchain, uint32_t sync_interval);
+
+// Encodes drawing `texture` onto the drawable and presenting it into `command_buffer`.
+void encode_present(id<MTLCommandBuffer> command_buffer, Swapchain *swapchain, Texture *texture,
+                    const Drawable &drawable);
 
 // Format mapping (formats.mm). Return MTLPixelFormatInvalid / MTLVertexFormatInvalid
 // for formats with no equivalent.

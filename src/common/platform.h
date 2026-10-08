@@ -21,8 +21,9 @@ void platform_set_event(HANDLE event);
 bool platform_window_client_size(HWND window, UINT *width, UINT *height);
 // The top-level window containing `window` (itself if it is one).
 HWND platform_root_window(HWND window);
-// An auto-reset event, or null.
+// A manual-reset event, or null.
 HANDLE platform_create_event(bool signaled);
+void platform_reset_event(HANDLE event);
 // A new handle to the same event, or null.
 HANDLE platform_duplicate_event(HANDLE event);
 void platform_close_event(HANDLE event);

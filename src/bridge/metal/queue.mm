@@ -750,10 +750,13 @@ mtlb_result mtlb_queue_present(mtlb_queue handle, mtlb_swapchain swapchain_handl
         return MTLB_ERROR_INVALID_ARGUMENT;
     if (texture->texture.sampleCount != 1)
         return fail(MTLB_ERROR_INVALID_ARGUMENT, "cannot present a multisampled texture");
+    // A frame with no drawable (nothing to show) is dropped; the queue's other work still runs.
+    const Drawable drawable = acquire_drawable(swapchain, sync_interval);
     std::lock_guard<std::mutex> lock(queue->mutex);
-    mtlb_result result = encode_present(open_command_buffer(queue), swapchain, texture, sync_interval);
+    if (drawable.drawable)
+        encode_present(open_command_buffer(queue), swapchain, texture, drawable);
     commit_open(queue);
-    return result;
+    return MTLB_OK;
 }
 
 // Appends a signal to the open buffer and commits it, so a signal after

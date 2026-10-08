@@ -1,6 +1,7 @@
 // ID3D12Fence backed by a Metal shared event.
 #pragma once
 
+#include <functional>
 #include <map>
 #include <mutex>
 #include <thread>
@@ -44,17 +45,28 @@ public:
 
     // Sets `event` once `fence` reaches `value`.
     HRESULT add(Fence *fence, UINT64 value, HANDLE event);
+    // Calls `callback`, on the waiter thread, once `fence` reaches `value`. It must
+    // not wait for anything the waiter thread serves, and it does not run once the
+    // fence is destroyed (one already running is not waited for: capture shared state).
+    HRESULT add(Fence *fence, UINT64 value, std::function<void()> callback);
     // Drops the pending waits of a fence that is being destroyed.
     void forget(Fence *fence);
 
 private:
+    // What to do when a value is reached: set an application event or call back.
+    struct Wait {
+        HANDLE event = nullptr;
+        std::function<void()> callback;
+    };
+
+    HRESULT add_wait(Fence *fence, UINT64 value, Wait wait);
     void run();
 
     std::mutex mutex_;
     mtlb_notify queue_ = 0;
     std::thread thread_;
     // Pending waits per fence, keyed by the value awaited.
-    std::unordered_map<Fence *, std::multimap<UINT64, HANDLE>> waits_;
+    std::unordered_map<Fence *, std::multimap<UINT64, Wait>> waits_;
 };
 
 } // namespace d3d12m

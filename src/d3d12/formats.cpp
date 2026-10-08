@@ -4,8 +4,6 @@
 #include <climits>
 #include <cstring>
 
-
-
 namespace d3d12m {
 
 mtlb_format to_mtlb_format(DXGI_FORMAT format)
