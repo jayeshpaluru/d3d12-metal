@@ -62,15 +62,6 @@ MTLPixelFormat layer_pixel_format(uint32_t format)
     }
 }
 
-// CALayer state is only safe to change on the main thread.
-void run_on_main(void (^block)(void))
-{
-    if ([NSThread isMainThread])
-        block();
-    else
-        dispatch_sync(dispatch_get_main_queue(), block);
-}
-
 // Builds the pass pipeline for drawables of `pixel_format`; nil (with fail() set) on error.
 id<MTLRenderPipelineState> make_pipeline(Swapchain *swapchain, MTLPixelFormat pixel_format)
 {

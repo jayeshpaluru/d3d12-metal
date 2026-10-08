@@ -22,7 +22,7 @@ struct Mode {
     {
         return std::tie(width, height, refresh_hz) < std::tie(o.width, o.height, o.refresh_hz);
     }
-    bool operator==(const Mode &o) const { return !(*this < o) && !(o < *this); }
+    bool operator==(const Mode &) const = default;
 };
 
 struct Display {

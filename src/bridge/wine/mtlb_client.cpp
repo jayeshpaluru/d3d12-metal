@@ -34,8 +34,9 @@ struct UnicodeString {
 struct Transport {
     DispatcherFn *dispatcher = nullptr;
     UINT64 handle = 0;
-    bool ready = false;
-    std::string error;
+    std::string error;  // empty once connected
+
+    bool ready() const { return error.empty(); }
 };
 
 // Loads the unix module from `name` (a bare name searched in WINEDLLPATH and
@@ -86,7 +87,6 @@ Transport connect()
                   "or in one of the WINEDLLPATH directories";
         return t;
     }
-    t.ready = true;
     return t;
 }
 
@@ -103,7 +103,7 @@ const Transport &transport()
 static bool mtlb_wine_call(unsigned index, void *params, const char *name)
 {
     const Transport &t = transport();
-    if (!t.ready) {
+    if (!t.ready()) {
         static bool reported = false;
         if (!reported) {
             reported = true;

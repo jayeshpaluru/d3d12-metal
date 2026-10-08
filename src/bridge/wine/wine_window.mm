@@ -45,11 +45,7 @@ CAMetalLayer *layer_for_window(uint64_t window, id<MTLDevice> device)
     // moved, which may be just after the application's CreateWindow returns.
     for (int attempt = 0; attempt < 200; ++attempt) {
         __block CAMetalLayer *layer = nil;
-        void (^lookup)(void) = ^{ layer = find_layer(window, device); };
-        if ([NSThread isMainThread])
-            lookup();
-        else
-            dispatch_sync(dispatch_get_main_queue(), lookup);
+        mtlb::run_on_main(^{ layer = find_layer(window, device); });
         if (layer)
             return layer;
         usleep(10 * 1000);

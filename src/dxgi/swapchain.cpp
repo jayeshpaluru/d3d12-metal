@@ -73,15 +73,21 @@ public:
     }
 
 private:
+    // Each event call is a round trip to the Wine server: only when the state flips.
     void update()
     {
-        if (in_flight_ < maximum_)
+        const bool ready = in_flight_ < maximum_;
+        if (ready == signaled_)
+            return;
+        signaled_ = ready;
+        if (ready)
             platform_set_event(event_);
         else
             platform_reset_event(event_);
     }
 
     HANDLE event_;
+    bool signaled_ = true;  // created signaled
     std::mutex mutex_;
     UINT in_flight_ = 0;
     UINT maximum_ = 1;

@@ -54,15 +54,10 @@ FenceWaiter::~FenceWaiter()
 
 HRESULT FenceWaiter::add(Fence *fence, UINT64 value, HANDLE event)
 {
-    return add_wait(fence, value, {event, nullptr});
+    return add(fence, value, [event] { platform_set_event(event); });
 }
 
 HRESULT FenceWaiter::add(Fence *fence, UINT64 value, std::function<void()> callback)
-{
-    return add_wait(fence, value, {nullptr, std::move(callback)});
-}
-
-HRESULT FenceWaiter::add_wait(Fence *fence, UINT64 value, Wait wait_entry)
 {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!queue_) {
@@ -71,7 +66,7 @@ HRESULT FenceWaiter::add_wait(Fence *fence, UINT64 value, Wait wait_entry)
         thread_ = std::thread([this] { run(); });
     }
     auto &pending = waits_[fence];
-    const auto wait = pending.emplace(value, std::move(wait_entry));
+    const auto wait = pending.emplace(value, std::move(callback));
     // Registered under the lock so the entry exists before the notification can
     // arrive; the bridge fires at once if the value was reached meanwhile.
     const mtlb_result result = mtlb_event_notify(fence->event(), value, queue_, reinterpret_cast<uint64_t>(fence));
@@ -114,12 +109,8 @@ void FenceWaiter::run()
                     waits_.erase(it);
             }
         }
-        for (Wait &wait : reached) {
-            if (wait.callback)
-                wait.callback();
-            else
-                platform_set_event(wait.event);
-        }
+        for (Wait &wait : reached)
+            wait();
     }
 }
 

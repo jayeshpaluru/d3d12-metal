@@ -53,13 +53,8 @@ public:
     void forget(Fence *fence);
 
 private:
-    // What to do when a value is reached: set an application event or call back.
-    struct Wait {
-        HANDLE event = nullptr;
-        std::function<void()> callback;
-    };
+    using Wait = std::function<void()>;
 
-    HRESULT add_wait(Fence *fence, UINT64 value, Wait wait);
     void run();
 
     std::mutex mutex_;
