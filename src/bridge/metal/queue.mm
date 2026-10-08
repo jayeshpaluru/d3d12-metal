@@ -519,14 +519,20 @@ void mtlb_queue_destroy(mtlb_queue handle)
     delete queue;
 }
 
-mtlb_result mtlb_queue_submit(mtlb_queue handle, const uint8_t *stream, size_t length)
+mtlb_result mtlb_queue_submit(mtlb_queue handle, const mtlb_span *spans, uint32_t count)
 {
     Queue *queue = from_handle<Queue>(handle);
-    if (!queue || (!stream && length))
+    if (!queue || (!spans && count))
         return MTLB_ERROR_INVALID_ARGUMENT;
     id<MTLCommandBuffer> cb = make_command_buffer(queue);
     Replay replay(queue, cb);
-    mtlb_result result = replay.run(stream, length);
+    mtlb_result result = MTLB_OK;
+    for (uint32_t i = 0; i < count && result == MTLB_OK; ++i) {
+        if (!spans[i].data && spans[i].size)
+            result = fail(MTLB_ERROR_INVALID_ARGUMENT, "span without data");
+        else
+            result = replay.run(spans[i].data, spans[i].size);
+    }
     replay.finish();
     if (result == MTLB_OK)
         [cb commit];

@@ -34,13 +34,22 @@ int main()
     mtlb_queue queue = 0;
     CHECK(mtlb_queue_create(device, &queue) == MTLB_OK);
 
-    auto submit = [&](const Stream &s) { return mtlb_queue_submit(queue, s.bytes.data(), s.bytes.size()); };
+    auto submit = [&](const Stream &s) {
+        const mtlb_span span = {s.bytes.data(), s.bytes.size()};
+        return mtlb_queue_submit(queue, &span, 1);
+    };
 
     // Valid streams.
     CHECK(mtlb_queue_submit(queue, nullptr, 0) == MTLB_OK);
     Stream valid;
     valid.add(MTLB_CMD_RESET_STATE, sizeof(mtlb_cmd_reset_state));
     CHECK(submit(valid) == MTLB_OK);
+
+    // Several spans replay into one submit; a bad span fails the whole submit.
+    const mtlb_span two[] = {{valid.bytes.data(), valid.bytes.size()}, {valid.bytes.data(), valid.bytes.size()}};
+    CHECK(mtlb_queue_submit(queue, two, 2) == MTLB_OK);
+    const mtlb_span bad[] = {{valid.bytes.data(), valid.bytes.size()}, {nullptr, 8}};
+    CHECK(mtlb_queue_submit(queue, bad, 2) != MTLB_OK);
 
     // Truncated header.
     Stream truncated;

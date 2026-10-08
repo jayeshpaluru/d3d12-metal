@@ -35,8 +35,8 @@ CommandQueue::~CommandQueue()
 
 void CommandQueue::ExecuteCommandLists(UINT count, ID3D12CommandList *const *lists)
 {
-    // The command streams of all lists go to the backend in a single submit.
-    std::vector<uint8_t> stream;
+    // All lists go to the backend in a single submit, one span per list.
+    std::vector<mtlb_span> spans(count);
     for (UINT i = 0; i < count; ++i) {
         // Only this layer's command lists can be submitted.
         auto *list = static_cast<CommandList *>(static_cast<ID3D12GraphicsCommandList1 *>(lists[i]));
@@ -44,9 +44,9 @@ void CommandQueue::ExecuteCommandLists(UINT count, ID3D12CommandList *const *lis
             D3D12M_LOG("ExecuteCommandLists: command list %u is still recording", i);
             return;
         }
-        stream.insert(stream.end(), list->stream().begin(), list->stream().end());
+        spans[i] = {list->stream().data(), list->stream().size()};
     }
-    if (mtlb_queue_submit(queue_, stream.data(), stream.size()) != MTLB_OK)
+    if (mtlb_queue_submit(queue_, spans.data(), count) != MTLB_OK)
         D3D12M_LOG("command submission failed: %s", mtlb_last_error());
 }
 

@@ -370,9 +370,17 @@ MTLB_EXPORT void mtlb_pipeline_destroy(mtlb_pipeline pipeline);
 MTLB_EXPORT mtlb_result mtlb_queue_create(mtlb_device device, mtlb_queue *out);
 MTLB_EXPORT void mtlb_queue_destroy(mtlb_queue queue);
 
-/* Replays a command stream (see mtlb_cmd.h) into one command buffer and
- * commits it. Returns once the work is committed, not completed. */
-MTLB_EXPORT mtlb_result mtlb_queue_submit(mtlb_queue queue, const uint8_t *stream, size_t length);
+/* A contiguous byte range; one command stream per span. */
+typedef struct mtlb_span {
+    const uint8_t *data;
+    uint64_t size;
+} mtlb_span;
+
+/* Replays `count` command streams (see mtlb_cmd.h), in order, into one command
+ * buffer and commits it. Each stream starts with RESET_STATE, so draw state does
+ * not carry from one span to the next. Returns once the work is committed, not
+ * completed. */
+MTLB_EXPORT mtlb_result mtlb_queue_submit(mtlb_queue queue, const mtlb_span *spans, uint32_t count);
 
 /* GPU-timeline signal and wait, ordered with respect to prior submissions. */
 MTLB_EXPORT mtlb_result mtlb_queue_signal(mtlb_queue queue, mtlb_event event, uint64_t value);
@@ -386,6 +394,8 @@ MTLB_EXPORT void mtlb_event_signal_cpu(mtlb_event event, uint64_t value);
  * Returns MTLB_ERROR_TIMEOUT on timeout. */
 MTLB_EXPORT mtlb_result mtlb_event_wait_cpu(mtlb_event event, uint64_t value, uint64_t timeout_ms);
 
+MTLB_ASSERT_SIZE(mtlb_span, 16);
+MTLB_ASSERT_OFFSET(mtlb_span, size, 8);
 MTLB_ASSERT_SIZE(mtlb_format_info, 16);
 MTLB_ASSERT_SIZE(mtlb_device_caps, 288);
 MTLB_ASSERT_SIZE(mtlb_buffer_info, 24);
