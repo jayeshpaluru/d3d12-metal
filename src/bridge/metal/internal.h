@@ -198,6 +198,10 @@ struct Queue {
     int debug_depth = 0;  // debug groups opened on the open command buffer by mtlb_queue_marker
 
     id<MTLFence> fence = nil;
+    // Private scratch buffers of ExecuteIndirect that command buffers have finished with.
+    std::mutex scratch_mutex;
+    std::vector<id<MTLBuffer>> scratch_free;
+
     id<MTLSharedEvent> resolve_event = nil;  // signalled by the completion handler that copies timestamps
     uint64_t resolve_value = 0, resolve_wait = 0;
     bool fence_pending = false;  // an encoder updated the fence and no later encoder has waited yet

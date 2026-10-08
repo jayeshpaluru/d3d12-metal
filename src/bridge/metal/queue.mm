@@ -263,6 +263,31 @@ private:
         flush_clears(false);
     }
 
+    // A private buffer of at least `size` bytes from the queue's pool (the smallest that fits), or a new one.
+    id<MTLBuffer> take_scratch(uint64_t size)
+    {
+        {
+            std::lock_guard<std::mutex> lock(queue_->scratch_mutex);
+            auto &free = queue_->scratch_free;
+            auto best = free.end();
+            for (auto it = free.begin(); it != free.end(); ++it) {
+                if ([*it length] >= size && (best == free.end() || [*it length] < [*best length]))
+                    best = it;
+            }
+            if (best != free.end()) {
+                id<MTLBuffer> found = *best;
+                free.erase(best);
+                return found;
+            }
+        }
+        // Rounded up so that the next call with a slightly larger count can reuse it.
+        uint64_t rounded = 64 * 1024;
+        while (rounded < size)
+            rounded <<= 1;
+        return [queue_->device->device newBufferWithLength:rounded
+                                                   options:MTLResourceStorageModePrivate | MTLResourceHazardTrackingModeUntracked];
+    }
+
     void note_error(mtlb_result result);
 
     Queue *queue_;
@@ -1206,12 +1231,15 @@ mtlb_result Replay::execute_indirect(const mtlb_cmd_execute_indirect &cmd)
         vb_offset = (root_size + 15) & ~15u;
         action_offset = vb_offset + sizeof(state_.vertex_buffers);  // 496 bytes, a multiple of 16
         record_size = (action_offset + 32 + 15) & ~15u;
-        scratch = [queue_->device->device newBufferWithLength:uint64_t(record_size) * max_count
-                                                      options:MTLResourceStorageModePrivate | MTLResourceHazardTrackingModeUntracked];
+        scratch = take_scratch(uint64_t(record_size) * max_count);
         if (!scratch)
             return fail(MTLB_ERROR_OUT_OF_MEMORY, "indirect scratch buffer");
-        // The scratch buffer lives until the command buffer has run.
-        [cb_ addCompletedHandler:^(id<MTLCommandBuffer>) { (void)scratch; }];
+        // The scratch buffer goes back to the queue's pool once the command buffer has run.
+        Queue *queue = queue_;
+        [cb_ addCompletedHandler:^(id<MTLCommandBuffer>) {
+            std::lock_guard<std::mutex> lock(queue->scratch_mutex);
+            queue->scratch_free.push_back(scratch);
+        }];
 
         id<MTLComputePipelineState> kernel = internal_kernel(queue_->device, @"translate_indirect");
         if (!kernel)
