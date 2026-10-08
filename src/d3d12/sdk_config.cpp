@@ -12,6 +12,11 @@ extern "C" HRESULT D3D12CreateDevice(IUnknown *adapter, D3D_FEATURE_LEVEL minimu
 
 namespace {
 
+// The class IDs, which the MinGW headers declare without defining (or lack).
+const GUID kClsidSdkConfiguration = {0x7cda6aca, 0xa03e, 0x49c8, {0x94, 0x58, 0x03, 0x34, 0xd2, 0x0e, 0x07, 0xce}};
+const GUID kClsidRemovedExtendedData = {0x4a75bbc4, 0x9ff4, 0x4ad8, {0x9f, 0x18, 0xab, 0xae, 0x84, 0xdc, 0x5f, 0xf2}};
+const GUID kClsidDeviceFactory = {0x114863bf, 0xc386, 0x4aee, {0xb3, 0x9d, 0x8f, 0x0b, 0xbb, 0x06, 0x29, 0x55}};
+
 class DeviceFactory final : public ID3D12DeviceFactory {
 public:
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **out) override
@@ -80,11 +85,11 @@ D3D12M_EXPORT HRESULT D3D12GetInterface(REFCLSID clsid, REFIID iid, void **objec
     if (!object)
         return E_INVALIDARG;
     *object = nullptr;
-    if (clsid == CLSID_D3D12SDKConfiguration)
+    if (clsid == kClsidSdkConfiguration)
         return g_configuration.QueryInterface(iid, object);
-    if (clsid == CLSID_D3D12DeviceFactory)
+    if (clsid == kClsidDeviceFactory)
         return g_factory.QueryInterface(iid, object);
-    if (clsid == CLSID_D3D12DeviceRemovedExtendedData)
+    if (clsid == kClsidRemovedExtendedData)
         return dred_settings()->QueryInterface(iid, object);
     // The debug layer and the tools are not provided.
     D3D12M_LOG("D3D12GetInterface: no object for this class");

@@ -2,21 +2,37 @@
 // DXGI video memory budget.
 #include "t12.h"
 
-extern "C" HRESULT WINAPI D3D12GetInterface(REFCLSID clsid, REFIID iid, void **object);
+#ifdef _WIN32
+// The import library of the MinGW toolchain does not have it (and its headers do not define the class IDs).
+HRESULT D3D12GetInterface(REFCLSID clsid, REFIID iid, void **object)
+{
+    using Fn = HRESULT(WINAPI *)(REFCLSID, REFIID, void **);
+    static const Fn fn = reinterpret_cast<Fn>(reinterpret_cast<void *>(GetProcAddress(GetModuleHandleW(L"d3d12.dll"), "D3D12GetInterface")));
+    CHECK(fn != nullptr);
+    return fn(clsid, iid, object);
+}
+#else
+extern "C" HRESULT D3D12GetInterface(REFCLSID clsid, REFIID iid, void **object);
+#endif
+
+namespace {
+const GUID kSdkConfiguration = {0x7cda6aca, 0xa03e, 0x49c8, {0x94, 0x58, 0x03, 0x34, 0xd2, 0x0e, 0x07, 0xce}};
+const GUID kRemovedExtendedData = {0x4a75bbc4, 0x9ff4, 0x4ad8, {0x9f, 0x18, 0xab, 0xae, 0x84, 0xdc, 0x5f, 0xf2}};
+}
 
 int main()
 {
     // ---- SDK configuration: any SDK version is accepted --------------------------------------------------------
     {
         ComPtr<ID3D12SDKConfiguration> config;
-        CHECK_HR(D3D12GetInterface(CLSID_D3D12SDKConfiguration, IID_PPV_ARGS(config.GetAddressOf())));
+        CHECK_HR(D3D12GetInterface(kSdkConfiguration, IID_PPV_ARGS(config.GetAddressOf())));
         CHECK_HR(config->SetSDKVersion(610, ".\\D3D12\\"));
     }
 
     // ---- DRED settings ---------------------------------------------------------------------------------------------
     {
         ComPtr<ID3D12DeviceRemovedExtendedDataSettings> dred;
-        CHECK_HR(D3D12GetInterface(CLSID_D3D12DeviceRemovedExtendedData, IID_PPV_ARGS(dred.GetAddressOf())));
+        CHECK_HR(D3D12GetInterface(kRemovedExtendedData, IID_PPV_ARGS(dred.GetAddressOf())));
         dred->SetAutoBreadcrumbsEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
         dred->SetPageFaultEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
     }
@@ -27,7 +43,7 @@ int main()
         void *object = &object;
         CHECK(D3D12GetInterface(unknown, __uuidof(IUnknown), &object) == E_NOINTERFACE);
         CHECK(object == nullptr);
-        CHECK(D3D12GetInterface(CLSID_D3D12SDKConfiguration, __uuidof(IUnknown), nullptr) == E_INVALIDARG);
+        CHECK(D3D12GetInterface(kSdkConfiguration, __uuidof(IUnknown), nullptr) == E_INVALIDARG);
     }
 
     // ---- Experimental features: none can be enabled ----------------------------------------------------------
