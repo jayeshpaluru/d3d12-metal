@@ -55,11 +55,12 @@ void stats_frame()
     const double seconds = last_time ? (time - last_time) / 1e9 : 0;
     last_time = time;
     log_printf(
-                 "d3d12-metal stats (per frame, last %u): fps %.1f, gpu %.2f ms, submits %.1f, lists %.1f, command buffers %.1f, render passes %.1f, "
+                 "d3d12-metal stats (per frame, last %u): fps %.1f, gpu %.2f ms (busy %.2f), submits %.1f, lists %.1f, command buffers %.1f, render passes %.1f, "
                  "compute encoders %.1f, blit encoders %.1f, barriers %.1f, fence syncs %.1f, descriptor writes %.0f, "
                  "PSO creations %.2f, stream KB %.1f, unix calls %.1f; PSO creation total %llu in %.1f ms",
                  kFramesPerReport, seconds > 0 ? kFramesPerReport / seconds : 0.0,
-                 per_frame(back.gpu_nanos, last_back.gpu_nanos) / 1e6, f(Stat::Submits), f(Stat::CommandLists), per_frame(back.command_buffers, last_back.command_buffers),
+                 per_frame(back.gpu_nanos, last_back.gpu_nanos) / 1e6,
+                 per_frame(back.gpu_busy_nanos, last_back.gpu_busy_nanos) / 1e6, f(Stat::Submits), f(Stat::CommandLists), per_frame(back.command_buffers, last_back.command_buffers),
                  per_frame(back.render_encoders, last_back.render_encoders), per_frame(back.compute_encoders, last_back.compute_encoders),
                  per_frame(back.blit_encoders, last_back.blit_encoders), per_frame(back.barriers, last_back.barriers),
                  per_frame(back.syncs, last_back.syncs), f(Stat::DescriptorWrites), f(Stat::PsoCreations),

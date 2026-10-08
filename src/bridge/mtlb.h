@@ -243,6 +243,7 @@ typedef struct mtlb_stats {
     uint64_t event_queries;    /* mtlb_event_completed_value calls (fence reads that went to Metal) */
     uint64_t pipeline_attempts; /* mtlb_pipeline_create and mtlb_compute_pipeline_create calls */
     uint64_t gpu_nanos;        /* GPU time of completed command buffers (GPUEndTime - GPUStartTime, summed) */
+    uint64_t gpu_busy_nanos;   /* the same without double counting buffers that overlapped (a union of intervals) */
 } mtlb_stats;
 MTLB_EXPORT void mtlb_stats_get(mtlb_stats *out);
 
@@ -724,7 +725,7 @@ MTLB_ASSERT_OFFSET(mtlb_span, size, 8);
 MTLB_ASSERT_SIZE(mtlb_format_info, 16);
 MTLB_ASSERT_SIZE(mtlb_device_caps, 304);
 MTLB_ASSERT_SIZE(mtlb_cache_stats, 48);
-MTLB_ASSERT_SIZE(mtlb_stats, 80);
+MTLB_ASSERT_SIZE(mtlb_stats, 88);
 MTLB_ASSERT_SIZE(mtlb_buffer_info, 24);
 MTLB_ASSERT_OFFSET(mtlb_buffer_info, gpu_address, 8);
 MTLB_ASSERT_SIZE(mtlb_descriptor, 24);

@@ -1899,6 +1899,18 @@ mtlb_result Replay::execute(const mtlb_cmd_header *header)
 // The buffer retains what it references: an application may release a pipeline
 // or fence as soon as it sees a fence signalled, which can be before the buffer
 // retires, and Metal's validation layer rejects that for unretained buffers.
+// Adds a finished command buffer's GPU interval (seconds on the mach clock) to the GPU time counters: the plain sum,
+// and the part of it past the latest end seen so far (the union, when buffers finish in order).
+void note_gpu_time(double start, double end)
+{
+    static std::mutex mutex;
+    static double latest_end = 0;
+    std::lock_guard<std::mutex> lock(mutex);
+    g_stats[kStatGpuNanos].fetch_add(static_cast<uint64_t>((end - start) * 1e9), std::memory_order_relaxed);
+    g_stats[kStatGpuBusyNanos].fetch_add(static_cast<uint64_t>((end - std::max(start, latest_end)) * 1e9), std::memory_order_relaxed);
+    latest_end = std::max(latest_end, end);
+}
+
 id<MTLCommandBuffer> open_command_buffer(Queue *queue)
 {
     if (!queue->open) {
@@ -1913,7 +1925,7 @@ id<MTLCommandBuffer> open_command_buffer(Queue *queue)
             if (done.error)
                 backend_log("command buffer failed: %s", done.error.localizedDescription.UTF8String);
             else if (done.GPUEndTime > done.GPUStartTime)
-                g_stats[kStatGpuNanos].fetch_add(static_cast<uint64_t>((done.GPUEndTime - done.GPUStartTime) * 1e9), std::memory_order_relaxed);
+                note_gpu_time(done.GPUStartTime, done.GPUEndTime);
         }];
     }
     return queue->open;
@@ -1946,7 +1958,7 @@ void mtlb_stats_get(mtlb_stats *out)
     const auto &s = mtlb::g_stats;
     *out = {s[mtlb::kStatSubmits], s[mtlb::kStatCommandBuffers], s[mtlb::kStatRenderEncoders], s[mtlb::kStatComputeEncoders],
             s[mtlb::kStatBlitEncoders], s[mtlb::kStatBarriers], s[mtlb::kStatSyncs], s[mtlb::kStatEventQueries], s[mtlb::kStatPipelineAttempts],
-            s[mtlb::kStatGpuNanos]};
+            s[mtlb::kStatGpuNanos], s[mtlb::kStatGpuBusyNanos]};
 }
 
 mtlb_result mtlb_queue_create(mtlb_device handle, mtlb_queue *out)
