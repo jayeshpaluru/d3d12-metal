@@ -69,6 +69,77 @@
 - **Residency:** every allocation is added to a per-device `MTLResidencySet`
   attached to the queue, so no per-draw `useResource` calls.
 
+## Milestone 3 design
+
+- **Interface versions.** `Device` implements `ID3D12Device10`; lists `ID3D12GraphicsCommandList7`.
+  Objects carry a private IID (`internal_iid<T>()`): `ours<T>(p)` turns an application-supplied
+  pointer into one of ours (QueryInterface plus release) so wrappers and foreign objects are
+  rejected instead of cast. Pipeline state streams are parsed into the same description as the
+  descriptor structs (`pipeline_stream.cpp`, with local mirrors of the newer subobject layouts).
+  `CheckFeatureSupport` reports only what is implemented (feature level 12_0, shader model 6.6,
+  resource binding tier 3, tiled resources none, ray tracing and mesh shaders none).
+- **Descriptors.** A descriptor is the 24-byte `mtlb_descriptor` the converter's tables expect
+  (buffer GPU address, texture view resource ID, metadata). Per-type increments differ
+  (`descriptor_size()`). Descriptor creation happens in the front-end: textures and typed
+  buffers create Metal views through the bridge (cached per resource and view description),
+  and the result is written into the heap's CPU-visible memory. CBV/SRV/UAV heaps also keep a
+  shadow `ViewInfo` table (resource, format, dimension, range): UAV clears need the resource a
+  descriptor refers to, which the packed form does not hold. The device finds the heap behind
+  a CPU handle through a registry keyed by CPU address. Null descriptors come from a per-device
+  cache of views of a dummy resource.
+- **Samplers.** Sampler heaps hold sampler IDs. Static samplers are not supported by the
+  converter, so a root signature with static samplers gets an extra descriptor table appended
+  (and the shader is compiled against the rewritten signature); the table lives in a device
+  sampler heap created with the root signature.
+- **Compute.** `Dispatch`, compute root arguments and compute PSOs mirror the graphics path
+  (`RootState` per bind point, flushed lazily into argument-buffer snapshots in the stream).
+  Compute encoders are `MTLDispatchTypeConcurrent`: the order between dispatches is up to the
+  barriers. Empty dispatches are skipped (Metal validation rejects them).
+- **Depth-stencil.** `SET_RENDER_TARGETS` carries a DSV and flags (read-only depth/stencil).
+  The backend opens the render encoder with both attachments, clears become load actions and
+  clear-only passes. Pipeline variants are keyed on the depth format.
+- **Heaps and placed resources.** `Heap` owns an `MTLHeap` (untracked resources). A placed
+  resource aliases the memory at its offset. D3D12 leaves such memory undefined until the
+  application initialises it; render targets and depth-stencils with a clear value are
+  cleared on first use by the queue (a pending-init list is turned into `CLEAR_RTV`/`CLEAR_DSV`
+  records at the head of the first submit that references them), so titles that rely on the
+  hardware behaviour of zeroed memory do not see garbage.
+- **Barriers and hazards.** All resources are untracked (`MTLHazardTrackingModeUntracked`),
+  since placed resources must be and GPU-address access cannot be tracked anyway. One
+  `MTLFence` per queue is updated at the end of every encoder; the next encoder waits on it
+  only when `sync_needed_` is set: after a barrier, at the start of a command list, and at the
+  start of a submit. A barrier ends the open blit and render encoders (so their work is
+  visible), and sets `sync_needed_`; compute encoders end at a barrier too. Transition barriers
+  with equal states and `BEGIN_ONLY` split barriers are skipped; an aliasing barrier names both
+  resources. Without barriers consecutive compute dispatches overlap, as in D3D12.
+  `D3D12METAL_NO_BARRIERS` removes the waits (for finding missing barriers in a test).
+- **Multiple queues.** Each queue has its own `MTLCommandQueue`, fence and open command buffer.
+  Cross-queue `Signal`/`Wait` use `MTLSharedEvent` (a D3D12 fence is a shared event). Copy and
+  compute queues run concurrently with the direct queue.
+- **Large typed buffers.** Typed buffer SRVs/UAVs are texture-buffer views (Metal limit 2^28
+  texels); structured and raw buffers are plain GPU addresses with no size limit.
+- **ExecuteIndirect.** The command signature is validated at creation. Execution translates
+  the application's argument buffer with an internal compute kernel (`translate_indirect`) into
+  Metal indirect arguments plus the converter's draw-parameter structs (`IRRuntimeDraw*`
+  overloads), reading the count buffer on the GPU and writing zero-instance draws for
+  unused slots; constants, root views and vertex buffer views in the signature are applied by
+  the same kernel into a per-command argument buffer.
+- **MSAA.** Multisampled textures and render targets with sample counts the device reports
+  (`mtlb_device_caps::sample_counts`), `ResolveSubresource` through a render pass resolve or a
+  blit for non-resolvable formats, multisample SRVs.
+- **Queries.** Occlusion queries use the render pass visibility buffer (`setVisibilityResultMode`
+  at `BeginQuery`/`EndQuery`). A timestamp is a one-dispatch compute pass of its own with a
+  counter sample at its end (Apple GPUs sample counters only at encoder boundaries).
+  `ResolveQueryData` of timestamps commits and waits for the command buffer so far, because
+  a blit in the same command buffer read zeros for samples written by earlier passes; the
+  cost is a CPU stall per resolve. GPU timestamps use the `mach_absolute_time` scale, which
+  `GetClockCalibration` pairs with `QueryPerformanceCounter`.
+- **Markers.** `BeginEvent`/`EndEvent`/`SetMarker` become Metal debug groups.
+  `WriteBufferImmediate` is an internal one-thread kernel after the preceding work.
+- **Bundles.** A bundle is recorded like a direct list (without pipeline or root-signature
+  checks, which it inherits) and `ExecuteBundle` appends its stream to the executing list,
+  minus the initial `RESET_STATE`, copying the root state it left behind.
+
 ## Wine build
 
 Under Wine the layer is two halves in one process (one address space):
@@ -164,4 +235,5 @@ writes it as a PNG: the verification path where no screenshot can be taken.
 | `src/dxgi/` | `IDXGI*` COM implementations |
 | `tests/` | Native headless tests (render offscreen, read back, compare) |
 | `tests/wine/` | Win32 test programs run under Wine (MinGW): `wine_basic`, `swapchain_test`, `hello_triangle` |
+| `tests/portable/` | Tests that build both natively and as Win32 programs (`t12.h`), one per feature area |
 | `tests/shaders/` | HLSL, compiled to DXIL with DXC at build time |
