@@ -44,12 +44,15 @@ constexpr uint64_t kTraceEvery = 1000;
 struct TraceSite {
     const char *function;  // __PRETTY_FUNCTION__ of the traced method
     std::atomic<uint64_t> count{0};
-    std::atomic<uint64_t> calls{0}, nanos{0};  // profiling only
+    std::atomic<uint64_t> calls{0}, nanos{0};  // profiling only (calls is an estimate: see profile_begin)
+    std::atomic<bool> registered{false}, always_timed{false};
 };
 
 uint64_t profile_now();
-// Counts a call of `site` (registering it on the first); returns the start time when this call is one of the timed
-// ones (one in kProfileSample, so the clock reads stay cheap), else 0.
+// Returns the start time when this call is one of the timed ones, else 0, and then counts it as kProfileSample calls
+// (registering the site on the first). One call in kProfileSample of each thread is timed, whichever method it is, so
+// that threads polling cheap methods in a loop share no memory with each other (a counter per method would bounce
+// between cores and cost more than the methods); a method found to take long is timed on every call.
 uint64_t profile_begin(TraceSite &site);
 constexpr unsigned kProfileSample = 16;
 void profile_end(TraceSite &site, uint64_t start);

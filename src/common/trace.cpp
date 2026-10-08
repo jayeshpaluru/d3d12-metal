@@ -266,19 +266,8 @@ std::mutex &g_profile_mutex = *new std::mutex;  // never destroyed: methods can 
 std::vector<TraceSite *> &g_profile_sites = *new std::vector<TraceSite *>;
 } // namespace
 
-uint64_t profile_begin(TraceSite &site)
-{
-    const uint64_t calls = site.calls.fetch_add(1, std::memory_order_relaxed);
-    if (calls == 0) {
-        std::lock_guard<std::mutex> lock(g_profile_mutex);
-        g_profile_sites.push_back(&site);
-    }
-    return calls % kProfileSample == 0 ? profile_now() : 0;
-}
-
 // What reading the clock twice back to back costs (the least of many tries): a timed call's interval includes the
-// second read and the tail of the first, which would otherwise be counted as time of the method (a clock read costs
-// hundreds of nanoseconds under Wine, many times what a cheap method does).
+// second read and the tail of the first, which would otherwise be counted as time of the method.
 static uint64_t clock_overhead()
 {
     static const uint64_t overhead = [] {
@@ -292,10 +281,30 @@ static uint64_t clock_overhead()
     return overhead;
 }
 
+static constexpr uint64_t kSlowNanos = 20000;
+
+uint64_t profile_begin(TraceSite &site)
+{
+    thread_local unsigned tick = 0;
+    const bool always = site.always_timed.load(std::memory_order_relaxed);
+    if (!always && ++tick % kProfileSample != 0)
+        return 0;
+    site.calls.fetch_add(always ? 1 : kProfileSample, std::memory_order_relaxed);
+    if (!site.registered.load(std::memory_order_relaxed) && !site.registered.exchange(true)) {
+        std::lock_guard<std::mutex> lock(g_profile_mutex);
+        g_profile_sites.push_back(&site);
+    }
+    return profile_now();
+}
+
 void profile_end(TraceSite &site, uint64_t start)
 {
     const uint64_t elapsed = profile_now() - start, overhead = clock_overhead();
-    site.nanos.fetch_add((elapsed > overhead ? elapsed - overhead : 0) * kProfileSample, std::memory_order_relaxed);
+    const uint64_t net = elapsed > overhead ? elapsed - overhead : 0;
+    const bool always = site.always_timed.load(std::memory_order_relaxed);
+    site.nanos.fetch_add(net * (always ? 1 : kProfileSample), std::memory_order_relaxed);
+    if (!always && net > kSlowNanos)
+        site.always_timed.store(true, std::memory_order_relaxed);
 }
 
 void profile_report(unsigned frames)

@@ -19,6 +19,7 @@ namespace d3d12m {
 
 namespace {
 constexpr unsigned kFramesPerReport = 120;
+constexpr double kHitchMs = 25.0;
 } // namespace
 
 bool g_stats_enabled = config_flag("STATS");
@@ -35,6 +36,17 @@ void stats_frame()
     if (!g_stats_enabled)
         return;
     static std::atomic<unsigned> frames{0};
+    // The longest frame of the window and how many were longer than kHitchMs: hitches the average hides.
+    static uint64_t previous_frame_time;
+    static double worst_frame_ms;
+    static unsigned hitches;
+    const uint64_t frame_time = PsoTimer::now();
+    if (previous_frame_time) {
+        const double ms = double(frame_time - previous_frame_time) / 1e6;
+        worst_frame_ms = ms > worst_frame_ms ? ms : worst_frame_ms;
+        hitches += ms > kHitchMs;
+    }
+    previous_frame_time = frame_time;
     if (frames.fetch_add(1) + 1 < kFramesPerReport)
         return;
     frames = 0;
@@ -58,7 +70,8 @@ void stats_frame()
                  "d3d12-metal stats (per frame, last %u): fps %.1f, gpu %.2f ms (busy %.2f), submits %.1f, lists %.1f, command buffers %.1f, render passes %.1f, "
                  "compute encoders %.1f, blit encoders %.1f, barriers %.1f, fence syncs %.1f, descriptor writes %.0f, "
                  "PSO creations %.2f, stream KB %.1f, unix calls %.1f; PSO creation total %llu in %.1f ms; "
-                 "ms per frame in submit %.2f, present %.2f, signal %.2f; passes continuing the previous one's targets %.1f (%.1f after a barrier)",
+                 "ms per frame in submit %.2f, present %.2f, signal %.2f; passes continuing the previous one's targets %.1f (%.1f after a barrier); "
+                 "worst frame %.1f ms, %u frames over %.0f ms",
                  kFramesPerReport, seconds > 0 ? kFramesPerReport / seconds : 0.0,
                  per_frame(back.gpu_nanos, last_back.gpu_nanos) / 1e6,
                  per_frame(back.gpu_busy_nanos, last_back.gpu_busy_nanos) / 1e6, f(Stat::Submits), f(Stat::CommandLists), per_frame(back.command_buffers, last_back.command_buffers),
@@ -70,7 +83,9 @@ void stats_frame()
                  front[static_cast<unsigned>(Stat::PsoNanos)] / 1e6, f(Stat::SubmitNanos) / 1e6, f(Stat::PresentNanos) / 1e6,
                  f(Stat::SignalNanos) / 1e6,
                  per_frame(back.pass_resumes, last_back.pass_resumes),
-                 per_frame(back.pass_resumes_after_barrier, last_back.pass_resumes_after_barrier));
+                 per_frame(back.pass_resumes_after_barrier, last_back.pass_resumes_after_barrier), worst_frame_ms, hitches, kHitchMs);
+    worst_frame_ms = 0;
+    hitches = 0;
     for (unsigned i = 0; i < static_cast<unsigned>(Stat::Count); ++i)
         last_front[i] = front[i];
     last_back = back;
