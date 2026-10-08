@@ -307,6 +307,15 @@ bool DiskCache::load(CacheKind kind, const CacheKey &key, std::vector<uint8_t> &
     return true;
 }
 
+void DiskCache::discard(CacheKind, const CacheKey &key)
+{
+    State &s = state();
+    if (!enabled())
+        return;
+    unlink(path_of(s, key).c_str());
+    stats_.corrupt++;
+}
+
 void DiskCache::store(CacheKind kind, const CacheKey &key, const void *first, size_t first_size, const std::string &second)
 {
     State &s = state();

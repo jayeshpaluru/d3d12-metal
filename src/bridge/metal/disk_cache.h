@@ -42,6 +42,9 @@ public:
     // Reads an entry made of two byte strings. A missing entry returns false; a damaged one is deleted
     // (counted as corrupt) and also returns false.
     bool load(CacheKind kind, const CacheKey &key, std::vector<uint8_t> &first, std::string &second);
+    // Deletes an entry the caller found unusable after loading it (the file was intact but its contents were rejected
+    // by the converter or Metal); counted as corrupt, so the caller rebuilds and stores a new one.
+    void discard(CacheKind kind, const CacheKey &key);
     // Writes an entry atomically (temporary file plus rename). Failures are ignored: the cache is optional.
     void store(CacheKind kind, const CacheKey &key, const void *first, size_t first_size, const std::string &second);
 

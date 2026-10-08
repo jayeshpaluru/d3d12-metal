@@ -392,19 +392,30 @@ mtlb_result get_stage_in(Device *device, ShaderStage &vs, const mtlb_pipeline_de
         if (cache.load(CacheKind::StageIn, disk_key, cached, unused))
             bytecode = bytecode_data(cached);
     }
-    const bool from_cache = bytecode != nil;
-    if (!from_cache) {
+    // A cached entry that Metal rejects (intact on disk, but not a usable library) is discarded and rebuilt.
+    id<MTLFunction> function = nil;
+    bool from_cache = false;
+    NSError *ns_error = nil;
+    if (bytecode != nil) {
+        id<MTLLibrary> library = [device->device newLibraryWithData:bytecode error:&ns_error];
+        function = library ? [library newFunctionWithName:library.functionNames.firstObject] : nil;
+        if (function) {
+            from_cache = true;
+        } else {
+            cache.discard(CacheKind::StageIn, disk_key);
+            ns_error = nil;
+        }
+    }
+    if (!function) {
         if (!IRMetalLibSynthesizeStageInFunction(thread_compiler(), vs.reflection.get(), &layout, metallib.ptr))
             return fail(MTLB_ERROR_COMPILE_FAILED, "stage-in function synthesis failed for the input layout");
-        bytecode = IRMetalLibGetBytecodeData(metallib.ptr);
+        id<MTLLibrary> library = [device->device newLibraryWithData:IRMetalLibGetBytecodeData(metallib.ptr) error:&ns_error];
+        if (!library)
+            return fail(MTLB_ERROR_COMPILE_FAILED, std::string("stage-in library: ") + ns_error.localizedDescription.UTF8String);
+        function = [library newFunctionWithName:library.functionNames.firstObject];
+        if (!function)
+            return fail(MTLB_ERROR_COMPILE_FAILED, "stage-in function missing from its library");
     }
-    NSError *ns_error = nil;
-    id<MTLLibrary> library = [device->device newLibraryWithData:bytecode error:&ns_error];
-    if (!library)
-        return fail(MTLB_ERROR_COMPILE_FAILED, std::string("stage-in library: ") + ns_error.localizedDescription.UTF8String);
-    id<MTLFunction> function = [library newFunctionWithName:library.functionNames.firstObject];
-    if (!function)
-        return fail(MTLB_ERROR_COMPILE_FAILED, "stage-in function missing from its library");
     if (use_cache && !from_cache) {
         std::vector<uint8_t> bytes(IRMetalLibGetBytecodeSize(metallib.ptr));
         IRMetalLibGetBytecode(metallib.ptr, bytes.data());

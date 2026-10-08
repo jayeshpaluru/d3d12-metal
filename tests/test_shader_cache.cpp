@@ -7,6 +7,7 @@
 //
 // The first two take the cache directory from D3D12METAL_CACHE_DIR; the test makes a fresh one itself when
 // the variable is not set.
+#include <CommonCrypto/CommonDigest.h>
 #include <dirent.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -15,6 +16,7 @@
 #include <filesystem>
 #include <cstring>
 #include <fstream>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -239,6 +241,43 @@ int main(int argc, char **argv)
     const mtlb_cache_stats repaired = stats();
     CHECK(repaired.corrupt == after_damage.corrupt);
     CHECK(repaired.hits >= after_damage.hits + entries);
+
+    // Entries that are intact on disk (right header, key and checksum) but whose contents the converter or Metal
+    // rejects: planted by replacing the payload of every entry and recomputing the checksum. They are discarded and
+    // rebuilt like damaged ones, never fatal.
+    {
+        files = entry_files(dir);
+        size_t planted = 0;
+        for (const std::string &path : files) {
+            std::ifstream in(path, std::ios::binary);
+            std::vector<char> bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+            in.close();
+            // Header: magic[8] version[4] kind[4] key[32] first_size[8] second_size[8] payload_hash[16]
+            constexpr size_t kHeader = 80;
+            CHECK(bytes.size() >= kHeader);
+            const std::string garbage = "this is not a metallib, nor reflection json";
+            const uint64_t first_size = garbage.size(), second_size = 0;
+            std::memcpy(&bytes[48], &first_size, 8);
+            std::memcpy(&bytes[56], &second_size, 8);
+            uint8_t digest[CC_SHA256_DIGEST_LENGTH];
+            CC_SHA256(garbage.data(), static_cast<CC_LONG>(garbage.size()), digest);
+            std::memcpy(&bytes[64], digest, 16);
+            bytes.resize(kHeader);
+            bytes.insert(bytes.end(), garbage.begin(), garbage.end());
+            std::ofstream out(path, std::ios::binary | std::ios::trunc);
+            out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+            ++planted;
+        }
+        CHECK(planted == entries);
+        const mtlb_cache_stats before = stats();
+        create_pipelines(kVariants);  // converter or Metal rejects each planted entry: all are rebuilt
+        const mtlb_cache_stats after = stats();
+        CHECK(after.corrupt >= before.corrupt + entries);
+        CHECK(after.writes >= before.writes + entries);
+        create_pipelines(kVariants);
+        CHECK(stats().hits >= after.hits + entries);
+        CHECK(stats().corrupt == after.corrupt);
+    }
 
     // No temporary files are left behind by the atomic writes.
     for (const std::string &f : entry_files(dir))
