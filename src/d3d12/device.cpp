@@ -197,10 +197,11 @@ void Device::CreateRenderTargetView(ID3D12Resource *resource, const D3D12_RENDER
         return;
 
     slot->texture = texture->texture();
-    if (!desc || desc->Format == DXGI_FORMAT_UNKNOWN)
+    if (!desc)
         return;
-    // A view of a different format than the texture's own needs a texture view.
-    if (to_mtlb_format(desc->Format) != to_mtlb_format(texture->desc().Format))
+    // A view of a different format than the texture's own needs a texture view;
+    // DXGI_FORMAT_UNKNOWN means the texture's format.
+    if (desc->Format != DXGI_FORMAT_UNKNOWN && to_mtlb_format(desc->Format) != to_mtlb_format(texture->desc().Format))
         slot->view_format = to_mtlb_format(desc->Format);
     switch (desc->ViewDimension) {
     case D3D12_RTV_DIMENSION_TEXTURE2D:

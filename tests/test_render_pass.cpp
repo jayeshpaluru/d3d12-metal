@@ -126,6 +126,36 @@ int main()
     }
 
     {
+        // A view with DXGI_FORMAT_UNKNOWN still selects its mip: clear mip 1.
+        RenderContext ctx;
+        const CD3DX12_HEAP_PROPERTIES heap(D3D12_HEAP_TYPE_DEFAULT);
+        const CD3DX12_RESOURCE_DESC desc = CD3DX12_RESOURCE_DESC::Tex2D(
+            DXGI_FORMAT_R8G8B8A8_UNORM, kTargetSize, kTargetSize, 1, 2, 1, 0, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
+        ComPtr<ID3D12Resource> texture;
+        CHECK_HR(ctx.device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc,
+                                                     D3D12_RESOURCE_STATE_RENDER_TARGET, nullptr,
+                                                     IID_PPV_ARGS(texture.ReleaseAndGetAddressOf())));
+        D3D12_RENDER_TARGET_VIEW_DESC view = {};
+        view.Format = DXGI_FORMAT_UNKNOWN;
+        view.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
+        view.Texture2D.MipSlice = 1;
+        ctx.device->CreateRenderTargetView(texture.Get(), &view, ctx.rtv());
+
+        D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint = {};
+        UINT64 total = 0;
+        ctx.device->GetCopyableFootprints(&desc, 1, 1, 0, &footprint, nullptr, nullptr, &total);
+        ComPtr<ID3D12Resource> readback = ctx.create_buffer(D3D12_HEAP_TYPE_READBACK, total);
+
+        ComPtr<ID3D12GraphicsCommandList> list = ctx.create_list();
+        list->ClearRenderTargetView(ctx.rtv(), blue, 0, nullptr);
+        const CD3DX12_TEXTURE_COPY_LOCATION dst(readback.Get(), footprint), src(texture.Get(), 1);
+        list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+        CHECK_HR(list->Close());
+        ctx.execute_and_wait(list.Get());
+        check_pixel("mip 1", read_pixel(readback.Get(), footprint.Footprint.RowPitch, 5, 5), {0, 0, 255, 255});
+    }
+
+    {
         // Indexed draw through an index buffer view that starts inside its buffer.
         Scene scene;
         const uint32_t indices[] = {0, 0, 0, 3, 4, 5};
