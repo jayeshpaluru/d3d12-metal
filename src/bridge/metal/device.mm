@@ -201,7 +201,7 @@ mtlb_result mtlb_texture_create(mtlb_device handle, const mtlb_texture_desc *des
 
     if (info)
         info->resource_id = mtl_texture.gpuResourceID._impl;
-    *out = to_handle(new Texture{device, mtl_texture, static_cast<mtlb_format>(desc->format)});
+    *out = to_handle(new Texture{device, mtl_texture, static_cast<mtlb_format>(desc->format), {}, {}});
     return MTLB_OK;
 }
 

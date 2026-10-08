@@ -39,15 +39,19 @@ MTLStoreAction to_store_action(uint32_t action)
     return action == MTLB_STORE_DONT_CARE ? MTLStoreActionDontCare : MTLStoreActionStore;
 }
 
-// Returns the texture, or a view of it when `view_format` asks for another format.
+// Returns the texture, or a cached view of it when `view_format` asks for another format.
 id<MTLTexture> attachment_texture(Texture *texture, uint32_t view_format)
 {
     if (view_format == 0 || view_format == texture->format)
         return texture->texture;
-    MTLPixelFormat format = to_pixel_format(view_format);
-    if (format == MTLPixelFormatInvalid)
-        return nil;
-    return [texture->texture newTextureViewWithPixelFormat:format];
+    std::lock_guard<std::mutex> lock(texture->views_mutex);
+    auto &view = texture->views[view_format];
+    if (!view) {
+        MTLPixelFormat format = to_pixel_format(view_format);
+        if (format != MTLPixelFormatInvalid)
+            view = [texture->texture newTextureViewWithPixelFormat:format];
+    }
+    return view;
 }
 
 // Replays one command stream into a command buffer, opening and closing
@@ -334,8 +338,6 @@ size_t fixed_size(uint32_t type)
     case MTLB_CMD_COPY_BUFFER: return sizeof(mtlb_cmd_copy_buffer);
     case MTLB_CMD_COPY_TEXTURE_TO_BUFFER: return sizeof(mtlb_cmd_copy_texture_to_buffer);
     case MTLB_CMD_COPY_BUFFER_TO_TEXTURE: return sizeof(mtlb_cmd_copy_buffer_to_texture);
-    case MTLB_CMD_SIGNAL_EVENT: return sizeof(mtlb_cmd_signal_event);
-    case MTLB_CMD_WAIT_EVENT: return sizeof(mtlb_cmd_wait_event);
     case MTLB_CMD_RESET_STATE: return sizeof(mtlb_cmd_reset_state);
     default: return 0;
     }
@@ -464,34 +466,39 @@ mtlb_result Replay::execute(const mtlb_cmd_header *header)
         return copy_texture(reinterpret_cast<const mtlb_cmd_copy_texture_to_buffer *>(header)->region, true);
     case MTLB_CMD_COPY_BUFFER_TO_TEXTURE:
         return copy_texture(reinterpret_cast<const mtlb_cmd_copy_buffer_to_texture *>(header)->region, false);
-    case MTLB_CMD_SIGNAL_EVENT:
-    case MTLB_CMD_WAIT_EVENT: {
-        auto *cmd = reinterpret_cast<const mtlb_cmd_signal_event *>(header);  // same layout as wait
-        Event *event = from_handle<Event>(cmd->event);
-        if (!event || render_)
-            return fail(MTLB_ERROR_INVALID_ARGUMENT, "invalid event command");
-        end_blit();
-        if (header->type == MTLB_CMD_SIGNAL_EVENT)
-            [cb_ encodeSignalEvent:event->event value:cmd->value];
-        else
-            [cb_ encodeWaitForEvent:event->event value:cmd->value];
-        return MTLB_OK;
-    }
     default:
         return MTLB_ERROR_INVALID_ARGUMENT;  // unreachable: fixed_size() rejects unknown types
     }
 }
 
-// Creates a command buffer on `queue` that logs GPU-side failures.
-id<MTLCommandBuffer> make_command_buffer(Queue *queue)
+// Bounds how much work a lazily committed command buffer may accumulate.
+constexpr uint32_t kMaxOpenSubmits = 32;
+
+// The queue's open command buffer, created on first use. Work stays in it until
+// something needs the GPU to see it (a signal, enough submits, queue teardown).
+// D3D12 requires applications to keep resources alive while the GPU uses them,
+// so the buffer does not retain what it references.
+id<MTLCommandBuffer> open_command_buffer(Queue *queue)
 {
+    if (!queue->open) {
+        commit_residency(queue->device);
+        queue->open = [queue->queue commandBufferWithUnretainedReferences];
+        [queue->open addCompletedHandler:^(id<MTLCommandBuffer> done) {
+            if (done.error)
+                std::fprintf(stderr, "d3d12-metal: command buffer failed: %s\n", done.error.localizedDescription.UTF8String);
+        }];
+    }
+    return queue->open;
+}
+
+void commit_open(Queue *queue)
+{
+    if (!queue->open)
+        return;
     commit_residency(queue->device);
-    id<MTLCommandBuffer> cb = [queue->queue commandBuffer];
-    [cb addCompletedHandler:^(id<MTLCommandBuffer> done) {
-        if (done.error)
-            std::fprintf(stderr, "d3d12-metal: command buffer failed: %s\n", done.error.localizedDescription.UTF8String);
-    }];
-    return cb;
+    [queue->open commit];
+    queue->open = nil;
+    queue->open_submits = 0;
 }
 
 } // namespace
@@ -507,15 +514,20 @@ mtlb_result mtlb_queue_create(mtlb_device handle, mtlb_queue *out)
     if (!mtl_queue)
         return fail(MTLB_ERROR_DEVICE, "newCommandQueue failed");
     [mtl_queue addResidencySet:device->residency];
-    *out = to_handle(new Queue{device, mtl_queue});
+    auto *queue = new Queue();
+    queue->device = device;
+    queue->queue = mtl_queue;
+    *out = to_handle(queue);
     return MTLB_OK;
 }
 
 void mtlb_queue_destroy(mtlb_queue handle)
 {
     Queue *queue = from_handle<Queue>(handle);
-    if (queue)
-        [queue->queue removeResidencySet:queue->device->residency];
+    if (!queue)
+        return;
+    commit_open(queue);
+    [queue->queue removeResidencySet:queue->device->residency];
     delete queue;
 }
 
@@ -524,8 +536,8 @@ mtlb_result mtlb_queue_submit(mtlb_queue handle, const mtlb_span *spans, uint32_
     Queue *queue = from_handle<Queue>(handle);
     if (!queue || (!spans && count))
         return MTLB_ERROR_INVALID_ARGUMENT;
-    id<MTLCommandBuffer> cb = make_command_buffer(queue);
-    Replay replay(queue, cb);
+    std::lock_guard<std::mutex> lock(queue->mutex);
+    Replay replay(queue, open_command_buffer(queue));
     mtlb_result result = MTLB_OK;
     for (uint32_t i = 0; i < count && result == MTLB_OK; ++i) {
         if (!spans[i].data && spans[i].size)
@@ -533,33 +545,35 @@ mtlb_result mtlb_queue_submit(mtlb_queue handle, const mtlb_span *spans, uint32_
         else
             result = replay.run(spans[i].data, spans[i].size);
     }
-    replay.finish();
-    if (result == MTLB_OK)
-        [cb commit];
+    replay.finish();  // work encoded before a failure stays in the open buffer
+    if (++queue->open_submits >= kMaxOpenSubmits)
+        commit_open(queue);
     return result;
 }
 
+// Appends a signal to the open buffer and commits it, so a signal after
+// ExecuteCommandLists costs one commit for both.
 mtlb_result mtlb_queue_signal(mtlb_queue handle, mtlb_event event_handle, uint64_t value)
 {
     Queue *queue = from_handle<Queue>(handle);
     Event *event = from_handle<Event>(event_handle);
     if (!queue || !event)
         return MTLB_ERROR_INVALID_ARGUMENT;
-    id<MTLCommandBuffer> cb = make_command_buffer(queue);
-    [cb encodeSignalEvent:event->event value:value];
-    [cb commit];
+    std::lock_guard<std::mutex> lock(queue->mutex);
+    [open_command_buffer(queue) encodeSignalEvent:event->event value:value];
+    commit_open(queue);
     return MTLB_OK;
 }
 
+// Appends a wait to the open buffer. It is committed with the next signal.
 mtlb_result mtlb_queue_wait(mtlb_queue handle, mtlb_event event_handle, uint64_t value)
 {
     Queue *queue = from_handle<Queue>(handle);
     Event *event = from_handle<Event>(event_handle);
     if (!queue || !event)
         return MTLB_ERROR_INVALID_ARGUMENT;
-    id<MTLCommandBuffer> cb = make_command_buffer(queue);
-    [cb encodeWaitForEvent:event->event value:value];
-    [cb commit];
+    std::lock_guard<std::mutex> lock(queue->mutex);
+    [open_command_buffer(queue) encodeWaitForEvent:event->event value:value];
     return MTLB_OK;
 }
 

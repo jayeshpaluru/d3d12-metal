@@ -36,6 +36,11 @@ struct Texture {
     Device *device;
     id<MTLTexture> texture;
     mtlb_format format;
+
+    // Pixel-format views, created on first use and kept for the texture's life
+    // (command buffers do not retain what they reference).
+    std::mutex views_mutex;
+    std::map<uint32_t, id<MTLTexture>> views;
 };
 
 struct Pipeline {
@@ -51,8 +56,14 @@ struct Pipeline {
 };
 
 struct Queue {
-    Device *device;
+    Device *device = nullptr;
     id<MTLCommandQueue> queue;
+
+    // Guards the open command buffer: submits, signals and waits append to it
+    // and it is committed lazily (see queue.mm).
+    std::mutex mutex;
+    id<MTLCommandBuffer> open = nil;
+    uint32_t open_submits = 0;
 };
 
 struct Event {

@@ -45,8 +45,6 @@ typedef enum mtlb_cmd_type {
     MTLB_CMD_COPY_BUFFER,
     MTLB_CMD_COPY_TEXTURE_TO_BUFFER,
     MTLB_CMD_COPY_BUFFER_TO_TEXTURE,
-    MTLB_CMD_SIGNAL_EVENT,
-    MTLB_CMD_WAIT_EVENT,
     MTLB_CMD_RESET_STATE,
 } mtlb_cmd_type;
 
@@ -256,20 +254,6 @@ typedef struct mtlb_cmd_copy_buffer_to_texture {
     mtlb_texture_copy_region region;
 } mtlb_cmd_copy_buffer_to_texture;
 
-/* ---- Synchronisation ---------------------------------------------------- */
-
-typedef struct mtlb_cmd_signal_event {
-    mtlb_cmd_header header;
-    mtlb_event event;
-    uint64_t value;
-} mtlb_cmd_signal_event;
-
-typedef struct mtlb_cmd_wait_event {
-    mtlb_cmd_header header;
-    mtlb_event event;
-    uint64_t value;
-} mtlb_cmd_wait_event;
-
 MTLB_ASSERT_SIZE(mtlb_cmd_header, 8);
 MTLB_ASSERT_SIZE(mtlb_color_attachment, 48);
 MTLB_ASSERT_OFFSET(mtlb_color_attachment, clear_color, 32);
@@ -301,8 +285,6 @@ MTLB_ASSERT_SIZE(mtlb_texture_copy_region, 72);
 MTLB_ASSERT_OFFSET(mtlb_texture_copy_region, buffer_offset, 16);
 MTLB_ASSERT_SIZE(mtlb_cmd_copy_texture_to_buffer, 80);
 MTLB_ASSERT_SIZE(mtlb_cmd_copy_buffer_to_texture, 80);
-MTLB_ASSERT_SIZE(mtlb_cmd_signal_event, 24);
-MTLB_ASSERT_SIZE(mtlb_cmd_wait_event, 24);
 
 #ifdef __cplusplus
 }
