@@ -61,6 +61,26 @@ uint64_t pipeline_key(mtlb_compute_pipeline_desc pd)
     return hash_bytes(&pd, sizeof(pd), cs) ^ 0x9e3779b97f4a7c15ull;
 }
 
+// A pipeline created without a root signature takes the one embedded in its shader (the RTS0 part of the DXIL
+// container): XeSS and some engines compile their shaders that way. The signature is made here and released with the
+// holder, the pipeline keeps its own reference.
+struct EmbeddedRootSignature {
+    ID3D12RootSignature *created = nullptr;
+    ~EmbeddedRootSignature()
+    {
+        if (created)
+            created->Release();
+    }
+    RootSignature *from(Device *device, const D3D12_SHADER_BYTECODE &shader)
+    {
+        if (!shader.pShaderBytecode || !shader.BytecodeLength
+            || FAILED(RootSignature::create(device, shader.pShaderBytecode, shader.BytecodeLength, __uuidof(ID3D12RootSignature),
+                                            reinterpret_cast<void **>(&created))))
+            return nullptr;
+        return ours<RootSignature>(created);
+    }
+};
+
 } // namespace
 
 HRESULT PipelineState::create_graphics(Device *device, const D3D12_GRAPHICS_PIPELINE_STATE_DESC &desc,
@@ -68,7 +88,7 @@ HRESULT PipelineState::create_graphics(Device *device, const D3D12_GRAPHICS_PIPE
 {
     if (!out)
         return E_POINTER;
-    if (!desc.pRootSignature || !desc.VS.pShaderBytecode || !desc.VS.BytecodeLength
+    if (!desc.VS.pShaderBytecode || !desc.VS.BytecodeLength
         || desc.NumRenderTargets > MTLB_MAX_RENDER_TARGETS || desc.InputLayout.NumElements > MTLB_MAX_INPUT_ELEMENTS)
         return E_INVALIDARG;
     if (desc.StreamOutput.NumEntries) {
@@ -82,7 +102,8 @@ HRESULT PipelineState::create_graphics(Device *device, const D3D12_GRAPHICS_PIPE
         return E_INVALIDARG;
 
     // Only RootSignature objects of this layer can be passed in.
-    auto *root_signature = ours<RootSignature>(desc.pRootSignature);
+    EmbeddedRootSignature embedded;
+    RootSignature *root_signature = desc.pRootSignature ? ours<RootSignature>(desc.pRootSignature) : embedded.from(device, desc.VS);
     if (!root_signature)
         return E_INVALIDARG;
 
@@ -183,7 +204,8 @@ HRESULT PipelineState::create_compute(Device *device, const D3D12_COMPUTE_PIPELI
 {
     if (!out)
         return E_POINTER;
-    auto *root_signature = ours<RootSignature>(desc.pRootSignature);
+    EmbeddedRootSignature embedded;
+    RootSignature *root_signature = desc.pRootSignature ? ours<RootSignature>(desc.pRootSignature) : embedded.from(device, desc.CS);
     if (!root_signature || !desc.CS.pShaderBytecode || !desc.CS.BytecodeLength) {
         D3D12M_LOG("compute pipeline: root signature %p (ours: %d), CS %p size %zu", static_cast<void *>(desc.pRootSignature),
                    root_signature != nullptr, desc.CS.pShaderBytecode, desc.CS.BytecodeLength);

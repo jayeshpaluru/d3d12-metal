@@ -55,6 +55,7 @@ portable_tests = [
   ['rtmismatch', ['rt_mismatch'], []],
   ['geometry', ['geometry'], []],
   ['tessellation', ['tessellation'], []],
+  ['embedded_rs', [], ['embedded_rs']],
 ]
 
 bridge_sources = []

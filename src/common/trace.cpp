@@ -266,14 +266,19 @@ std::mutex &g_profile_mutex = *new std::mutex;  // never destroyed: methods can 
 std::vector<TraceSite *> &g_profile_sites = *new std::vector<TraceSite *>;
 } // namespace
 
-void profile_end(TraceSite &site, uint64_t start)
+uint64_t profile_begin(TraceSite &site)
 {
-    const uint64_t elapsed = profile_now() - start;
-    if (site.calls.fetch_add(1, std::memory_order_relaxed) == 0) {
+    const uint64_t calls = site.calls.fetch_add(1, std::memory_order_relaxed);
+    if (calls == 0) {
         std::lock_guard<std::mutex> lock(g_profile_mutex);
         g_profile_sites.push_back(&site);
     }
-    site.nanos.fetch_add(elapsed, std::memory_order_relaxed);
+    return calls % kProfileSample == 0 ? profile_now() : 0;
+}
+
+void profile_end(TraceSite &site, uint64_t start)
+{
+    site.nanos.fetch_add((profile_now() - start) * kProfileSample, std::memory_order_relaxed);
 }
 
 void profile_report(unsigned frames)

@@ -48,13 +48,17 @@ struct TraceSite {
 };
 
 uint64_t profile_now();
+// Counts a call of `site` (registering it on the first); returns the start time when this call is one of the timed
+// ones (one in kProfileSample, so the clock reads stay cheap), else 0.
+uint64_t profile_begin(TraceSite &site);
+constexpr unsigned kProfileSample = 16;
 void profile_end(TraceSite &site, uint64_t start);
 // Logs the methods with the most time per frame since the last report.
 void profile_report(unsigned frames);
 
 // Times the method it is declared in (a no-op unless profiling is on).
 struct ProfileScope {
-    explicit ProfileScope(TraceSite &s) : site(s), start(g_profile_enabled ? profile_now() : 0) {}
+    explicit ProfileScope(TraceSite &s) : site(s), start(g_profile_enabled ? profile_begin(s) : 0) {}
     ~ProfileScope()
     {
         if (start)
