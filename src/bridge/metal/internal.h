@@ -25,7 +25,7 @@ namespace mtlb {
 
 // Backend counters (mtlb_stats): relaxed atomic increments, a few nanoseconds each.
 enum Stat : unsigned { kStatSubmits, kStatCommandBuffers, kStatRenderEncoders, kStatComputeEncoders, kStatBlitEncoders,
-                       kStatBarriers, kStatSyncs, kStatEventQueries, kStatPipelineAttempts, kStatCount };
+                       kStatBarriers, kStatSyncs, kStatEventQueries, kStatPipelineAttempts, kStatGpuNanos, kStatCount };
 extern std::atomic<uint64_t> g_stats[kStatCount];
 inline void stat_add(Stat stat) { g_stats[stat].fetch_add(1, std::memory_order_relaxed); }
 
