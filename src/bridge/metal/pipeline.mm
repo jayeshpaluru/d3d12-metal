@@ -108,6 +108,8 @@ mtlb_result finish_stage(Device *device, dispatch_data_t bytecode, std::shared_p
         out.num_vertex_inputs = static_cast<uint32_t>(info.info_1_0.num_vertex_inputs);
         IRShaderReflectionReleaseVertexInfo(&info);
         out.reflection = std::move(reflection);
+    } else if (ir_stage == IRShaderStageFragment) {
+        out.reflection = std::move(reflection);  // the render target output types, at pipeline creation
     }
     return MTLB_OK;
 }
@@ -232,6 +234,21 @@ mtlb_result get_stage(Device *device, RootSignature *root_signature, const void 
     std::lock_guard<std::mutex> lock(device->shaders_mutex);
     out = device->shaders.emplace(key, std::move(stage)).first->second;  // keeps the first on a race
     return MTLB_OK;
+}
+
+// True for the pixel formats whose shader outputs are integers (uint4 / int4).
+bool is_integer_pixel_format(MTLPixelFormat f)
+{
+    switch (f) {
+    case MTLPixelFormatR8Uint: case MTLPixelFormatR8Sint: case MTLPixelFormatR16Uint: case MTLPixelFormatR16Sint:
+    case MTLPixelFormatR32Uint: case MTLPixelFormatR32Sint: case MTLPixelFormatRG8Uint: case MTLPixelFormatRG8Sint:
+    case MTLPixelFormatRG16Uint: case MTLPixelFormatRG16Sint: case MTLPixelFormatRG32Uint: case MTLPixelFormatRG32Sint:
+    case MTLPixelFormatRGBA8Uint: case MTLPixelFormatRGBA8Sint: case MTLPixelFormatRGBA16Uint: case MTLPixelFormatRGBA16Sint:
+    case MTLPixelFormatRGBA32Uint: case MTLPixelFormatRGBA32Sint: case MTLPixelFormatRGB10A2Uint:
+        return true;
+    default:
+        return false;
+    }
 }
 
 MTLBlendFactor to_blend_factor(uint32_t blend)
@@ -493,12 +510,25 @@ extern "C" mtlb_result mtlb_pipeline_create(mtlb_device handle, const mtlb_pipel
         pd.vertexLinkedFunctions = linked;
     }
 
+    // Bit i is set when the fragment shader writes integers to render target i.
+    uint32_t integer_outputs = 0;
+    if (ps) {
+        IRVersionedFSInfo info;
+        if (IRShaderReflectionCopyFragmentInfo(ps->reflection.get(), IRReflectionVersion_1_0, &info)) {
+            integer_outputs = info.info_1_0.rt_index_int;
+            IRShaderReflectionReleaseFragmentInfo(&info);
+        }
+    }
     for (uint32_t i = 0; i < desc->num_render_targets; ++i) {
         if (desc->rtv_formats[i] == MTLB_FORMAT_UNKNOWN)
             continue;
         MTLPixelFormat format = to_pixel_format(desc->rtv_formats[i]);
         if (format == MTLPixelFormatInvalid)
             return fail(MTLB_ERROR_UNSUPPORTED, "unsupported render target format " + std::to_string(desc->rtv_formats[i]));
+        // D3D12 tolerates a shader output of another type than the render target (the result is undefined, and
+        // games do it with the output masked); Metal refuses the pipeline. That target gets no attachment here.
+        if (ps && ((integer_outputs >> i) & 1) != (is_integer_pixel_format(format) ? 1u : 0u))
+            continue;
         const mtlb_render_target_blend &blend = desc->blend[desc->independent_blend ? i : 0];
         MTLRenderPipelineColorAttachmentDescriptor *ca = pd.colorAttachments[i];
         ca.pixelFormat = format;

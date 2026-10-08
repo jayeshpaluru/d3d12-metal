@@ -34,7 +34,8 @@ else
                     ['vertex_input', '../shaders/vertex_input.hlsl'],
                     ['hello_texture', '../shaders/hello_texture.hlsl'],
                     ['const_buffers', '../shaders/const_buffers.hlsl'],
-                    ['instanced', '../shaders/instanced.hlsl']]
+                    ['instanced', '../shaders/instanced.hlsl'],
+                    ['rt_mismatch', '../shaders/rt_mismatch.hlsl']]
     headers = []
     foreach stage : [['vs', 'vs_6_0', 'VSMain'], ['ps', 'ps_6_0', 'PSMain']]
       headers += custom_target(
