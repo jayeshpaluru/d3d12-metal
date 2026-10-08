@@ -1,5 +1,6 @@
 d3d12_sources += files(
   '../common/blob.cpp',
+  '../common/private_data.cpp',
   'command_list.cpp',
   'command_queue.cpp',
   'descriptor_heap.cpp',
@@ -7,7 +8,6 @@ d3d12_sources += files(
   'exports.cpp',
   'fence.cpp',
   'formats.cpp',
-  'object.cpp',
   'pipeline_state.cpp',
   'resource.cpp',
   'root_signature.cpp',

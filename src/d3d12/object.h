@@ -3,40 +3,14 @@
 
 #include <cstdint>
 #include <cstring>
-#include <map>
-#include <mutex>
-#include <vector>
 
 #include "common/com.h"
 #include "common/log.h"
+#include "common/private_data.h"
 
 namespace d3d12m {
 
 class Device;
-
-// Private data storage behind ID3D12Object::Get/SetPrivateData.
-class PrivateDataStore {
-public:
-    ~PrivateDataStore();
-    HRESULT get(REFGUID guid, UINT *size, void *data);
-    HRESULT set(REFGUID guid, UINT size, const void *data);
-    HRESULT set_interface(REFGUID guid, const IUnknown *iface);
-
-private:
-    struct Key {
-        GUID guid;
-        bool operator<(const Key &o) const { return std::memcmp(&guid, &o.guid, sizeof(GUID)) < 0; }
-    };
-    struct Entry {
-        std::vector<uint8_t> bytes;
-        IUnknown *iface = nullptr;  // owned reference when non-null
-    };
-
-    void erase_locked(const Key &key);
-
-    std::mutex mutex_;
-    std::map<Key, Entry> entries_;
-};
 
 // Implements ID3D12Object on top of reference counting. `I` is the most-derived
 // interface of the final class.
@@ -68,7 +42,7 @@ public:
     }
 
 private:
-    PrivateDataStore private_data_;
+    PrivateData private_data_;
 };
 
 // Answers ID3D12DeviceChild::GetDevice for `device`.

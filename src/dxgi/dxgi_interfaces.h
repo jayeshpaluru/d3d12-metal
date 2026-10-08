@@ -256,7 +256,7 @@ MIDL_INTERFACE("50c83a1c-e072-4c48-87b0-3630fa36a6d0")
 IDXGIFactory2 : public IDXGIFactory1
 {
 public:
-    virtual BOOL STDMETHODCALLTYPE IsWindowedStayFullscreenSupported() = 0;
+    virtual BOOL STDMETHODCALLTYPE IsWindowedStereoEnabled() = 0;
     virtual HRESULT STDMETHODCALLTYPE CreateSwapChainForHwnd(IUnknown *pDevice, HWND hWnd, const DXGI_SWAP_CHAIN_DESC1 *pDesc, const DXGI_SWAP_CHAIN_FULLSCREEN_DESC *pFullscreenDesc, IDXGIOutput *pRestrictToOutput, IDXGISwapChain1 **ppSwapChain) = 0;
     virtual HRESULT STDMETHODCALLTYPE CreateSwapChainForCoreWindow(IUnknown *pDevice, IUnknown *pWindow, const DXGI_SWAP_CHAIN_DESC1 *pDesc, IDXGIOutput *pRestrictToOutput, IDXGISwapChain1 **ppSwapChain) = 0;
     virtual HRESULT STDMETHODCALLTYPE GetSharedResourceAdapterLuid(HANDLE hResource, LUID *pLuid) = 0;

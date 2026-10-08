@@ -1,11 +1,11 @@
-// Storage behind IDXGIObject::Set/GetPrivateData.
+// Storage behind the Set/GetPrivateData methods of ID3D12Object and IDXGIObject.
 #pragma once
 
 #include <cstdint>
 #include <mutex>
 #include <vector>
 
-#include "dxgi/dxgi_interfaces.h"
+#include "common/com.h"
 
 namespace d3d12m {
 

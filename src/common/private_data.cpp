@@ -1,9 +1,7 @@
-#include "dxgi/private_data.h"
+#include "common/private_data.h"
 
 #include <algorithm>
 #include <cstring>
-
-#include "common/com.h"
 
 namespace d3d12m {
 

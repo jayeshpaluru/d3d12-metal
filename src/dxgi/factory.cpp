@@ -3,7 +3,7 @@
 #include "common/com.h"
 #include "common/log.h"
 #include "dxgi/adapter.h"
-#include "dxgi/private_data.h"
+#include "common/private_data.h"
 
 namespace d3d12m {
 
@@ -78,7 +78,7 @@ public:
     BOOL STDMETHODCALLTYPE IsCurrent() override { return TRUE; }
 
     // IDXGIFactory2
-    BOOL STDMETHODCALLTYPE IsWindowedStayFullscreenSupported() override { return FALSE; }
+    BOOL STDMETHODCALLTYPE IsWindowedStereoEnabled() override { return FALSE; }
 
     HRESULT STDMETHODCALLTYPE CreateSwapChainForHwnd(IUnknown *, HWND, const DXGI_SWAP_CHAIN_DESC1 *,
                                                      const DXGI_SWAP_CHAIN_FULLSCREEN_DESC *,

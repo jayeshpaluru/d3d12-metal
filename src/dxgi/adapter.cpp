@@ -5,7 +5,7 @@
 
 #include "common/com.h"
 #include "common/log.h"
-#include "dxgi/private_data.h"
+#include "common/private_data.h"
 
 #include "bridge/mtlb.h"
 
