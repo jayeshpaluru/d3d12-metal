@@ -9,3 +9,4 @@ build-wine/
 .DS_Store
 captures/
 .claude/
+__pycache__/

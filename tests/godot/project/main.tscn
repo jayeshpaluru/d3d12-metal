@@ -5,6 +5,8 @@
 [sub_resource type="ProceduralSkyMaterial" id="sky_mat"]
 sky_top_color = Color(0.2, 0.45, 0.9, 1)
 sky_horizon_color = Color(0.65, 0.78, 0.95, 1)
+ground_horizon_color = Color(0.65, 0.78, 0.95, 1)
+ground_bottom_color = Color(0.3, 0.35, 0.3, 1)
 
 [sub_resource type="Sky" id="sky"]
 sky_material = SubResource("sky_mat")
@@ -44,7 +46,7 @@ transform = Transform3D(0.866, -0.25, 0.433, 0, 0.866, 0.5, -0.5, -0.433, 0.75, 
 shadow_enabled = true
 
 [node name="Camera" type="Camera3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 0.9, 0.436, 0, -0.436, 0.9, 0, 3.2, 5.5)
+transform = Transform3D(1, 0, 0, 0, 0.98, 0.199, 0, -0.199, 0.98, 0, 1.8, 6.5)
 current = true
 fov = 60.0
 
