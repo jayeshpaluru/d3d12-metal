@@ -35,9 +35,10 @@ else
                     ['hello_texture', '../shaders/hello_texture.hlsl'],
                     ['const_buffers', '../shaders/const_buffers.hlsl'],
                     ['instanced', '../shaders/instanced.hlsl'],
-                    ['rt_mismatch', '../shaders/rt_mismatch.hlsl']]
+                    ['rt_mismatch', '../shaders/rt_mismatch.hlsl'],
+                    ['geometry', '../shaders/geometry.hlsl'], ['tessellation', '../shaders/tessellation.hlsl']]
     headers = []
-    foreach stage : [['vs', 'vs_6_0', 'VSMain'], ['ps', 'ps_6_0', 'PSMain']]
+    foreach stage : stages_of.get(shader[0], [['vs', 'vs_6_0', 'VSMain'], ['ps', 'ps_6_0', 'PSMain']])
       headers += custom_target(
         shader[0] + '_' + stage[0],
         input: shader[1],

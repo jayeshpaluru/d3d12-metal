@@ -672,11 +672,18 @@ mtlb_result create_emulated_pipeline(Device *device, RootSignature *root_signatu
         emulated->hull = hs->library;
         emulated->domain = ds->library;
     }
-    if (!vs->num_vertex_inputs)
-        return fail(MTLB_ERROR_UNSUPPORTED, "geometry/tessellation emulation without vertex inputs");
+    // The emulated pipelines always link a stage-in function; one for a shader that reads no vertex inputs (it pulls
+    // its data from buffers) is built for an empty layout.
+    mtlb_pipeline_desc no_inputs;
+    const mtlb_pipeline_desc *layout_desc = &desc;
+    if (!vs->num_vertex_inputs) {
+        no_inputs = desc;
+        no_inputs.num_input_elements = 0;
+        layout_desc = &no_inputs;
+    }
     id<MTLFunction> unused = nil;
     id<MTLLibrary> stage_in = nil;
-    result = get_stage_in(device, const_cast<ShaderStage &>(*vs), desc, &unused, true, &stage_in);
+    result = get_stage_in(device, const_cast<ShaderStage &>(*vs), *layout_desc, &unused, true, &stage_in);
     if (result != MTLB_OK)
         return result;
     emulated->stage_in = stage_in;
