@@ -85,7 +85,11 @@ HRESULT CommandQueue::Signal(ID3D12Fence *fence, UINT64 value)
     if (!f)
         return E_INVALIDARG;
     StatTimer timer(Stat::SignalNanos);
-    return to_hresult(mtlb_queue_signal(queue_, f->event(), value));
+    // The call must not outlive the fence's event even if another thread drops its last reference meanwhile.
+    f->AddRef();
+    const HRESULT hr = to_hresult(mtlb_queue_signal(queue_, f->event(), value));
+    f->Release();
+    return hr;
     D3D12M_TRACED_END(fence, value)
 }
 
@@ -95,7 +99,10 @@ HRESULT CommandQueue::Wait(ID3D12Fence *fence, UINT64 value)
     auto *f = ours<Fence>(fence);
     if (!f)
         return E_INVALIDARG;
-    return to_hresult(mtlb_queue_wait(queue_, f->event(), value));
+    f->AddRef();
+    const HRESULT hr = to_hresult(mtlb_queue_wait(queue_, f->event(), value));
+    f->Release();
+    return hr;
     D3D12M_TRACED_END(fence, value)
 }
 

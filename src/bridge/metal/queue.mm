@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cstdio>
 #include <unordered_map>
+#include <map>
 #include <optional>
 #include <vector>
 
@@ -217,6 +218,102 @@ bool pass_profile_enabled()
         return v && *v && *v != '0';
     }();
     return enabled;
+}
+
+// D3D12METAL_SUBMIT_PROFILE=1: wall time spent in the parts of a submission (encoder creation, applying draw state,
+// encoding draws, ending encoders, commit) is accumulated and logged every few seconds, for finding what the CPU
+// time of mtlb_queue_submit goes to. Costs two clock reads per timed section when on, one branch when off.
+enum SubmitPart : unsigned { kPartRenderEncoder, kPartComputeEncoder, kPartBlitEncoder, kPartEndEncoder, kPartApplyState, kPartDraw,
+                             kPartBarrier, kPartCommit, kPartSubmit, kPartCount };
+const char *const kSubmitPartNames[kPartCount] = {"render encoder creation", "compute encoder creation", "blit encoder creation",
+                                                  "ending encoders", "applying draw state", "encoding draws", "barriers",
+                                                  "commit", "whole submit"};
+
+bool submit_profile_enabled()
+{
+    static const bool enabled = [] {
+        const char *v = std::getenv("D3D12METAL_SUBMIT_PROFILE");
+        return v && *v && *v != '0';
+    }();
+    return enabled;
+}
+
+struct SubmitProfile {
+    std::atomic<uint64_t> nanos[kPartCount] = {}, count[kPartCount] = {};
+};
+SubmitProfile &submit_profile()
+{
+    static SubmitProfile &profile = *new SubmitProfile;  // never destroyed: handlers can run during shutdown
+    return profile;
+}
+
+uint64_t submit_profile_now()
+{
+    static const mach_timebase_info_data_t timebase = [] {
+        mach_timebase_info_data_t t;
+        mach_timebase_info(&t);
+        return t;
+    }();
+    return mach_absolute_time() * timebase.numer / timebase.denom;
+}
+
+class SubmitTimer {
+public:
+    explicit SubmitTimer(SubmitPart part) : part_(part), start_(submit_profile_enabled() ? submit_profile_now() : 0) {}
+    ~SubmitTimer()
+    {
+        if (!start_)
+            return;
+        SubmitProfile &p = submit_profile();
+        p.nanos[part_].fetch_add(submit_profile_now() - start_, std::memory_order_relaxed);
+        p.count[part_].fetch_add(1, std::memory_order_relaxed);
+    }
+    SubmitTimer(const SubmitTimer &) = delete;
+    SubmitTimer &operator=(const SubmitTimer &) = delete;
+
+private:
+    SubmitPart part_;
+    uint64_t start_;
+};
+
+// Why render passes ended (D3D12METAL_SUBMIT_PROFILE): counted per reason, listed with the profile.
+std::mutex &pass_end_mutex()
+{
+    static std::mutex &m = *new std::mutex;
+    return m;
+}
+std::map<std::string, uint64_t> &pass_end_reasons()
+{
+    static auto &reasons = *new std::map<std::string, uint64_t>;
+    return reasons;
+}
+void note_pass_end(const char *why)
+{
+    std::lock_guard<std::mutex> lock(pass_end_mutex());
+    ++pass_end_reasons()[why];
+}
+
+void report_submit_profile()
+{
+    static std::chrono::steady_clock::time_point last = std::chrono::steady_clock::now();
+    const auto now = std::chrono::steady_clock::now();
+    const double seconds = std::chrono::duration<double>(now - last).count();
+    if (seconds < 5)
+        return;
+    last = now;
+    SubmitProfile &p = submit_profile();
+    backend_log("submit profile over %.1f s (ms per second, calls per second, ns per call):", seconds);
+    for (unsigned i = 0; i < kPartCount; ++i) {
+        const double ns = double(p.nanos[i].exchange(0)), calls = double(p.count[i].exchange(0));
+        backend_log("  %8.2f ms/s %9.0f/s %8.0f ns  %s", ns / 1e6 / seconds, calls / seconds, calls > 0 ? ns / calls : 0.0,
+                    kSubmitPartNames[i]);
+    }
+    std::lock_guard<std::mutex> lock(pass_end_mutex());
+    std::string reasons;
+    for (auto &[why, count] : pass_end_reasons())
+        reasons += " " + why + "=" + std::to_string(static_cast<unsigned long long>(double(count) / seconds + 0.5)) + "/s";
+    pass_end_reasons().clear();
+    backend_log("  render passes ended by:%s", reasons.c_str());
 }
 
 void report_pass_profile(const PassProfile &profile, id<MTLCounterSampleBuffer> samples, uint32_t used)
@@ -484,16 +581,21 @@ private:
     {
         if (!blit_)
             return;
+        SubmitTimer timer(kPartEndEncoder);
         [blit_ updateFence:queue_->fence];
         queue_->fence_pending = true;
         [blit_ endEncoding];
         blit_ = nil;
     }
 
-    void end_render()
+    // `why` names the caller, for the reasons the submit profile lists.
+    void end_render(const char *why = "other")
     {
         if (!render_)
             return;
+        SubmitTimer timer(kPartEndEncoder);
+        if (submit_profile_enabled())
+            note_pass_end(why);
         std::copy(state_.targets, state_.targets + MTLB_MAX_RENDER_TARGETS, last_targets_);
         last_depth_ = state_.depth;
         last_valid_ = true;
@@ -508,6 +610,7 @@ private:
     {
         if (!compute_)
             return;
+        SubmitTimer timer(kPartEndEncoder);
         [compute_ updateFence:queue_->fence];
         queue_->fence_pending = true;
         [compute_ endEncoding];
@@ -622,6 +725,17 @@ private:
     bool render_synced_ = false;   // the open render pass started after everything before it had completed
     bool pass_writes_uav_ = false;  // a draw of the open pass uses a pipeline that binds a UAV
     bool bound_emulated_ = false;  // the render encoder's bindings are those of an emulated (mesh) pipeline
+    // The pipeline and fixed-function state the open render encoder has been given (reset with each new encoder).
+    struct RasterState {
+        id<MTLRenderPipelineState> pipeline = nil;
+        id<MTLDepthStencilState> depth_stencil = nil;
+        MTLCullMode cull_mode = MTLCullModeNone;
+        MTLWinding winding = MTLWindingClockwise;
+        MTLTriangleFillMode fill_mode = MTLTriangleFillModeFill;
+        MTLDepthClipMode depth_clip = MTLDepthClipModeClip;
+        float depth_bias = 0, slope_scaled = 0, bias_clamp = 0;
+        bool raster_valid = false;
+    } bound_raster_;
     uint32_t dirty_ = kAll;  // state_ pieces the current render encoder has not seen
     uint32_t dirty_compute_ = kAll;  // the same for the compute encoder
     // The next encoder must wait for the one before it: a barrier or the start of a command list (command
@@ -683,8 +797,9 @@ id<MTLBlitCommandEncoder> Replay::blit()
 {
     if (!blit_) {
         end_compute();
-        end_render();
+        end_render("blit");
         flush_clears(false);
+        SubmitTimer timer(kPartBlitEncoder);
         if (const int slot = profile_begin("blit"); slot >= 0) {
             MTLBlitPassDescriptor *pass = [MTLBlitPassDescriptor blitPassDescriptor];
             pass.sampleBufferAttachments[0].sampleBuffer = profile_->samples;
@@ -710,8 +825,9 @@ id<MTLComputeCommandEncoder> Replay::compute()
 {
     if (!compute_) {
         end_blit();
-        end_render();
+        end_render("compute");
         flush_clears(false);
+        SubmitTimer timer(kPartComputeEncoder);
         // Dispatches may overlap; a barrier orders the ones around it.
         if (const int slot = profile_begin("compute"); slot >= 0) {
             MTLComputePassDescriptor *pass = [MTLComputePassDescriptor computePassDescriptor];
@@ -739,6 +855,7 @@ id<MTLRenderCommandEncoder> Replay::new_render_encoder(MTLRenderPassDescriptor *
 {
     end_blit();
     end_compute();
+    SubmitTimer timer(kPartRenderEncoder);
     queue_->render_passes.fetch_add(1, std::memory_order_relaxed);
     if (pass_profile_enabled()) {
         char key[160];
@@ -814,7 +931,7 @@ mtlb_result Replay::set_render_targets(const mtlb_cmd_set_render_targets &cmd)
         && depth == state_.depth && cmd.depth_flags == state_.depth_flags)
         return MTLB_OK;
 
-    end_render();
+    end_render("set_render_targets");
     std::copy(targets, targets + cmd.count, state_.targets);
     std::fill(state_.targets + cmd.count, state_.targets + MTLB_MAX_RENDER_TARGETS, Target{});
     state_.num_targets = cmd.count;
@@ -862,7 +979,7 @@ mtlb_result Replay::add_clear(const PendingClear &clear)
         // pending while later draws in this list might read it. Either way the
         // pass ends, and a view outside it is cleared at once.
         const bool bound = is_bound(clear);
-        end_render();
+        end_render("add_clear");
         if (!bound)
             return clear_only_pass(clear);
     }
@@ -890,7 +1007,7 @@ mtlb_result Replay::add_clear(const PendingClear &clear)
 // current targets stay pending so the next pass can fold them into load actions.
 mtlb_result Replay::flush_clears(bool keep_bound)
 {
-    end_render();
+    end_render("flush_clears");
     for (auto it = clears_.begin(); it != clears_.end();) {
         if (keep_bound && is_bound(*it)) {
             ++it;
@@ -969,7 +1086,7 @@ mtlb_result Replay::clear_only_pass(const PendingClear &clear)
         ca.clearColor = MTLClearColorMake(clear.color[0], clear.color[1], clear.color[2], clear.color[3]);
     }
     render_ = new_render_encoder(pass);
-    end_render();
+    end_render("clear_only_pass");
     return MTLB_OK;
 }
 
@@ -1063,6 +1180,7 @@ mtlb_result Replay::open_render_pass()
     render_ = new_render_encoder(pass);
     if (!render_)
         return fail(MTLB_ERROR_DEVICE, "renderCommandEncoderWithDescriptor failed");
+    bound_raster_ = {};
     mark_all_dirty();
     return MTLB_OK;
 }
@@ -1078,7 +1196,7 @@ mtlb_result Replay::apply_state()
 
     if ((dirty_ & kPipeline) && state_.pipeline->color_view_formats != pass_color_views_) {
         // The open pass binds the targets as an earlier pipeline needed them: start one with the views this one wants.
-        end_render();
+        end_render("apply_state");
         mtlb_result result = open_render_pass();
         if (result != MTLB_OK)
             return result;
@@ -1099,15 +1217,43 @@ mtlb_result Replay::apply_state()
         id<MTLRenderPipelineState> pipeline_state = state_.pipeline->state_for(pass_depth_format_, pass_stencil_format_);
         if (!pipeline_state)
             return MTLB_ERROR_COMPILE_FAILED;
-        [render_ setRenderPipelineState:pipeline_state];
+        // Pipelines mostly differ in their shaders: what the encoder already has is not set again.
+        RasterState &bound = bound_raster_;
+        const Pipeline &p = *state_.pipeline;
+        if (bound.pipeline != pipeline_state) {
+            [render_ setRenderPipelineState:pipeline_state];
+            bound.pipeline = pipeline_state;
+        }
         // Without a depth-stencil attachment, depth and stencil tests pass, as in D3D12.
-        [render_ setDepthStencilState:pass_depth_format_ == MTLPixelFormatInvalid ? state_.pipeline->depth_stencil_off
-                                                                                  : state_.pipeline->depth_stencil];
-        [render_ setCullMode:state_.pipeline->cull_mode];
-        [render_ setFrontFacingWinding:state_.pipeline->winding];
-        [render_ setTriangleFillMode:state_.pipeline->fill_mode];
-        [render_ setDepthClipMode:state_.pipeline->depth_clip];
-        [render_ setDepthBias:state_.pipeline->depth_bias slopeScale:state_.pipeline->slope_scaled_depth_bias clamp:state_.pipeline->depth_bias_clamp];
+        id<MTLDepthStencilState> depth_stencil = pass_depth_format_ == MTLPixelFormatInvalid ? p.depth_stencil_off : p.depth_stencil;
+        if (bound.depth_stencil != depth_stencil) {
+            [render_ setDepthStencilState:depth_stencil];
+            bound.depth_stencil = depth_stencil;
+        }
+        if (!bound.raster_valid || bound.cull_mode != p.cull_mode) {
+            [render_ setCullMode:p.cull_mode];
+            bound.cull_mode = p.cull_mode;
+        }
+        if (!bound.raster_valid || bound.winding != p.winding) {
+            [render_ setFrontFacingWinding:p.winding];
+            bound.winding = p.winding;
+        }
+        if (!bound.raster_valid || bound.fill_mode != p.fill_mode) {
+            [render_ setTriangleFillMode:p.fill_mode];
+            bound.fill_mode = p.fill_mode;
+        }
+        if (!bound.raster_valid || bound.depth_clip != p.depth_clip) {
+            [render_ setDepthClipMode:p.depth_clip];
+            bound.depth_clip = p.depth_clip;
+        }
+        if (!bound.raster_valid || bound.depth_bias != p.depth_bias || bound.slope_scaled != p.slope_scaled_depth_bias
+            || bound.bias_clamp != p.depth_bias_clamp) {
+            [render_ setDepthBias:p.depth_bias slopeScale:p.slope_scaled_depth_bias clamp:p.depth_bias_clamp];
+            bound.depth_bias = p.depth_bias;
+            bound.slope_scaled = p.slope_scaled_depth_bias;
+            bound.bias_clamp = p.depth_bias_clamp;
+        }
+        bound.raster_valid = true;
     }
     if ((dirty_ & kViewports) && state_.num_viewports)
         [render_ setViewports:state_.viewports count:state_.num_viewports];
@@ -1178,7 +1324,11 @@ mtlb_result Replay::begin_draw(bool *ready)
         return MTLB_OK;
     }
     *ready = true;
-    mtlb_result result = apply_state();
+    mtlb_result result;
+    {
+        SubmitTimer timer(kPartApplyState);
+        result = apply_state();
+    }
     if (result == MTLB_OK && state_.pipeline->writes_uav)
         pass_writes_uav_ = true;
     return result;
@@ -1216,6 +1366,7 @@ mtlb_result Replay::draw(const mtlb_cmd_draw &cmd)
     if (result != MTLB_OK || !ready)
         return result;
     profile_work();
+    SubmitTimer timer(kPartDraw);
     if (const EmulatedPipeline *emulated = state_.pipeline->emulated.get()) {
         IRRuntimePrimitiveType primitive;
         if (!emulated_topology_ok(*emulated, &primitive))
@@ -1250,6 +1401,7 @@ mtlb_result Replay::draw_indexed(const mtlb_cmd_draw_indexed &cmd)
         return MTLB_OK;
     }
     profile_work();
+    SubmitTimer timer(kPartDraw);
     if (const EmulatedPipeline *emulated = state_.pipeline->emulated.get()) {
         IRRuntimePrimitiveType primitive;
         if (!emulated_topology_ok(*emulated, &primitive))
@@ -1484,7 +1636,7 @@ mtlb_result Replay::begin_query(const mtlb_cmd_query &cmd)
     // The visibility buffer is a property of a render pass: a pass that has none is ended so that the draws
     // that follow open one that counts into this heap.
     if (render_ && visibility_heap_ != heap)
-        end_render();
+        end_render("begin_query");
     visibility_heap_ = heap;
     query_.active = true;
     query_.index = cmd.index;
@@ -1595,7 +1747,7 @@ mtlb_result Replay::resolve_occlusion(QueryHeap *heap, const mtlb_cmd_resolve_qu
     if (!kernel)
         return MTLB_ERROR_COMPILE_FAILED;
     end_blit();
-    end_render();
+    end_render("resolve_occlusion");
     sync_needed_ = !sync_disabled_;
     id<MTLComputeCommandEncoder> enc = compute();
     constexpr uint32_t kChunk = 512;  // setBytes takes at most 4 KB
@@ -1653,7 +1805,7 @@ mtlb_result Replay::write_immediate(const mtlb_cmd_write_immediate &cmd)
     // After everything recorded before it, and before whatever follows.
     sync_needed_ = !sync_disabled_;
     end_blit();
-    end_render();
+    end_render("write_immediate");
     end_compute();  // a dispatch in the open concurrent encoder could still be running
     id<MTLComputeCommandEncoder> enc = compute();
     const uint64_t where[2] = {offset, cmd.size};
@@ -1699,7 +1851,7 @@ mtlb_result Replay::resolve(const mtlb_cmd_resolve &cmd)
     ca.loadAction = MTLLoadActionLoad;
     ca.storeAction = MTLStoreActionStoreAndMultisampleResolve;
     render_ = new_render_encoder(pass);
-    end_render();
+    end_render("resolve");
     return MTLB_OK;
 }
 
@@ -1898,6 +2050,7 @@ mtlb_result Replay::barrier(const mtlb_cmd_barrier &cmd)
     if (!array_fits<mtlb_barrier>(cmd, cmd.count))
         return fail(MTLB_ERROR_INVALID_ARGUMENT, "barrier count exceeds the record");
     stat_add(kStatBarriers);
+    SubmitTimer timer(kPartBarrier);
     if (sync_disabled_)
         return MTLB_OK;
     sync_needed_ = true;
@@ -1921,7 +2074,7 @@ mtlb_result Replay::barrier(const mtlb_cmd_barrier &cmd)
     }
     end_blit();
     ending_for_barrier_ = true;
-    end_render();
+    end_render("barrier");
     ending_for_barrier_ = false;
     if (compute_)
         [compute_ memoryBarrierWithScope:MTLBarrierScopeBuffers | MTLBarrierScopeTextures];
@@ -2194,12 +2347,15 @@ void commit_open(Queue *queue)
 {
     if (!queue->open)
         return;
+    SubmitTimer timer(kPartCommit);
     for (; queue->debug_depth > 0; --queue->debug_depth)
         [queue->open popDebugGroup];
     commit_residency(queue->device);
     [queue->open commit];
     stat_add(kStatCommandBuffers);
     queue->open = nil;
+    if (submit_profile_enabled())
+        report_submit_profile();
 }
 
 } // namespace
@@ -2242,8 +2398,12 @@ void mtlb_queue_destroy(mtlb_queue handle)
     Queue *queue = from_handle<Queue>(handle);
     if (!queue)
         return;
-    commit_open(queue);
-    [queue->queue removeResidencySet:queue->device->residency];
+    {
+        // A submit, signal or wait on another thread finishes first (it holds the lock that the queue's mutex dies with).
+        std::lock_guard<std::mutex> lock(queue->mutex);
+        commit_open(queue);
+        [queue->queue removeResidencySet:queue->device->residency];
+    }
     delete queue;
 }
 
@@ -2254,6 +2414,7 @@ mtlb_result mtlb_queue_submit(mtlb_queue handle, const mtlb_span *spans, uint32_
         return MTLB_ERROR_INVALID_ARGUMENT;
     stat_add(kStatSubmits);
     std::lock_guard<std::mutex> lock(queue->mutex);
+    SubmitTimer timer(kPartSubmit);
     Replay replay(queue, open_command_buffer(queue));
     // Every span runs, whatever happened to the ones before it.
     for (uint32_t i = 0; i < count; ++i) {

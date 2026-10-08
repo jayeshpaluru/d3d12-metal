@@ -46,10 +46,29 @@ std::string error_text(IRError *error, const char *what)
     return text;
 }
 
-// The converter settings every shader is compiled with (they are part of the disk cache key).
-constexpr IRCompatibilityFlags kCompatibilityFlags = static_cast<IRCompatibilityFlags>(
-    IRCompatibilityFlagBoundsCheck | IRCompatibilityFlagTextureMinLODClamp | IRCompatibilityFlagSamplerLODBias
-    | IRCompatibilityFlagSampleNanToZero | IRCompatibilityFlagPositionInvariance);
+// The converter settings every shader is compiled with (they are part of the disk cache key). D3D12METAL_COMPAT_FLAGS
+// (a number, IRCompatibilityFlags) and D3D12METAL_GPU_FAMILY (IRGPUFamily, e.g. 1008) replace them, to measure what
+// a flag costs.
+IRCompatibilityFlags compatibility_flags()
+{
+    static const IRCompatibilityFlags flags = [] {
+        if (const char *v = std::getenv("D3D12METAL_COMPAT_FLAGS"); v && *v)
+            return static_cast<IRCompatibilityFlags>(std::strtoul(v, nullptr, 0));
+        return static_cast<IRCompatibilityFlags>(
+            IRCompatibilityFlagBoundsCheck | IRCompatibilityFlagTextureMinLODClamp | IRCompatibilityFlagSamplerLODBias
+            | IRCompatibilityFlagSampleNanToZero | IRCompatibilityFlagPositionInvariance);
+    }();
+    return flags;
+}
+
+uint32_t minimum_gpu_family()
+{
+    static const uint32_t family = [] {
+        const char *v = std::getenv("D3D12METAL_GPU_FAMILY");
+        return v && *v ? static_cast<uint32_t>(std::strtoul(v, nullptr, 0)) : 0u;
+    }();
+    return family;
+}
 constexpr uint32_t kCacheRevision = 2;  // bump when the conversion changes in a way the key does not capture
 
 // One compiler per thread: creating one per stage per pipeline is wasteful. Pipelines with geometry or
@@ -68,7 +87,9 @@ IRCompiler *thread_compiler(bool emulation = false)
         // D3D12 semantics the converter leaves off by default: out-of-bounds buffer and texture reads
         // return zero (and writes are dropped), the descriptors' min LOD clamp and the samplers' LOD bias
         // are applied, NaN coordinates sample as zero, and equal vertex shaders give equal positions.
-        IRCompilerSetCompatibilityFlags(compiler.ptr, kCompatibilityFlags);
+        IRCompilerSetCompatibilityFlags(compiler.ptr, compatibility_flags());
+        if (minimum_gpu_family())
+            IRCompilerSetMinimumGPUFamily(compiler.ptr, static_cast<IRGPUFamily>(minimum_gpu_family()));
     }
     return compiler.ptr;
 }
@@ -170,7 +191,9 @@ CacheKey stage_key(RootSignature *root_signature, const void *dxil, uint64_t siz
     h.update(std::string("stage"));
     h.update(DiskCache::converter_identity());
     h.update_value(kCacheRevision);
-    h.update_value(static_cast<uint32_t>(kCompatibilityFlags));
+    h.update_value(static_cast<uint32_t>(compatibility_flags()));
+    if (minimum_gpu_family())  // (the keys without it stay as they were)
+        h.update_value(minimum_gpu_family());
     h.update_value(static_cast<uint32_t>(ir_stage));
     if (options.emulation)  // (the keys of the other stages stay as they were)
         h.update_value(options.key());
