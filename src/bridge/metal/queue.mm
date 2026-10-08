@@ -438,7 +438,9 @@ id<MTLBlitCommandEncoder> Replay::blit()
         end_render();
         flush_clears(false);
         blit_ = [cb_ blitCommandEncoder];
+        stat_add(kStatBlitEncoders);
         if (sync_needed_ && queue_->fence_pending) {
+            stat_add(kStatSyncs);
             [blit_ waitForFence:queue_->fence];
             queue_->fence_pending = false;
         }
@@ -456,7 +458,9 @@ id<MTLComputeCommandEncoder> Replay::compute()
         flush_clears(false);
         // Dispatches may overlap; a barrier orders the ones around it.
         compute_ = [cb_ computeCommandEncoderWithDispatchType:MTLDispatchTypeConcurrent];
+        stat_add(kStatComputeEncoders);
         if (sync_needed_ && queue_->fence_pending) {
+            stat_add(kStatSyncs);
             [compute_ waitForFence:queue_->fence];
             queue_->fence_pending = false;
         }
@@ -472,7 +476,9 @@ id<MTLRenderCommandEncoder> Replay::new_render_encoder(MTLRenderPassDescriptor *
     end_compute();
     queue_->render_passes.fetch_add(1, std::memory_order_relaxed);
     id<MTLRenderCommandEncoder> encoder = [cb_ renderCommandEncoderWithDescriptor:pass];
+    stat_add(kStatRenderEncoders);
     if (sync_needed_ && queue_->fence_pending) {
+        stat_add(kStatSyncs);
         [encoder waitForFence:queue_->fence beforeStages:MTLRenderStageVertex];
         queue_->fence_pending = false;
     }
@@ -1455,6 +1461,7 @@ mtlb_result Replay::barrier(const mtlb_cmd_barrier &cmd)
 {
     if (!array_fits<mtlb_barrier>(cmd, cmd.count))
         return fail(MTLB_ERROR_INVALID_ARGUMENT, "barrier count exceeds the record");
+    stat_add(kStatBarriers);
     if (sync_disabled_)
         return MTLB_OK;
     sync_needed_ = true;
@@ -1672,12 +1679,26 @@ void commit_open(Queue *queue)
         [queue->open popDebugGroup];
     commit_residency(queue->device);
     [queue->open commit];
+    stat_add(kStatCommandBuffers);
     queue->open = nil;
 }
 
 } // namespace
 
+namespace mtlb {
+std::atomic<uint64_t> g_stats[kStatCount];
+}
+
 extern "C" {
+
+void mtlb_stats_get(mtlb_stats *out)
+{
+    if (!out)
+        return;
+    const auto &s = mtlb::g_stats;
+    *out = {s[mtlb::kStatSubmits], s[mtlb::kStatCommandBuffers], s[mtlb::kStatRenderEncoders], s[mtlb::kStatComputeEncoders],
+            s[mtlb::kStatBlitEncoders], s[mtlb::kStatBarriers], s[mtlb::kStatSyncs]};
+}
 
 mtlb_result mtlb_queue_create(mtlb_device handle, mtlb_queue *out)
 {
@@ -1711,6 +1732,7 @@ mtlb_result mtlb_queue_submit(mtlb_queue handle, const mtlb_span *spans, uint32_
     Queue *queue = from_handle<Queue>(handle);
     if (!queue || (!spans && count))
         return MTLB_ERROR_INVALID_ARGUMENT;
+    stat_add(kStatSubmits);
     std::lock_guard<std::mutex> lock(queue->mutex);
     Replay replay(queue, open_command_buffer(queue));
     // Every span runs, whatever happened to the ones before it.

@@ -1,5 +1,8 @@
 // D3D12GetInterface (SDK configuration, DRED settings, unknown classes), D3D12EnableExperimentalFeatures and the
 // DXGI video memory budget.
+#include <chrono>
+#include <thread>
+
 #include "t12.h"
 
 #ifdef _WIN32
@@ -68,10 +71,11 @@ int main()
         CHECK(local.AvailableForReservation > 0);
         CHECK(adapter3->QueryVideoMemoryInfo(1, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &local) == E_INVALIDARG);
 
-        // Usage follows allocations.
+        // Usage follows allocations (the layer samples it at most every 250 ms, as games poll it every frame).
         DXGI_QUERY_VIDEO_MEMORY_INFO before = {}, after = {};
         CHECK_HR(adapter3->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &before));
         ComPtr<ID3D12Resource> big = gpu.buffer(D3D12_HEAP_TYPE_DEFAULT, 256ull * 1024 * 1024);
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
         CHECK_HR(adapter3->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &after));
         CHECK(after.CurrentUsage >= before.CurrentUsage + 128ull * 1024 * 1024);
 

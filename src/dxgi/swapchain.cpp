@@ -10,6 +10,7 @@
 #include "common/log.h"
 #include "common/platform.h"
 #include "common/private_data.h"
+#include "common/stats.h"
 #include "d3d12/command_queue.h"
 #include "d3d12/device.h"
 #include "d3d12/fence.h"
@@ -489,6 +490,7 @@ private:
             if (is_flip(desc_.SwapEffect))
                 current_ = (current_ + 1) % static_cast<UINT>(buffers_.size());
         }
+        stats_frame();
         const mtlb_result result = mtlb_queue_present(queue_->handle(), handle_, buffer->texture(), sync_interval);
         buffer->Release();
         if (result != MTLB_OK) {

@@ -1,6 +1,8 @@
 #include "dxgi/adapter.h"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <iterator>
 
 #include "common/com.h"
@@ -131,8 +133,16 @@ public:
         if (node != 0 || !info || (group != DXGI_MEMORY_SEGMENT_GROUP_LOCAL && group != DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL))
             return E_INVALIDARG;
         const bool local = group == DXGI_MEMORY_SEGMENT_GROUP_LOCAL;
-        mtlb_device_caps caps;
-        const UINT64 used = mtlb_query_caps(registry_id_, &caps) == MTLB_OK ? caps.current_allocated_size : 0;
+        // Games poll this every frame; the answer (a bridge call) is reused for a quarter of a second.
+        const uint64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                 std::chrono::steady_clock::now().time_since_epoch()).count();
+        if (now - usage_sampled_ms_.load(std::memory_order_relaxed) >= 250 || !usage_valid_.load(std::memory_order_relaxed)) {
+            mtlb_device_caps caps;
+            usage_.store(mtlb_query_caps(registry_id_, &caps) == MTLB_OK ? caps.current_allocated_size : 0, std::memory_order_relaxed);
+            usage_sampled_ms_.store(now, std::memory_order_relaxed);
+            usage_valid_.store(true, std::memory_order_relaxed);
+        }
+        const UINT64 used = usage_.load(std::memory_order_relaxed);
         info->Budget = local ? desc_.DedicatedVideoMemory / 10 * 9 : 256ull * 1024 * 1024;
         info->CurrentUsage = local ? used : 0;
         info->AvailableForReservation = info->Budget / 2;
@@ -164,6 +174,9 @@ private:
     DXGI_ADAPTER_DESC2 desc_{}; // GetDesc/GetDesc1 are prefixes of this
     uint64_t registry_id_ = 0;
     std::atomic<UINT64> reservation_[2] = {};
+    std::atomic<UINT64> usage_{0};            // cached current_allocated_size
+    std::atomic<uint64_t> usage_sampled_ms_{0};
+    std::atomic<bool> usage_valid_{false};
     std::atomic<DWORD> next_cookie_{1};
 };
 

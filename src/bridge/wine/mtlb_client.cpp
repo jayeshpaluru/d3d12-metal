@@ -6,6 +6,7 @@
 // Pointers cross unchanged: a Wine process has one address space.
 #include <windows.h>
 
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -90,6 +91,8 @@ Transport connect()
     return t;
 }
 
+std::atomic<uint64_t> g_call_count{0};
+
 const Transport &transport()
 {
     static const Transport t = connect();
@@ -111,12 +114,19 @@ static bool mtlb_wine_call(unsigned index, void *params, const char *name)
         }
         return false;
     }
+    g_call_count.fetch_add(1, std::memory_order_relaxed);
     const LONG status = (*t.dispatcher)(t.handle, index, params);
     if (status != 0) {
         fprintf(stderr, "d3d12-metal: unix call %s failed: 0x%08lx\n", name, static_cast<unsigned long>(status));
         return false;
     }
     return true;
+}
+
+// Unix calls made so far (D3D12METAL_STATS reports them per frame).
+extern "C" uint64_t mtlb_client_call_count(void)
+{
+    return g_call_count.load(std::memory_order_relaxed);
 }
 
 extern "C" {

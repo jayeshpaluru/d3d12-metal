@@ -222,6 +222,19 @@ MTLB_EXPORT mtlb_result mtlb_device_get_caps(mtlb_device device, mtlb_device_cap
  * executable's name; call this before the first pipeline is created (later calls are ignored). */
 MTLB_EXPORT void mtlb_cache_configure(const char *app_name);
 
+/* Backend counters since the process started (cheap relaxed atomics, always on); the front-end prints
+ * per-frame averages when D3D12METAL_STATS=1. */
+typedef struct mtlb_stats {
+    uint64_t submits;          /* mtlb_queue_submit calls */
+    uint64_t command_buffers;  /* committed MTLCommandBuffers */
+    uint64_t render_encoders;  /* render passes */
+    uint64_t compute_encoders;
+    uint64_t blit_encoders;
+    uint64_t barriers;         /* barrier records that ended encoders / ordered work */
+    uint64_t syncs;            /* encoders that waited on the queue fence */
+} mtlb_stats;
+MTLB_EXPORT void mtlb_stats_get(mtlb_stats *out);
+
 typedef struct mtlb_cache_stats {
     uint64_t hits, misses;     /* lookups: found, not found */
     uint64_t writes;           /* entries stored */
@@ -687,6 +700,7 @@ MTLB_ASSERT_OFFSET(mtlb_span, size, 8);
 MTLB_ASSERT_SIZE(mtlb_format_info, 16);
 MTLB_ASSERT_SIZE(mtlb_device_caps, 304);
 MTLB_ASSERT_SIZE(mtlb_cache_stats, 48);
+MTLB_ASSERT_SIZE(mtlb_stats, 56);
 MTLB_ASSERT_SIZE(mtlb_buffer_info, 24);
 MTLB_ASSERT_OFFSET(mtlb_buffer_info, gpu_address, 8);
 MTLB_ASSERT_SIZE(mtlb_descriptor, 24);

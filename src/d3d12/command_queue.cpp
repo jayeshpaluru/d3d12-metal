@@ -1,4 +1,5 @@
 #include "d3d12/command_queue.h"
+#include "common/stats.h"
 
 #include <new>
 #include <vector>
@@ -61,6 +62,12 @@ void CommandQueue::ExecuteCommandLists(UINT count, ID3D12CommandList *const *lis
     if (!init_stream.empty())
         spans[0] = {init_stream.data(), init_stream.size()};
     const UINT first = init_stream.empty() ? 1 : 0;
+    if (g_stats_enabled) {
+        stat_add(Stat::Submits);
+        stat_add(Stat::CommandLists, count);
+        for (UINT i = 1; i <= count; ++i)
+            stat_add(Stat::StreamBytes, spans[i].size);
+    }
     if (mtlb_queue_submit(queue_, spans.data() + first, count + 1 - first) != MTLB_OK)
         D3D12M_LOG("command submission failed: %s", mtlb_last_error());
     for (Resource *resource : initialized)

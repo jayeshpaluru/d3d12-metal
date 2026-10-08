@@ -8,6 +8,7 @@
 
 #include "common/luid.h"
 #include "common/platform.h"
+#include "common/stats.h"
 #include "d3d12/command_allocator.h"
 #include "d3d12/command_list.h"
 #include "d3d12/command_queue.h"
@@ -379,6 +380,7 @@ void Device::unregister_heap(DescriptorHeap *heap)
 DescriptorHeap *Device::validate_cpu_range(D3D12_CPU_DESCRIPTOR_HANDLE handle, UINT count, D3D12_DESCRIPTOR_HEAP_TYPE type,
                                            size_t *index)
 {
+    stat_add(Stat::DescriptorWrites, count);  // every descriptor write and copy passes here
     struct Cache {
         const Device *device;
         uint64_t generation;

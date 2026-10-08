@@ -3,6 +3,7 @@
 #include <cstring>
 
 #include "common/log.h"
+#include "common/stats.h"
 #include "d3d12/device.h"
 #include "d3d12/formats.h"
 
@@ -110,6 +111,8 @@ HRESULT PipelineState::create_graphics(Device *device, const D3D12_GRAPHICS_PIPE
         m.step_rate = e.InstanceDataStepRate;
     }
 
+    stat_add(Stat::PsoCreations);
+    PsoTimer timer;
     auto *pso = new PipelineState(device);
     mtlb_result result = mtlb_pipeline_create(device->handle(), &pd, &pso->pipeline_);
     if (result != MTLB_OK) {
@@ -140,6 +143,8 @@ HRESULT PipelineState::create_compute(Device *device, const D3D12_COMPUTE_PIPELI
     pd.cs_size = desc.CS.BytecodeLength;
     pd.root_signature = root_signature->handle();
 
+    stat_add(Stat::PsoCreations);
+    PsoTimer timer;
     auto *pso = new PipelineState(device);
     mtlb_result result = mtlb_compute_pipeline_create(device->handle(), &pd, &pso->pipeline_);
     if (result != MTLB_OK) {
