@@ -108,6 +108,44 @@ int main()
     draw_without_pipeline.add(MTLB_CMD_DRAW, sizeof(mtlb_cmd_draw));
     CHECK(submit(draw_without_pipeline) != MTLB_OK);
 
+    // An invalid record is skipped and the rest still runs: later records of the
+    // same list and later lists. Observable as the clear-only pass the valid
+    // CLEAR_RTV costs.
+    mtlb_texture_desc texture_desc = {};
+    texture_desc.dimension = MTLB_TEXTURE_2D;
+    texture_desc.format = MTLB_FORMAT_R8G8B8A8_UNORM;
+    texture_desc.width = texture_desc.height = 8;
+    texture_desc.depth_or_array_size = texture_desc.mip_levels = texture_desc.sample_count = 1;
+    texture_desc.usage = MTLB_TEXTURE_USAGE_RENDER_TARGET;
+    texture_desc.storage = MTLB_STORAGE_PRIVATE;
+    mtlb_texture texture = 0;
+    CHECK(mtlb_texture_create(device, &texture_desc, &texture, nullptr) == MTLB_OK);
+    struct ClearBody {
+        mtlb_render_target target;
+        float color[4];
+    } clear_body = {{texture, 0, 0, 0, 0}, {1, 0, 0, 1}};
+    auto add_clear = [&](Stream &stream) {
+        stream.add(MTLB_CMD_CLEAR_RTV, sizeof(mtlb_cmd_clear_rtv), &clear_body, sizeof(clear_body));
+    };
+
+    Stream skip_then_clear;  // semantic error, then a valid clear
+    skip_then_clear.add(MTLB_CMD_DRAW, sizeof(mtlb_cmd_draw));
+    add_clear(skip_then_clear);
+    uint64_t passes = mtlb_queue_render_pass_count(queue);
+    CHECK(submit(skip_then_clear) != MTLB_OK);
+    CHECK(mtlb_queue_render_pass_count(queue) == passes + 1);
+
+    Stream clear_only;
+    add_clear(clear_only);
+    Stream malformed = truncated;  // structural error ends only its own span
+    const mtlb_span spans[] = {{malformed.bytes.data(), malformed.bytes.size()},
+                               {unknown.bytes.data(), unknown.bytes.size()},
+                               {clear_only.bytes.data(), clear_only.bytes.size()}};
+    passes = mtlb_queue_render_pass_count(queue);
+    CHECK(mtlb_queue_submit(queue, spans, 3) != MTLB_OK);
+    CHECK(mtlb_queue_render_pass_count(queue) == passes + 1);
+    mtlb_texture_destroy(texture);
+
     // The queue still works after rejected streams.
     CHECK(submit(valid) == MTLB_OK);
 

@@ -89,7 +89,14 @@ class Replay {
 public:
     Replay(Queue *queue, id<MTLCommandBuffer> command_buffer) : queue_(queue), cb_(command_buffer) {}
 
-    mtlb_result run(const uint8_t *stream, size_t length);
+    // Replays one stream. A record that is invalid in itself (a bad handle, an
+    // unresolvable address) is skipped and the stream goes on; a structurally
+    // malformed stream (bad size, truncation, unknown type) ends this stream only.
+    // The first error is kept for error().
+    void run(const uint8_t *stream, size_t length);
+    void note_span_error() { note_error(fail(MTLB_ERROR_INVALID_ARGUMENT, "span without data")); }
+    mtlb_result error() const { return error_; }
+    const std::string &error_message() const { return error_message_; }
     void finish()
     {
         end_blit();
@@ -163,8 +170,13 @@ private:
         render_ = nil;
     }
 
+    void note_error(mtlb_result result);
+
     Queue *queue_;
     id<MTLCommandBuffer> cb_;
+    mtlb_result error_ = MTLB_OK;
+    std::string error_message_;
+    bool abort_stream_ = false;  // set by structural errors
     id<MTLRenderCommandEncoder> render_ = nil;
     id<MTLBlitCommandEncoder> blit_ = nil;
 
@@ -175,21 +187,36 @@ private:
     NSUInteger target_width_ = 0, target_height_ = 0;
 };
 
-mtlb_result Replay::run(const uint8_t *stream, size_t length)
+void Replay::note_error(mtlb_result result)
 {
+    if (error_ != MTLB_OK)
+        return;
+    error_ = result;
+    error_message_ = mtlb_last_error();
+    static std::atomic<bool> logged{false};
+    if (!logged.exchange(true))
+        std::fprintf(stderr, "d3d12-metal: invalid command skipped: %s\n", error_message_.c_str());
+}
+
+void Replay::run(const uint8_t *stream, size_t length)
+{
+    abort_stream_ = false;
     size_t offset = 0;
-    while (offset < length) {
-        if (length - offset < sizeof(mtlb_cmd_header))
-            return fail(MTLB_ERROR_INVALID_ARGUMENT, "truncated command header");
+    while (offset < length && !abort_stream_) {
+        if (length - offset < sizeof(mtlb_cmd_header)) {
+            note_error(fail(MTLB_ERROR_INVALID_ARGUMENT, "truncated command header"));
+            return;
+        }
         auto *cmd = reinterpret_cast<const mtlb_cmd_header *>(stream + offset);
-        if (cmd->size < sizeof(mtlb_cmd_header) || cmd->size > length - offset || (cmd->size & 7))
-            return fail(MTLB_ERROR_INVALID_ARGUMENT, "bad command size " + std::to_string(cmd->size));
+        if (cmd->size < sizeof(mtlb_cmd_header) || cmd->size > length - offset || (cmd->size & 7)) {
+            note_error(fail(MTLB_ERROR_INVALID_ARGUMENT, "bad command size " + std::to_string(cmd->size)));
+            return;
+        }
         mtlb_result result = execute(cmd);
         if (result != MTLB_OK)
-            return result;
+            note_error(result);
         offset += cmd->size;
     }
-    return MTLB_OK;
 }
 
 // The blit encoder, opened on demand. Copies end the render pass and run any
@@ -474,8 +501,10 @@ mtlb_result Replay::copy_texture(const mtlb_texture_copy_region &r, bool to_buff
 template <class T>
 mtlb_result Replay::dispatch(const mtlb_cmd_header *header, mtlb_result (Replay::*handler)(const T &))
 {
-    if (header->size < sizeof(T))
+    if (header->size < sizeof(T)) {
+        abort_stream_ = true;
         return fail(MTLB_ERROR_INVALID_ARGUMENT, "command " + std::to_string(header->type) + " is too small");
+    }
     return (this->*handler)(*reinterpret_cast<const T *>(header));
 }
 
@@ -613,7 +642,9 @@ mtlb_result Replay::execute(const mtlb_cmd_header *header)
     case MTLB_CMD_COPY_BUFFER: return dispatch(header, &Replay::copy_buffer);
     case MTLB_CMD_COPY_TEXTURE_TO_BUFFER: return dispatch(header, &Replay::copy_texture_to_buffer);
     case MTLB_CMD_COPY_BUFFER_TO_TEXTURE: return dispatch(header, &Replay::copy_buffer_to_texture);
-    default: return fail(MTLB_ERROR_INVALID_ARGUMENT, "unknown command type " + std::to_string(header->type));
+    default:
+        abort_stream_ = true;
+        return fail(MTLB_ERROR_INVALID_ARGUMENT, "unknown command type " + std::to_string(header->type));
     }
 }
 
@@ -685,17 +716,17 @@ mtlb_result mtlb_queue_submit(mtlb_queue handle, const mtlb_span *spans, uint32_
         return MTLB_ERROR_INVALID_ARGUMENT;
     std::lock_guard<std::mutex> lock(queue->mutex);
     Replay replay(queue, open_command_buffer(queue));
-    mtlb_result result = MTLB_OK;
-    for (uint32_t i = 0; i < count && result == MTLB_OK; ++i) {
+    // Every span runs, whatever happened to the ones before it.
+    for (uint32_t i = 0; i < count; ++i) {
         if (!spans[i].data && spans[i].size)
-            result = fail(MTLB_ERROR_INVALID_ARGUMENT, "span without data");
+            replay.note_span_error();
         else
-            result = replay.run(spans[i].data, spans[i].size);
+            replay.run(spans[i].data, spans[i].size);
     }
-    replay.finish();  // work encoded before a failure stays in the open buffer
+    replay.finish();
     if (++queue->open_submits >= kMaxOpenSubmits)
         commit_open(queue);
-    return result;
+    return replay.error() == MTLB_OK ? MTLB_OK : fail(replay.error(), replay.error_message());
 }
 
 uint64_t mtlb_queue_render_pass_count(mtlb_queue handle)
