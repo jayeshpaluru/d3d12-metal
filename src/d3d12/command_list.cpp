@@ -55,6 +55,7 @@ CommandList::~CommandList()
 {
     safe_release(graphics_.signature);
     safe_release(compute_.signature);
+    drop_pass();
 }
 
 template <typename T>
@@ -66,6 +67,7 @@ T *CommandList::append(mtlb_cmd_type type, size_t extra_bytes)
 void CommandList::reset_state()
 {
     stream_.clear();
+    drop_pass();
     has_graphics_pipeline_ = has_compute_pipeline_ = false;
     for (RootState *state : {&graphics_, &compute_}) {
         safe_release(state->signature);
@@ -216,6 +218,12 @@ void CommandList::IASetIndexBuffer(const D3D12_INDEX_BUFFER_VIEW *view)
 void CommandList::OMSetRenderTargets(UINT count, const D3D12_CPU_DESCRIPTOR_HANDLE *rtvs,
                                      BOOL single_handle_to_range, const D3D12_CPU_DESCRIPTOR_HANDLE *dsv)
 {
+    set_render_targets(count, rtvs, single_handle_to_range, dsv, 0);
+}
+
+void CommandList::set_render_targets(UINT count, const D3D12_CPU_DESCRIPTOR_HANDLE *rtvs, bool single_handle_to_range,
+                                     const D3D12_CPU_DESCRIPTOR_HANDLE *dsv, uint32_t extra_depth_flags)
+{
     if (closed_ || count > MTLB_MAX_RENDER_TARGETS || (count && !rtvs) || (dsv && !dsv->ptr))
         return;
     for (UINT i = 0; i < count; ++i) {
@@ -227,13 +235,105 @@ void CommandList::OMSetRenderTargets(UINT count, const D3D12_CPU_DESCRIPTOR_HAND
     if (dsv) {
         const RenderTargetDescriptor &view = dsv_from_handle(*dsv);
         cmd->depth = to_render_target(view);
-        cmd->depth_flags = view.flags;
+        cmd->depth_flags = view.flags | extra_depth_flags;
     }
     for (UINT i = 0; i < count; ++i) {
         D3D12_CPU_DESCRIPTOR_HANDLE handle = single_handle_to_range
                                                  ? D3D12_CPU_DESCRIPTOR_HANDLE{rtvs[0].ptr + i * kDescriptorSize}
                                                  : rtvs[i];
         cmd->targets[i] = to_render_target(rtv_from_handle(handle));
+    }
+}
+
+// ---- Render passes ----------------------------------------------------------------
+//
+// A pass is the render targets it names, cleared by the beginning accesses that ask for it, and the resolves its
+// ending accesses ask for when it ends. Discarding and preserving both keep the contents (Metal's store action
+// is chosen by the backend); suspending and resuming passes split one pass across lists: only the first
+// clears and only the last resolves.
+
+void CommandList::drop_pass()
+{
+    for (PassResolve &resolve : pass_resolves_) {
+        resolve.source->Release();
+        resolve.destination->Release();
+    }
+    pass_resolves_.clear();
+    in_pass_ = false;
+}
+
+void CommandList::BeginRenderPass(UINT count, const D3D12_RENDER_PASS_RENDER_TARGET_DESC *targets,
+                                  const D3D12_RENDER_PASS_DEPTH_STENCIL_DESC *depth_stencil, D3D12_RENDER_PASS_FLAGS flags)
+{
+    if (closed_ || in_pass_ || count > MTLB_MAX_RENDER_TARGETS || (count && !targets)) {
+        D3D12M_LOG("BeginRenderPass: needs an open list outside a pass and valid targets");
+        return;
+    }
+    D3D12_CPU_DESCRIPTOR_HANDLE rtvs[MTLB_MAX_RENDER_TARGETS];
+    for (UINT i = 0; i < count; ++i)
+        rtvs[i] = targets[i].cpuDescriptor;
+    const bool resuming = flags & D3D12_RENDER_PASS_FLAG_RESUMING_PASS;
+    const bool suspending = flags & D3D12_RENDER_PASS_FLAG_SUSPENDING_PASS;
+    uint32_t depth_flags = 0;
+    if (flags & D3D12_RENDER_PASS_FLAG_BIND_READ_ONLY_DEPTH)
+        depth_flags |= MTLB_DEPTH_READ_ONLY;
+    if (flags & D3D12_RENDER_PASS_FLAG_BIND_READ_ONLY_STENCIL)
+        depth_flags |= MTLB_STENCIL_READ_ONLY;
+    set_render_targets(count, rtvs, false, depth_stencil ? &depth_stencil->cpuDescriptor : nullptr, depth_flags);
+    in_pass_ = true;
+
+    if (!resuming) {
+        for (UINT i = 0; i < count; ++i) {
+            if (targets[i].BeginningAccess.Type == D3D12_RENDER_PASS_BEGINNING_ACCESS_TYPE_CLEAR)
+                ClearRenderTargetView(rtvs[i], targets[i].BeginningAccess.Clear.ClearValue.Color, 0, nullptr);
+        }
+        if (depth_stencil) {
+            const bool clear_depth = depth_stencil->DepthBeginningAccess.Type == D3D12_RENDER_PASS_BEGINNING_ACCESS_TYPE_CLEAR;
+            const bool clear_stencil = depth_stencil->StencilBeginningAccess.Type == D3D12_RENDER_PASS_BEGINNING_ACCESS_TYPE_CLEAR;
+            if (clear_depth || clear_stencil) {
+                ClearDepthStencilView(depth_stencil->cpuDescriptor,
+                                      D3D12_CLEAR_FLAGS((clear_depth ? D3D12_CLEAR_FLAG_DEPTH : 0) | (clear_stencil ? D3D12_CLEAR_FLAG_STENCIL : 0)),
+                                      depth_stencil->DepthBeginningAccess.Clear.ClearValue.DepthStencil.Depth,
+                                      depth_stencil->StencilBeginningAccess.Clear.ClearValue.DepthStencil.Stencil, 0, nullptr);
+            }
+        }
+    }
+    if (suspending)
+        return;
+    for (UINT i = 0; i < count; ++i) {
+        const D3D12_RENDER_PASS_ENDING_ACCESS &end = targets[i].EndingAccess;
+        if (end.Type != D3D12_RENDER_PASS_ENDING_ACCESS_TYPE_RESOLVE)
+            continue;
+        const auto &resolve = end.Resolve;
+        if (!resolve.pSrcResource || !resolve.pDstResource || (resolve.SubresourceCount && !resolve.pSubresourceParameters))
+            continue;
+        for (UINT k = 0; k < resolve.SubresourceCount; ++k) {
+            resolve.pSrcResource->AddRef();
+            resolve.pDstResource->AddRef();
+            pass_resolves_.push_back({resolve.pSrcResource, resolve.pDstResource, resolve.pSubresourceParameters[k].SrcSubresource,
+                                      resolve.pSubresourceParameters[k].DstSubresource, resolve.Format});
+        }
+    }
+    if (depth_stencil && (depth_stencil->DepthEndingAccess.Type == D3D12_RENDER_PASS_ENDING_ACCESS_TYPE_RESOLVE
+                          || depth_stencil->StencilEndingAccess.Type == D3D12_RENDER_PASS_ENDING_ACCESS_TYPE_RESOLVE))
+        D3D12M_LOG("BeginRenderPass: resolving depth-stencil at the end of a pass is not supported");
+}
+
+void CommandList::EndRenderPass()
+{
+    if (closed_ || !in_pass_) {
+        D3D12M_LOG("EndRenderPass without BeginRenderPass");
+        return;
+    }
+    // Detached first: the resolves below are ordinary commands of the list.
+    std::vector<PassResolve> resolves;
+    resolves.swap(pass_resolves_);
+    in_pass_ = false;
+    for (PassResolve &resolve : resolves) {
+        ResolveSubresource(resolve.destination, resolve.destination_subresource, resolve.source, resolve.source_subresource,
+                           resolve.format);
+        resolve.source->Release();
+        resolve.destination->Release();
     }
 }
 

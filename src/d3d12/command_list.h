@@ -101,8 +101,8 @@ public:
     // ID3D12GraphicsCommandList3
     void STDMETHODCALLTYPE SetProtectedResourceSession(ID3D12ProtectedResourceSession *) override { D3D12M_STUB_LOG(); }
     // ID3D12GraphicsCommandList4
-    void STDMETHODCALLTYPE BeginRenderPass(UINT, const D3D12_RENDER_PASS_RENDER_TARGET_DESC *, const D3D12_RENDER_PASS_DEPTH_STENCIL_DESC *, D3D12_RENDER_PASS_FLAGS) override { D3D12M_STUB_LOG(); }
-    void STDMETHODCALLTYPE EndRenderPass() override { D3D12M_STUB_LOG(); }
+    void STDMETHODCALLTYPE BeginRenderPass(UINT NumRenderTargets, const D3D12_RENDER_PASS_RENDER_TARGET_DESC *pRenderTargets, const D3D12_RENDER_PASS_DEPTH_STENCIL_DESC *pDepthStencil, D3D12_RENDER_PASS_FLAGS Flags) override;
+    void STDMETHODCALLTYPE EndRenderPass() override;
     void STDMETHODCALLTYPE InitializeMetaCommand(ID3D12MetaCommand *, const void *, SIZE_T) override { D3D12M_STUB_LOG(); }
     void STDMETHODCALLTYPE ExecuteMetaCommand(ID3D12MetaCommand *, const void *, SIZE_T) override { D3D12M_STUB_LOG(); }
     void STDMETHODCALLTYPE BuildRaytracingAccelerationStructure(const D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC *, UINT, const D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_DESC *) override { D3D12M_STUB_LOG(); }
@@ -129,6 +129,18 @@ private:
         std::vector<uint8_t> args;
         bool dirty = false;
     };
+
+    // The resolves a render pass performs when it ends (the resources are referenced until then).
+    struct PassResolve {
+        ID3D12Resource *source, *destination;
+        UINT source_subresource, destination_subresource;
+        DXGI_FORMAT format;
+    };
+    void set_render_targets(UINT count, const D3D12_CPU_DESCRIPTOR_HANDLE *rtvs, bool single_handle_to_range,
+                            const D3D12_CPU_DESCRIPTOR_HANDLE *dsv, uint32_t extra_depth_flags);
+    void drop_pass();
+    std::vector<PassResolve> pass_resolves_;
+    bool in_pass_ = false;
 
     void reset_state();
     template <typename T>
