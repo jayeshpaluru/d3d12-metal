@@ -1,5 +1,5 @@
 // ID3D12CommandAllocator. Command lists record into their own streams, so the
-// allocator only carries the list type.
+// allocator holds no state.
 #pragma once
 
 #include "d3d12/object.h"
@@ -10,8 +10,6 @@ class CommandAllocator final : public ChildImpl<ID3D12CommandAllocator> {
 public:
     static HRESULT create(Device *device, D3D12_COMMAND_LIST_TYPE type, REFIID riid, void **out);
 
-    D3D12_COMMAND_LIST_TYPE type() const { return type_; }
-
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **out) override
     {
         return query_interfaces<IUnknown, ID3D12Object, ID3D12DeviceChild, ID3D12Pageable, ID3D12CommandAllocator>(this, riid, out);
@@ -20,9 +18,7 @@ public:
     HRESULT STDMETHODCALLTYPE Reset() override { return S_OK; }
 
 private:
-    CommandAllocator(Device *device, D3D12_COMMAND_LIST_TYPE type) : ChildImpl(device), type_(type) {}
-
-    D3D12_COMMAND_LIST_TYPE type_;
+    explicit CommandAllocator(Device *device) : ChildImpl(device) {}
 };
 
 inline HRESULT CommandAllocator::create(Device *device, D3D12_COMMAND_LIST_TYPE type, REFIID riid, void **out)
@@ -31,7 +27,7 @@ inline HRESULT CommandAllocator::create(Device *device, D3D12_COMMAND_LIST_TYPE 
         return E_POINTER;
     if (!supported_list_type(type))
         return E_INVALIDARG;
-    auto *allocator = new CommandAllocator(device, type);
+    auto *allocator = new CommandAllocator(device);
     return hand_out(allocator, riid, out);
 }
 

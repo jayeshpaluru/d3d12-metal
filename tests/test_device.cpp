@@ -20,6 +20,12 @@ int main()
     CHECK_HR(device->QueryInterface(IID_PPV_ARGS(device2.put())));
     CHECK(device->GetNodeCount() == 1);
 
+    // The device runs on the adapter's GPU.
+    const LUID luid = device->GetAdapterLuid();
+    CHECK(luid.LowPart == adapter_desc.AdapterLuid.LowPart && luid.HighPart == adapter_desc.AdapterLuid.HighPart);
+    Com<ID3D12Device> default_device;
+    CHECK_HR(D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(default_device.put())));
+
     // Feature support.
     D3D12_FEATURE_DATA_D3D12_OPTIONS options = {};
     CHECK_HR(device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS, &options, sizeof(options)));
@@ -31,6 +37,12 @@ int main()
 
     D3D12_FEATURE_DATA_ARCHITECTURE architecture = {};
     CHECK_HR(device->CheckFeatureSupport(D3D12_FEATURE_ARCHITECTURE, &architecture, sizeof(architecture)));
+    CHECK(architecture.UMA);
+    D3D12_FEATURE_DATA_ARCHITECTURE1 architecture1 = {};
+    CHECK_HR(device->CheckFeatureSupport(D3D12_FEATURE_ARCHITECTURE1, &architecture1, sizeof(architecture1)));
+    CHECK(architecture1.UMA && architecture1.IsolatedMMU);
+    architecture1.NodeIndex = 1;
+    CHECK(FAILED(device->CheckFeatureSupport(D3D12_FEATURE_ARCHITECTURE1, &architecture1, sizeof(architecture1))));
 
     D3D12_FEATURE_DATA_SHADER_MODEL shader_model = {D3D_SHADER_MODEL_6_7};
     CHECK_HR(device->CheckFeatureSupport(D3D12_FEATURE_SHADER_MODEL, &shader_model, sizeof(shader_model)));

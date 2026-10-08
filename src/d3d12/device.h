@@ -9,8 +9,9 @@ namespace d3d12m {
 
 class Device final : public ObjectImpl<ID3D12Device2> {
 public:
-    // Creates a device on the system's default Metal device.
-    static HRESULT create(ID3D12Device2 **out);
+    // Creates a device on the Metal device behind `adapter` (an IDXGIAdapter
+    // of this layer), or on the system default device when `adapter` is null.
+    static HRESULT create(IUnknown *adapter, ID3D12Device2 **out);
 
     mtlb_device handle() const { return device_; }
     FenceWaiter &fence_waiter() { return fence_waiter_; }

@@ -65,13 +65,21 @@ const char *mtlb_last_error(void)
     return g_last_error.c_str();
 }
 
-mtlb_result mtlb_device_create(mtlb_device *out)
+mtlb_result mtlb_device_create(uint64_t registry_id, mtlb_device *out)
 {
     if (!out)
         return MTLB_ERROR_INVALID_ARGUMENT;
-    id<MTLDevice> mtl_device = MTLCreateSystemDefaultDevice();
+    id<MTLDevice> mtl_device = nil;
+    if (registry_id == 0) {
+        mtl_device = MTLCreateSystemDefaultDevice();
+    } else {
+        for (id<MTLDevice> candidate in MTLCopyAllDevices()) {
+            if (candidate.registryID == registry_id)
+                mtl_device = candidate;
+        }
+    }
     if (!mtl_device)
-        return fail(MTLB_ERROR_DEVICE, "no Metal device available");
+        return fail(MTLB_ERROR_DEVICE, "no matching Metal device available");
 
     MTLResidencySetDescriptor *desc = [MTLResidencySetDescriptor new];
     desc.label = @"d3d12-metal device residency";

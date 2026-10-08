@@ -5,6 +5,7 @@
 
 #include "common/com.h"
 #include "common/log.h"
+#include "common/luid.h"
 #include "common/private_data.h"
 
 #include "bridge/mtlb.h"
@@ -32,9 +33,8 @@ void fill_common(Desc &d, const DXGI_ADAPTER_DESC2 &src)
 
 class Adapter final : public WithPrivateData<RefCounted<IDXGIAdapter3>> {
 public:
-    // Takes ownership of `device` and a reference on `parent`.
-    Adapter(IDXGIFactory *parent, mtlb_device device, const mtlb_device_caps &caps)
-        : parent_(parent), device_(device), budget_(caps.recommended_max_working_set_size)
+    // Takes a reference on `parent`.
+    Adapter(IDXGIFactory *parent, const mtlb_device_caps &caps) : parent_(parent)
     {
         parent_->AddRef();
 
@@ -44,17 +44,12 @@ public:
             desc_.Description[i] = static_cast<unsigned char>(caps.name[i]);
 
         desc_.VendorId = kVendorIdApple;
-        desc_.DedicatedVideoMemory = budget_;
-        desc_.SharedSystemMemory = budget_;
-        desc_.AdapterLuid.LowPart = static_cast<DWORD>(caps.registry_id);
-        desc_.AdapterLuid.HighPart = static_cast<LONG>(caps.registry_id >> 32);
+        desc_.DedicatedVideoMemory = caps.recommended_max_working_set_size;
+        desc_.SharedSystemMemory = caps.recommended_max_working_set_size;
+        desc_.AdapterLuid = luid_from_registry_id(caps.registry_id);
     }
 
-    ~Adapter() override
-    {
-        mtlb_device_destroy(device_);
-        parent_->Release();
-    }
+    ~Adapter() override { parent_->Release(); }
 
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **out) override
     {
@@ -126,9 +121,9 @@ public:
     {
         if (node != 0 || !info)
             return E_INVALIDARG;
-        info->Budget = budget_;
+        info->Budget = desc_.DedicatedVideoMemory;
         info->CurrentUsage = 0;
-        info->AvailableForReservation = budget_ / 2;
+        info->AvailableForReservation = desc_.DedicatedVideoMemory / 2;
         info->CurrentReservation = 0;
         return S_OK;
     }
@@ -150,8 +145,6 @@ public:
 
 private:
     IDXGIFactory *parent_;
-    mtlb_device device_;
-    UINT64 budget_;
     DXGI_ADAPTER_DESC2 desc_{}; // GetDesc/GetDesc1 are prefixes of this
 };
 
@@ -159,17 +152,17 @@ private:
 
 HRESULT create_adapter(IDXGIFactory *parent, IDXGIAdapter3 **out)
 {
+    // Only the description is needed; D3D12CreateDevice opens the device again by registry id.
     mtlb_device device = 0;
-    if (mtlb_device_create(&device) != MTLB_OK)
+    if (mtlb_device_create(0, &device) != MTLB_OK)
         return DXGI_ERROR_UNSUPPORTED;
-
     mtlb_device_caps caps{};
-    if (mtlb_device_get_caps(device, &caps) != MTLB_OK) {
-        mtlb_device_destroy(device);
+    mtlb_result result = mtlb_device_get_caps(device, &caps);
+    mtlb_device_destroy(device);
+    if (result != MTLB_OK)
         return DXGI_ERROR_UNSUPPORTED;
-    }
 
-    *out = new Adapter(parent, device, caps);
+    *out = new Adapter(parent, caps);
     return S_OK;
 }
 

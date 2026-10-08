@@ -169,7 +169,9 @@ typedef struct mtlb_device_caps {
     uint32_t reserved;
 } mtlb_device_caps;
 
-MTLB_EXPORT mtlb_result mtlb_device_create(mtlb_device *out);
+/* Opens the Metal device with the given registry id (mtlb_device_caps::registry_id),
+ * or the system default device when `registry_id` is 0. */
+MTLB_EXPORT mtlb_result mtlb_device_create(uint64_t registry_id, mtlb_device *out);
 MTLB_EXPORT void mtlb_device_destroy(mtlb_device device);
 MTLB_EXPORT mtlb_result mtlb_device_get_caps(mtlb_device device, mtlb_device_caps *out);
 

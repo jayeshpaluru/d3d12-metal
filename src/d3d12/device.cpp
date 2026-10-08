@@ -1,7 +1,9 @@
 #include "d3d12/device.h"
 
 #include <algorithm>
+#include <type_traits>
 
+#include "common/luid.h"
 #include "d3d12/command_allocator.h"
 #include "d3d12/command_list.h"
 #include "d3d12/command_queue.h"
@@ -10,6 +12,7 @@
 #include "d3d12/formats.h"
 #include "d3d12/pipeline_state.h"
 #include "d3d12/resource.h"
+#include "dxgi/dxgi_interfaces.h"
 #include "d3d12/root_signature.h"
 
 namespace d3d12m {
@@ -25,6 +28,21 @@ template <typename T>
 T *feature_data(void *data, UINT size)
 {
     return size == sizeof(T) ? static_cast<T *>(data) : nullptr;
+}
+
+// Answers D3D12_FEATURE_ARCHITECTURE and ARCHITECTURE1: a single UMA, tile-based GPU.
+template <typename T>
+HRESULT fill_architecture(void *data, UINT size)
+{
+    auto *a = feature_data<T>(data, size);
+    if (!a || a->NodeIndex != 0)
+        return E_INVALIDARG;
+    a->TileBasedRenderer = TRUE;
+    a->UMA = TRUE;
+    a->CacheCoherentUMA = TRUE;
+    if constexpr (std::is_same_v<T, D3D12_FEATURE_DATA_ARCHITECTURE1>)
+        a->IsolatedMMU = TRUE;
+    return S_OK;
 }
 
 D3D12_FORMAT_SUPPORT1 format_support1(const mtlb_format_info &info)
@@ -73,10 +91,23 @@ void release_device(Device *device)
     device->Release();
 }
 
-HRESULT Device::create(ID3D12Device2 **out)
+HRESULT Device::create(IUnknown *adapter, ID3D12Device2 **out)
 {
+    uint64_t registry_id = 0;
+    if (adapter) {
+        IDXGIAdapter *dxgi_adapter = nullptr;
+        DXGI_ADAPTER_DESC desc;
+        if (FAILED(adapter->QueryInterface(__uuidof(IDXGIAdapter), reinterpret_cast<void **>(&dxgi_adapter))))
+            return E_INVALIDARG;
+        HRESULT hr = dxgi_adapter->GetDesc(&desc);
+        dxgi_adapter->Release();
+        if (FAILED(hr))
+            return hr;
+        registry_id = registry_id_from_luid(desc.AdapterLuid);
+    }
+
     auto *device = new Device();
-    if (mtlb_device_create(&device->device_) != MTLB_OK || mtlb_device_get_caps(device->device_, &device->caps_) != MTLB_OK) {
+    if (mtlb_device_create(registry_id, &device->device_) != MTLB_OK || mtlb_device_get_caps(device->device_, &device->caps_) != MTLB_OK) {
         D3D12M_LOG("no usable Metal device: %s", mtlb_last_error());
         device->Release();
         return DXGI_ERROR_UNSUPPORTED;
@@ -253,7 +284,7 @@ HRESULT Device::GetDeviceRemovedReason()
 
 LUID Device::GetAdapterLuid()
 {
-    return {static_cast<ULONG>(caps_.registry_id), static_cast<LONG>(caps_.registry_id >> 32)};
+    return luid_from_registry_id(caps_.registry_id);
 }
 
 // ---- Capabilities ----------------------------------------------------------
@@ -286,29 +317,10 @@ HRESULT Device::CheckFeatureSupport(D3D12_FEATURE feature, void *data, UINT size
         o->Int64ShaderOps = TRUE;
         return S_OK;
     }
-    case D3D12_FEATURE_ARCHITECTURE: {
-        auto *a = feature_data<D3D12_FEATURE_DATA_ARCHITECTURE>(data, size);
-        if (!a)
-            return E_INVALIDARG;
-        if (a->NodeIndex != 0)
-            return E_INVALIDARG;
-        a->TileBasedRenderer = TRUE;
-        a->UMA = TRUE;
-        a->CacheCoherentUMA = TRUE;
-        return S_OK;
-    }
-    case D3D12_FEATURE_ARCHITECTURE1: {
-        auto *a = feature_data<D3D12_FEATURE_DATA_ARCHITECTURE1>(data, size);
-        if (!a)
-            return E_INVALIDARG;
-        if (a->NodeIndex != 0)
-            return E_INVALIDARG;
-        a->TileBasedRenderer = TRUE;
-        a->UMA = TRUE;
-        a->CacheCoherentUMA = TRUE;
-        a->IsolatedMMU = TRUE;
-        return S_OK;
-    }
+    case D3D12_FEATURE_ARCHITECTURE:
+        return fill_architecture<D3D12_FEATURE_DATA_ARCHITECTURE>(data, size);
+    case D3D12_FEATURE_ARCHITECTURE1:
+        return fill_architecture<D3D12_FEATURE_DATA_ARCHITECTURE1>(data, size);
     case D3D12_FEATURE_FEATURE_LEVELS: {
         auto *f = feature_data<D3D12_FEATURE_DATA_FEATURE_LEVELS>(data, size);
         if (!f || !f->pFeatureLevelsRequested)

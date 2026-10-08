@@ -30,7 +30,7 @@ struct Stream {
 int main()
 {
     mtlb_device device = 0;
-    CHECK(mtlb_device_create(&device) == MTLB_OK);
+    CHECK(mtlb_device_create(0, &device) == MTLB_OK);
     mtlb_queue queue = 0;
     CHECK(mtlb_queue_create(device, &queue) == MTLB_OK);
 
