@@ -29,6 +29,14 @@ struct Stream {
 
 int main()
 {
+    // Device descriptions without opening a device.
+    mtlb_device_caps default_caps, first_caps, past_end;
+    CHECK(mtlb_query_caps(0, &default_caps) == MTLB_OK && default_caps.registry_id != 0);
+    CHECK(mtlb_enum_devices(0, &first_caps) == MTLB_OK);
+    CHECK(mtlb_enum_devices(1000, &past_end) != MTLB_OK);
+    mtlb_device_caps by_id;
+    CHECK(mtlb_query_caps(default_caps.registry_id, &by_id) == MTLB_OK && by_id.registry_id == default_caps.registry_id);
+
     mtlb_device device = 0;
     CHECK(mtlb_device_create(0, &device) == MTLB_OK);
     mtlb_queue queue = 0;

@@ -54,6 +54,27 @@ static void remove_resident(Device *device, id<MTLAllocation> allocation)
     device->residency_dirty = true;
 }
 
+static id<MTLDevice> find_device(uint64_t registry_id)
+{
+    if (registry_id == 0)
+        return MTLCreateSystemDefaultDevice();
+    for (id<MTLDevice> candidate in MTLCopyAllDevices()) {
+        if (candidate.registryID == registry_id)
+            return candidate;
+    }
+    return nil;
+}
+
+static void fill_caps(id<MTLDevice> device, mtlb_device_caps *out)
+{
+    std::memset(out, 0, sizeof(*out));
+    std::strncpy(out->name, device.name.UTF8String, sizeof(out->name) - 1);
+    out->registry_id = device.registryID;
+    out->recommended_max_working_set_size = device.recommendedMaxWorkingSetSize;
+    out->max_buffer_length = device.maxBufferLength;
+    out->has_unified_memory = device.hasUnifiedMemory;
+}
+
 } // namespace mtlb
 
 using namespace mtlb;
@@ -69,15 +90,7 @@ mtlb_result mtlb_device_create(uint64_t registry_id, mtlb_device *out)
 {
     if (!out)
         return MTLB_ERROR_INVALID_ARGUMENT;
-    id<MTLDevice> mtl_device = nil;
-    if (registry_id == 0) {
-        mtl_device = MTLCreateSystemDefaultDevice();
-    } else {
-        for (id<MTLDevice> candidate in MTLCopyAllDevices()) {
-            if (candidate.registryID == registry_id)
-                mtl_device = candidate;
-        }
-    }
+    id<MTLDevice> mtl_device = find_device(registry_id);
     if (!mtl_device)
         return fail(MTLB_ERROR_DEVICE, "no matching Metal device available");
 
@@ -107,12 +120,29 @@ mtlb_result mtlb_device_get_caps(mtlb_device handle, mtlb_device_caps *out)
     Device *device = from_handle<Device>(handle);
     if (!device || !out)
         return MTLB_ERROR_INVALID_ARGUMENT;
-    std::memset(out, 0, sizeof(*out));
-    std::strncpy(out->name, device->device.name.UTF8String, sizeof(out->name) - 1);
-    out->registry_id = device->device.registryID;
-    out->recommended_max_working_set_size = device->device.recommendedMaxWorkingSetSize;
-    out->max_buffer_length = device->device.maxBufferLength;
-    out->has_unified_memory = device->device.hasUnifiedMemory;
+    fill_caps(device->device, out);
+    return MTLB_OK;
+}
+
+mtlb_result mtlb_query_caps(uint64_t registry_id, mtlb_device_caps *out)
+{
+    if (!out)
+        return MTLB_ERROR_INVALID_ARGUMENT;
+    id<MTLDevice> device = find_device(registry_id);
+    if (!device)
+        return fail(MTLB_ERROR_DEVICE, "no matching Metal device available");
+    fill_caps(device, out);
+    return MTLB_OK;
+}
+
+mtlb_result mtlb_enum_devices(uint32_t index, mtlb_device_caps *out)
+{
+    if (!out)
+        return MTLB_ERROR_INVALID_ARGUMENT;
+    NSArray<id<MTLDevice>> *devices = MTLCopyAllDevices();
+    if (index >= devices.count)
+        return MTLB_ERROR_INVALID_ARGUMENT;
+    fill_caps(devices[index], out);
     return MTLB_OK;
 }
 

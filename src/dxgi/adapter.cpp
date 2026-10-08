@@ -150,20 +150,9 @@ private:
 
 } // namespace
 
-HRESULT create_adapter(IDXGIFactory *parent, IDXGIAdapter3 **out)
+IDXGIAdapter3 *create_adapter(IDXGIFactory *parent, const mtlb_device_caps &caps)
 {
-    // Only the description is needed; D3D12CreateDevice opens the device again by registry id.
-    mtlb_device device = 0;
-    if (mtlb_device_create(0, &device) != MTLB_OK)
-        return DXGI_ERROR_UNSUPPORTED;
-    mtlb_device_caps caps{};
-    mtlb_result result = mtlb_device_get_caps(device, &caps);
-    mtlb_device_destroy(device);
-    if (result != MTLB_OK)
-        return DXGI_ERROR_UNSUPPORTED;
-
-    *out = new Adapter(parent, caps);
-    return S_OK;
+    return new Adapter(parent, caps);
 }
 
 } // namespace d3d12m

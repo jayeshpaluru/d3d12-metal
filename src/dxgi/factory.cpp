@@ -1,5 +1,7 @@
 #include "dxgi/factory.h"
 
+#include <vector>
+
 #include "common/com.h"
 #include "common/log.h"
 #include "dxgi/adapter.h"
@@ -11,7 +13,18 @@ namespace {
 
 class Factory final : public WithPrivateData<RefCounted<IDXGIFactory5>> {
 public:
-    explicit Factory(UINT flags) : flags_(flags) {}
+    // Describes the adapters once; the default Metal device comes first.
+    explicit Factory(UINT flags) : flags_(flags)
+    {
+        mtlb_device_caps caps;
+        if (mtlb_query_caps(0, &caps) != MTLB_OK)
+            return;
+        devices_.push_back(caps);
+        for (uint32_t i = 0; mtlb_enum_devices(i, &caps) == MTLB_OK; ++i) {
+            if (caps.registry_id != devices_[0].registry_id)
+                devices_.push_back(caps);
+        }
+    }
 
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **out) override
     {
@@ -152,26 +165,20 @@ public:
     }
 
 private:
-    // There is exactly one adapter (index 0): the default Metal device.
     template <typename AdapterInterface>
     HRESULT enum_adapter(UINT index, AdapterInterface **out)
     {
         if (!out)
             return E_INVALIDARG;
         *out = nullptr;
-        if (index != 0)
+        if (index >= devices_.size())
             return DXGI_ERROR_NOT_FOUND;
-
-        IDXGIAdapter3 *adapter = nullptr;
-        HRESULT hr = create_adapter(this, &adapter);
-        if (FAILED(hr))
-            return hr;
-        hr = adapter->QueryInterface(__uuidof(AdapterInterface), reinterpret_cast<void **>(out));
-        adapter->Release();
-        return hr;
+        return hand_out(create_adapter(this, devices_[index]), __uuidof(AdapterInterface),
+                        reinterpret_cast<void **>(out));
     }
 
     UINT flags_;
+    std::vector<mtlb_device_caps> devices_;
 };
 
 } // namespace

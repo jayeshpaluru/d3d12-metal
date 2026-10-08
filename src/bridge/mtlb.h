@@ -173,6 +173,13 @@ typedef struct mtlb_device_caps {
  * or the system default device when `registry_id` is 0. */
 MTLB_EXPORT mtlb_result mtlb_device_create(uint64_t registry_id, mtlb_device *out);
 MTLB_EXPORT void mtlb_device_destroy(mtlb_device device);
+
+/* Description of a Metal device without opening it (no residency set, listener
+ * or queue). `registry_id` 0 selects the system default device. */
+MTLB_EXPORT mtlb_result mtlb_query_caps(uint64_t registry_id, mtlb_device_caps *out);
+/* Description of the `index`th Metal device, in system order; fails with
+ * MTLB_ERROR_INVALID_ARGUMENT past the last one. */
+MTLB_EXPORT mtlb_result mtlb_enum_devices(uint32_t index, mtlb_device_caps *out);
 MTLB_EXPORT mtlb_result mtlb_device_get_caps(mtlb_device device, mtlb_device_caps *out);
 
 /* ------------------------------------------------------------------------ */
