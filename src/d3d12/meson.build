@@ -1,5 +1,6 @@
 d3d12_sources += files(
   '../common/blob.cpp',
+  '../common/platform.cpp',
   '../common/private_data.cpp',
   'command_list.cpp',
   'command_queue.cpp',

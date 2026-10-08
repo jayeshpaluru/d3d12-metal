@@ -30,7 +30,7 @@ in the vtable, log `<function> is not implemented` once to stderr and return
 | `ID3D12CommandAllocator` | `Reset` | |
 | `ID3D12GraphicsCommandList` / `1` | `Close`, `Reset`, `ClearRenderTargetView`, `OMSetRenderTargets`, `OMSetBlendFactor`, `OMSetStencilRef`, `RSSetViewports`, `RSSetScissorRects`, `IASetPrimitiveTopology`, `IASetVertexBuffers`, `IASetIndexBuffer`, `SetGraphicsRootSignature`, `SetGraphicsRoot32BitConstant(s)`, `SetGraphicsRoot{ConstantBuffer,ShaderResource,UnorderedAccess}View`, `SetGraphicsRootDescriptorTable`, `SetDescriptorHeaps` (no-op), `SetPipelineState`, `DrawInstanced`, `DrawIndexedInstanced`, `ResourceBarrier` (no-op), `CopyBufferRegion`, `CopyResource` (buffers), `CopyTextureRegion` (texture <-> placed buffer footprint) | compute, bundles, depth-stencil views and clears, UAV clears, texture-to-texture copies, resolves, queries, predication, indirect execution, markers, everything else in the vtable |
 | `ID3D12Resource` | `Map`, `Unmap`, `GetGPUVirtualAddress`, `GetDesc`, `GetHeapProperties` | `WriteToSubresource`, `ReadFromSubresource` |
-| `ID3D12Fence` | `GetCompletedValue`, `SetEventOnCompletion` (null event blocks), `Signal` | `SetEventOnCompletion` with a non-null event |
+| `ID3D12Fence` | `GetCompletedValue`, `SetEventOnCompletion` (null event blocks; a real event is signaled by a per-fence waiter thread), `Signal` | |
 | `ID3D12DescriptorHeap` | `GetDesc`, CPU and GPU start handles | |
 | `ID3D12PipelineState` | graphics PSOs | `GetCachedBlob` |
 | `ID3D12RootSignature` | creation from RTS0 blobs, top-level argument buffer layout | |
@@ -56,3 +56,17 @@ in the vtable, log `<function> is not implemented` once to stderr and return
 - The native build uses by-value struct returns for methods such as `GetDesc`;
   the Win32 (MinGW/Wine) ABI variants are not handled.
 - `D3D12_FEATURE_LEVEL` is capped at 12_0.
+
+## Known gaps
+
+Deferred on purpose:
+
+- Embedded DXIL root signatures (a PSO with a null `pRootSignature`) are rejected.
+- Planar depth-stencil footprints (D24_UNORM_S8_UINT is mapped to a single-plane Depth32Float_Stencil8).
+- Resource `Alignment` reporting and the 4 MB alignment of multisampled resources.
+- A thread-safety audit of the `MTLResidencySet` handling (the dirty flag and commit are not synchronised with allocation on other threads).
+
+Wine notes for the next milestone:
+
+- `Fence::waiter_loop` must run on a Windows thread (a `std::thread` built for the PE target is one), never on a Metal callback thread.
+- `platform_set_event` calls `SetEvent` in `_WIN32` builds; the native build uses the small event object in `src/common/platform.cpp`.
