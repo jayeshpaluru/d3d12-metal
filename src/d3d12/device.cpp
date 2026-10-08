@@ -822,6 +822,22 @@ HRESULT Device::Evict(UINT, ID3D12Pageable *const *)
     D3D12M_TRACED_END()
 }
 
+bool Device::failed_pipeline(uint64_t key, HRESULT *hr)
+{
+    std::lock_guard<std::mutex> lock(failed_pipelines_mutex_);
+    const auto it = failed_pipelines_.find(key);
+    if (it == failed_pipelines_.end())
+        return false;
+    *hr = it->second;
+    return true;
+}
+
+bool Device::note_failed_pipeline(uint64_t key, HRESULT hr)
+{
+    std::lock_guard<std::mutex> lock(failed_pipelines_mutex_);
+    return failed_pipelines_.emplace(key, hr).second;
+}
+
 HRESULT Device::GetDeviceRemovedReason()
 {
     D3D12M_TRACED_BEGIN
