@@ -6,6 +6,7 @@
 # Usage: tools/run-game.sh [options] [-- game arguments]
 #   --direct            run the exe straight under wine instead of through Steam (stand-in games, tests); uses
 #                       GAME_WINEPREFIX (default: the test prefix) and needs GAME_DIR
+#   --dry-run           print what would be installed and launched, change and start nothing
 #   --kill              stop just the game process (pkill by exe name, never wineserver) and exit
 #   --no-install        do not run tools/install-game.sh first
 #   --timeout SECONDS   stop watching after this long [1800]; Steam mode leaves the game running
@@ -18,11 +19,12 @@
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/game-common.sh"
 
-direct=0 kill_only=0 install=1 timeout=1800 start_timeout="" shot_interval=15
+direct=0 kill_only=0 install=1 dry_run_launch=0 timeout=1800 start_timeout="" shot_interval=15
 extra=()
 while [ $# -gt 0 ]; do
     case "$1" in
         --direct) direct=1; shift ;;
+        --dry-run) dry_run_launch=1; shift ;;
         --kill) kill_only=1; shift ;;
         --no-install) install=0; shift ;;
         --timeout) timeout="$2"; shift 2 ;;
@@ -77,6 +79,16 @@ fi
 if [ -n "$(game_pids)" ]; then
     echo "$GAME_EXE is already running (pid $(echo $(game_pids))); use --kill first" >&2
     exit 2
+fi
+
+if [ "$dry_run_launch" = 1 ]; then
+    [ "$install" = 1 ] && "$game_root/tools/install-game.sh" --dry-run
+    if [ "$direct" = 1 ]; then
+        echo "dry-run: would launch $game_dir/$GAME_EXE directly (prefix $prefix) ${extra[*]:-}"
+    else
+        echo "dry-run: would launch app $GAME_APPID through Steam ${extra[*]:-}"
+    fi
+    exit 0
 fi
 
 mkdir -p "$game_logs" "$game_screens"
