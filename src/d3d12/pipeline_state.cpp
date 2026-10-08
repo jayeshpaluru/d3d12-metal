@@ -22,14 +22,10 @@ mtlb_render_target_blend convert(const D3D12_RENDER_TARGET_BLEND_DESC &rt)
             rt.SrcBlendAlpha, rt.DestBlendAlpha, rt.BlendOpAlpha, rt.RenderTargetWriteMask};
 }
 
-uint32_t topology_type(D3D12_PRIMITIVE_TOPOLOGY_TYPE type)
-{
-    switch (type) {
-    case D3D12_PRIMITIVE_TOPOLOGY_TYPE_POINT: return MTLB_TOPOLOGY_TYPE_POINT;
-    case D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE: return MTLB_TOPOLOGY_TYPE_LINE;
-    default: return MTLB_TOPOLOGY_TYPE_TRIANGLE;
-    }
-}
+static_assert(MTLB_TOPOLOGY_TYPE_POINT == D3D12_PRIMITIVE_TOPOLOGY_TYPE_POINT
+                  && MTLB_TOPOLOGY_TYPE_LINE == D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE
+                  && MTLB_TOPOLOGY_TYPE_TRIANGLE == D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
+              "mtlb topology types mirror the D3D12 enum");
 
 } // namespace
 
@@ -67,7 +63,7 @@ HRESULT PipelineState::create_graphics(Device *device, const D3D12_GRAPHICS_PIPE
     if (pd.dsv_format == MTLB_FORMAT_UNKNOWN && desc.DSVFormat != DXGI_FORMAT_UNKNOWN)
         return E_INVALIDARG;
     pd.sample_count = desc.SampleDesc.Count;
-    pd.topology_type = topology_type(desc.PrimitiveTopologyType);
+    pd.topology_type = desc.PrimitiveTopologyType;
 
     pd.independent_blend = desc.BlendState.IndependentBlendEnable;
     for (UINT i = 0; i < MTLB_MAX_RENDER_TARGETS; ++i)
