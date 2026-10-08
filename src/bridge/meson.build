@@ -5,6 +5,7 @@ if host_system == 'darwin'
     'metal/device.mm',
     'metal/dxbc.mm',
     'metal/formats.mm',
+    'metal/gdeflate.mm',
     'metal/heap.mm',
     'metal/kernels.mm',
     'metal/log.cpp',

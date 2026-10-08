@@ -1,5 +1,6 @@
 #include "d3d12/command_stream.h"
 #include "d3d12/device.h"
+#include "d3d12/meta_command.h"
 
 #include <algorithm>
 #include <cstring>
@@ -1109,6 +1110,10 @@ HRESULT Device::CheckFeatureSupport(D3D12_FEATURE feature, void *data, UINT size
     case D3D12_FEATURE_PROTECTED_RESOURCE_SESSION_SUPPORT:
     case D3D12_FEATURE_PROTECTED_RESOURCE_SESSION_TYPE_COUNT:
         return unsupported_feature(data, size);
+    case D3D12_FEATURE_QUERY_META_COMMAND: {
+        auto *f = feature_data<D3D12_FEATURE_DATA_QUERY_META_COMMAND>(data, size);
+        return f ? query_meta_command(*f) : E_INVALIDARG;
+    }
     case D3D12_FEATURE_COMMAND_QUEUE_PRIORITY: {
         auto *f = feature_data<D3D12_FEATURE_DATA_COMMAND_QUEUE_PRIORITY>(data, size);
         if (!f)

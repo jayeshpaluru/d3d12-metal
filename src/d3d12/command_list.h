@@ -167,8 +167,8 @@ public:
     // ID3D12GraphicsCommandList4
     void STDMETHODCALLTYPE BeginRenderPass(UINT NumRenderTargets, const D3D12_RENDER_PASS_RENDER_TARGET_DESC *pRenderTargets, const D3D12_RENDER_PASS_DEPTH_STENCIL_DESC *pDepthStencil, D3D12_RENDER_PASS_FLAGS Flags) override;
     void STDMETHODCALLTYPE EndRenderPass() override;
-    void STDMETHODCALLTYPE InitializeMetaCommand(ID3D12MetaCommand *, const void *, SIZE_T) override { D3D12M_STUB_LOG(); }
-    void STDMETHODCALLTYPE ExecuteMetaCommand(ID3D12MetaCommand *, const void *, SIZE_T) override { D3D12M_STUB_LOG(); }
+    void STDMETHODCALLTYPE InitializeMetaCommand(ID3D12MetaCommand *pMetaCommand, const void *pInitializationParametersData, SIZE_T InitializationParametersDataSizeInBytes) override;
+    void STDMETHODCALLTYPE ExecuteMetaCommand(ID3D12MetaCommand *pMetaCommand, const void *pExecutionParametersData, SIZE_T ExecutionParametersDataSizeInBytes) override;
     void STDMETHODCALLTYPE BuildRaytracingAccelerationStructure(const D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC *, UINT, const D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_DESC *) override { D3D12M_STUB_LOG(); }
     void STDMETHODCALLTYPE EmitRaytracingAccelerationStructurePostbuildInfo(const D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_DESC *, UINT, const D3D12_GPU_VIRTUAL_ADDRESS *) override { D3D12M_STUB_LOG(); }
     void STDMETHODCALLTYPE CopyRaytracingAccelerationStructure(D3D12_GPU_VIRTUAL_ADDRESS, D3D12_GPU_VIRTUAL_ADDRESS, D3D12_RAYTRACING_ACCELERATION_STRUCTURE_COPY_MODE) override { D3D12M_STUB_LOG(); }
@@ -229,6 +229,8 @@ private:
     void set_root_constants(RootState &state, UINT index, UINT count, const void *data, UINT dest_offset);
     void flush_root_args(RootState &state, mtlb_cmd_type type);
     void marker(UINT kind, const std::string &text);
+    // A UAV barrier on all resources, for the shaders with kQuirkForceComputeBarrier (common/quirks.h).
+    void force_barrier();
     void clear_uav(D3D12_CPU_DESCRIPTOR_HANDLE view_handle, ID3D12Resource *resource, const uint32_t values[4],
                    bool from_float, UINT num_rects, const D3D12_RECT *rects);
     void copy_texture_to_texture(const D3D12_TEXTURE_COPY_LOCATION &dst, UINT dst_x, UINT dst_y, UINT dst_z,
@@ -241,6 +243,7 @@ private:
 
     bool has_graphics_pipeline_ = false;
     bool has_compute_pipeline_ = false;
+    uint32_t compute_quirks_ = 0;  // quirks of the compute pipeline set last
     RootState graphics_;
     RootState compute_;
 };

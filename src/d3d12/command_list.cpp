@@ -6,11 +6,13 @@
 #include <cstring>
 
 #include "common/platform.h"
+#include "common/quirks.h"
 #include "d3d12/clear_value.h"
 #include "d3d12/command_allocator.h"
 #include "d3d12/command_signature.h"
 #include "d3d12/device.h"
 #include "d3d12/formats.h"
+#include "d3d12/meta_command.h"
 #include "d3d12/pipeline_state.h"
 #include "d3d12/query_heap.h"
 #include "d3d12/resource.h"
@@ -89,6 +91,7 @@ void CommandList::reset_state()
     drop_pass();
     refs_.clear();
     has_graphics_pipeline_ = has_compute_pipeline_ = false;
+    compute_quirks_ = 0;
     for (RootState *state : {&graphics_, &compute_}) {
         release_signature(state->signature);
         state->args.clear();
@@ -161,6 +164,8 @@ void CommandList::SetPipelineState(ID3D12PipelineState *pso)
         return;
     }
     (state->is_compute() ? has_compute_pipeline_ : has_graphics_pipeline_) = true;
+    if (state->is_compute())
+        compute_quirks_ = state->quirks();
     append<mtlb_cmd_set_pipeline>(MTLB_CMD_SET_PIPELINE)->pipeline = state->handle();
 }
 
@@ -1045,6 +1050,8 @@ void CommandList::ExecuteIndirect(ID3D12CommandSignature *signature_ptr, UINT ma
     cmd->count_address = count ? count->GetGPUVirtualAddress() + count_offset : 0;
     cmd->num_args = static_cast<uint32_t>(args.size());
     std::copy(args.begin(), args.end(), cmd->args);
+    if (signature->action() == D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH && (compute_quirks_ & kQuirkForceComputeBarrier))
+        force_barrier();
 }
 
 void CommandList::Dispatch(UINT x, UINT y, UINT z)
@@ -1059,6 +1066,15 @@ void CommandList::Dispatch(UINT x, UINT y, UINT z)
     cmd->x = x;
     cmd->y = y;
     cmd->z = z;
+    if (compute_quirks_ & kQuirkForceComputeBarrier)
+        force_barrier();
+}
+
+void CommandList::force_barrier()
+{
+    auto *cmd = append<mtlb_cmd_barrier>(MTLB_CMD_BARRIER, sizeof(mtlb_barrier));
+    cmd->count = 1;
+    cmd->barriers[0] = {MTLB_BARRIER_UAV, 0, 0, 0};  // no resource: all of them
 }
 
 // ---- Copies -----------------------------------------------------------------
@@ -1231,6 +1247,40 @@ void CommandList::CopyTextureRegion(const D3D12_TEXTURE_COPY_LOCATION *dst, UINT
     r.depth = size[2];
 
     append<mtlb_cmd_copy_texture>(to_buffer ? MTLB_CMD_COPY_TEXTURE_TO_BUFFER : MTLB_CMD_COPY_BUFFER_TO_TEXTURE)->region = r;
+}
+
+// ---- Recording -------------------------------------------------------------------------------------
+
+void CommandList::InitializeMetaCommand(ID3D12MetaCommand *command, const void *, SIZE_T)
+{
+    D3D12M_TRACE(command);
+    // Nothing to prepare: the GDeflate kernels need no initialization.
+    if (!ours<MetaCommand>(command))
+        D3D12M_LOG("InitializeMetaCommand: not a meta command of this layer");
+}
+
+void CommandList::ExecuteMetaCommand(ID3D12MetaCommand *command, const void *parameters, SIZE_T size)
+{
+    D3D12M_TRACE(command, parameters, size);
+    if (closed_ || !ours<MetaCommand>(command) || !parameters || size < sizeof(DirectStorageExecArgs)
+        || type_ == D3D12_COMMAND_LIST_TYPE_BUNDLE || type_ == D3D12_COMMAND_LIST_TYPE_COPY) {
+        D3D12M_LOG("ExecuteMetaCommand: invalid call");
+        return;
+    }
+    DirectStorageExecArgs args;
+    std::memcpy(&args, parameters, sizeof(args));
+    if (args.stream_count == 0)
+        return;
+    auto *cmd = append<mtlb_cmd_gdeflate>(MTLB_CMD_GDEFLATE);
+    cmd->input_address = args.input_buffer;
+    cmd->input_size = args.input_size;
+    cmd->output_address = args.output_buffer;
+    cmd->output_size = args.output_size;
+    cmd->control_address = args.control_buffer;
+    cmd->control_size = args.control_size;
+    cmd->scratch_address = args.scratch_buffer;
+    cmd->scratch_size = args.scratch_size;
+    cmd->stream_count = args.stream_count;
 }
 
 } // namespace d3d12m

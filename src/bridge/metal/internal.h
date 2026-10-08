@@ -87,6 +87,7 @@ struct Device {
     // The backend's own compute kernels (kernels.mm).
     std::mutex kernels_mutex;
     id<MTLLibrary> kernel_library = nil;
+    id<MTLLibrary> gdeflate_library = nil;  // the DirectStorage decompressor (gdeflate.mm), built on first use
     std::map<std::string, id<MTLComputePipelineState>> kernels;
 
     // Samplers shared by equal descriptions.
@@ -391,6 +392,8 @@ void encode_present(Queue *queue, id<MTLCommandBuffer> command_buffer, Swapchain
 
 // The backend's own compute kernel `name` (kernels.mm); nil with fail() set when it cannot be built.
 id<MTLComputePipelineState> internal_kernel(Device *device, NSString *name);
+// The same for the GDeflate decompression kernels (gdeflate.mm).
+id<MTLComputePipelineState> gdeflate_kernel(Device *device, NSString *name);
 
 // The Metal texture a shader-visible view of `texture` described by `desc` refers to (the texture itself when
 // the view changes nothing); nil with fail() set on error. Cached on the texture.

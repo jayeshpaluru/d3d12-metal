@@ -549,6 +549,7 @@ private:
     mtlb_result resolve_occlusion(QueryHeap *heap, const mtlb_cmd_resolve_query &cmd, Buffer *dst);
     mtlb_result marker(const mtlb_cmd_marker &cmd);
     mtlb_result write_immediate(const mtlb_cmd_write_immediate &cmd);
+    mtlb_result gdeflate(const mtlb_cmd_gdeflate &cmd);
     mtlb_result timestamp(QueryHeap *heap, uint32_t index);
     mtlb_result execute_indirect(const mtlb_cmd_execute_indirect &cmd);
     mtlb_result clear_buffer(const mtlb_cmd_clear_buffer &cmd);
@@ -1841,6 +1842,73 @@ mtlb_result Replay::write_immediate(const mtlb_cmd_write_immediate &cmd)
     return MTLB_OK;
 }
 
+// DirectStorage's GDeflate meta command: one kernel counts the tiles of the streams and publishes the size of the
+// decode grid, a second one (indirect, a SIMD group per tile) decompresses them. The buffers are named by GPU
+// address: each must fall inside a buffer, and the kernels never go past the sizes given here.
+mtlb_result Replay::gdeflate(const mtlb_cmd_gdeflate &cmd)
+{
+    Device *device = queue_->device;
+    // The bytes from `address` to the end of the buffer holding it, at most `size`; false if no buffer holds it.
+    auto fit = [&](uint64_t address, uint64_t size, uint64_t *fitted, Buffer **buffer, uint64_t *offset) {
+        *buffer = find_buffer(device, address, offset);
+        if (!*buffer)
+            return false;
+        *fitted = std::min(size, (*buffer)->size - *offset);
+        return true;
+    };
+    struct Params {
+        uint64_t input, output, control, scratch;
+        uint64_t input_size, output_size, control_size, scratch_size;
+        uint32_t stream_count, max_streams, pad0, pad1;
+    } params = {};
+    Buffer *buffers[4];
+    uint64_t offsets[4];
+    if (!fit(cmd.input_address, cmd.input_size, &params.input_size, &buffers[0], &offsets[0])
+        || !fit(cmd.output_address, cmd.output_size, &params.output_size, &buffers[1], &offsets[1])
+        || !fit(cmd.control_address, cmd.control_size, &params.control_size, &buffers[2], &offsets[2])
+        || !fit(cmd.scratch_address, cmd.scratch_size, &params.scratch_size, &buffers[3], &offsets[3]))
+        return fail(MTLB_ERROR_INVALID_ARGUMENT, "GDeflate buffer outside any buffer");
+    if (params.scratch_size < mtlb_gdeflate_scratch_size(1) || offsets[3] % 4 || cmd.scratch_address % 4 || cmd.control_address % 4)
+        return fail(MTLB_ERROR_INVALID_ARGUMENT, "GDeflate scratch or control buffer too small or unaligned");
+    params.input = cmd.input_address;
+    params.output = cmd.output_address;
+    params.control = cmd.control_address;
+    params.scratch = cmd.scratch_address;
+    // The streams the scratch buffer has room for (a prefix entry per stream and one for the total).
+    constexpr uint64_t kMaxStreams = 1024;
+    params.max_streams = static_cast<uint32_t>(std::min<uint64_t>(kMaxStreams, (params.scratch_size - 16) / 4 - 1));
+    params.stream_count = static_cast<uint32_t>(std::min<uint64_t>(cmd.stream_count, params.max_streams));
+    // The dword offsets of the streams address at most 4 GB.
+    params.input_size = std::min<uint64_t>(params.input_size, 0xffffffffull);
+
+    id<MTLComputePipelineState> prepare = gdeflate_kernel(device, @"gdeflate_prepare");
+    id<MTLComputePipelineState> decode = prepare ? gdeflate_kernel(device, @"gdeflate_decode") : nil;
+    if (!prepare || !decode)
+        return MTLB_ERROR_COMPILE_FAILED;
+    // After everything recorded before it, and before whatever follows (the buffers are written and read by the
+    // application's own dispatches and copies).
+    sync_needed_ = !sync_disabled_;
+    end_blit();
+    end_render("gdeflate");
+    end_compute();
+    id<MTLComputeCommandEncoder> enc = compute();
+    if (!enc)
+        return MTLB_ERROR_DEVICE;
+    const NSUInteger prepare_threads = std::min<NSUInteger>(1024, prepare.maxTotalThreadsPerThreadgroup) / 32 * 32;
+    [enc setComputePipelineState:prepare];
+    [enc setBytes:&params length:sizeof(params) atIndex:0];
+    [enc dispatchThreadgroups:MTLSizeMake(1, 1, 1) threadsPerThreadgroup:MTLSizeMake(prepare_threads, 1, 1)];
+    [enc memoryBarrierWithScope:MTLBarrierScopeBuffers];
+    [enc setComputePipelineState:decode];
+    [enc setBytes:&params length:sizeof(params) atIndex:0];
+    [enc dispatchThreadgroupsWithIndirectBuffer:buffers[3]->buffer indirectBufferOffset:offsets[3]
+                          threadsPerThreadgroup:MTLSizeMake(32, 1, 1)];
+    dirty_compute_ = kAll;
+    end_compute();
+    sync_needed_ = !sync_disabled_;
+    return MTLB_OK;
+}
+
 // A resolve is a render pass with no draws: the multisampled texture is loaded and stored with a resolve.
 mtlb_result Replay::resolve(const mtlb_cmd_resolve &cmd)
 {
@@ -2333,6 +2401,7 @@ mtlb_result Replay::execute(const mtlb_cmd_header *header)
     case MTLB_CMD_RESOLVE_QUERY: return dispatch(header, &Replay::resolve_query);
     case MTLB_CMD_MARKER: return dispatch(header, &Replay::marker);
     case MTLB_CMD_WRITE_IMMEDIATE: return dispatch(header, &Replay::write_immediate);
+    case MTLB_CMD_GDEFLATE: return dispatch(header, &Replay::gdeflate);
     case MTLB_CMD_EXECUTE_INDIRECT: return dispatch(header, &Replay::execute_indirect);
     case MTLB_CMD_CLEAR_BUFFER: return dispatch(header, &Replay::clear_buffer);
     case MTLB_CMD_CLEAR_TEXTURE_UAV: return dispatch(header, &Replay::clear_texture_uav);

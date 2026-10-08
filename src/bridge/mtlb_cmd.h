@@ -64,6 +64,7 @@ typedef enum mtlb_cmd_type {
     MTLB_CMD_RESOLVE_QUERY,
     MTLB_CMD_MARKER,
     MTLB_CMD_WRITE_IMMEDIATE,
+    MTLB_CMD_GDEFLATE,
 } mtlb_cmd_type;
 
 typedef struct mtlb_cmd_header {
@@ -442,6 +443,30 @@ typedef struct mtlb_cmd_write_immediate {
     uint32_t reserved;
 } mtlb_cmd_write_immediate;
 
+/* The DirectStorage GDeflate meta command (ExecuteMetaCommand): decompresses `stream_count` GDeflate streams.
+ * The control buffer starts with a dword stream count (the smaller of that and `stream_count` is decompressed),
+ * then {input offset, output offset} dwords per stream, offsets relative to the input and output addresses. Each
+ * stream is a GDeflate tile stream (8-byte header, a dword offset per tile, 64 KiB tiles). The scratch buffer
+ * must hold mtlb_gdeflate_scratch_size() bytes for the streams of the call. Runs as two compute kernels that
+ * are ordered with the work before and after it; the buffers are named by GPU address and checked against the
+ * buffers they fall into. */
+typedef struct mtlb_cmd_gdeflate {
+    mtlb_cmd_header header;
+    uint64_t input_address, input_size;
+    uint64_t output_address, output_size;
+    uint64_t control_address, control_size;
+    uint64_t scratch_address, scratch_size;
+    uint64_t stream_count;
+} mtlb_cmd_gdeflate;
+
+/* Scratch bytes for `streams` streams: a header of 4 dwords (the dispatch of the decode kernel and the stream
+ * count), then the number of tiles before each stream and in all. */
+static inline uint64_t mtlb_gdeflate_scratch_size(uint32_t streams)
+{
+    return 16 + 4 * ((uint64_t)streams + 1);
+}
+
+MTLB_ASSERT_SIZE(mtlb_cmd_gdeflate, 80);
 MTLB_ASSERT_SIZE(mtlb_cmd_header, 8);
 MTLB_ASSERT_SIZE(mtlb_cmd_resolve, 48);
 MTLB_ASSERT_SIZE(mtlb_cmd_query, 24);

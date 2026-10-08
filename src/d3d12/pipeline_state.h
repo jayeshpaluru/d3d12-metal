@@ -20,6 +20,8 @@ public:
 
     mtlb_pipeline handle() const { return pipeline_; }
     bool is_compute() const { return compute_; }
+    // Quirk bits (common/quirks.h) of the pipeline's shaders.
+    uint32_t quirks() const { return quirks_; }
 
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **out) override
     {
@@ -34,6 +36,7 @@ private:
 
     mtlb_pipeline pipeline_ = 0;
     bool compute_ = false;
+    uint32_t quirks_ = 0;
     RootSignature *root_signature_ = nullptr;  // owned reference
 };
 

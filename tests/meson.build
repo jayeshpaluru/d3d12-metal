@@ -92,11 +92,24 @@ foreach t : portable_tests
   endforeach
   exe = executable(
     'p_' + t[0], sources,
+    include_directories: [test_inc, include_directories('portable', 'shaders'), libdeflate_inc],
+    dependencies: test_deps,
+    link_with: [d3d12_metal, libdeflate_gdeflate],
+  )
+  test('p_' + t[0], exe, timeout: 120, env: {'D3D12METAL_CACHE_DIR': test_cache_root / t[0]})
+endforeach
+
+# Per-shader quirks (src/common/quirks.h): the configured quirk is applied to the pipeline of the shader, and absent without it.
+foreach mode : ['quirk', 'plain']
+  exe = executable(
+    'test_quirks_' + mode, 'test_quirks.cpp', compute_headers['fill'],
     include_directories: [test_inc, include_directories('portable', 'shaders')],
     dependencies: test_deps,
     link_with: d3d12_metal,
+    # (the quirks code is compiled into the layer: the unit tests call it through the same library)
   )
-  test('p_' + t[0], exe, timeout: 120, env: {'D3D12METAL_CACHE_DIR': test_cache_root / t[0]})
+  test('test_quirks_' + mode, exe, args: mode == 'plain' ? ['plain'] : [], timeout: 60,
+       env: {'D3D12METAL_CACHE_DIR': test_cache_root / ('quirks_' + mode)})
 endforeach
 
 # The swap chain test: its Objective-C half (a layer standing in for a window) is a separate file.

@@ -167,16 +167,10 @@ public:
     // ID3D12Device5
     HRESULT STDMETHODCALLTYPE CreateLifetimeTracker(ID3D12LifetimeOwner *, REFIID, void **) override { D3D12M_STUB_HR(); }
     void STDMETHODCALLTYPE RemoveDevice() override { D3D12M_STUB_LOG(); }
-    HRESULT STDMETHODCALLTYPE EnumerateMetaCommands(UINT *count, D3D12_META_COMMAND_DESC *) override
-    {
-        D3D12M_TRACED_BEGIN
-        if (count)
-            *count = 0;  // no meta commands
-        return S_OK;
-        D3D12M_TRACED_END(count)
-    }
-    HRESULT STDMETHODCALLTYPE EnumerateMetaCommandParameters(REFGUID, D3D12_META_COMMAND_PARAMETER_STAGE, UINT *, UINT *, D3D12_META_COMMAND_PARAMETER_DESC *) override { D3D12M_TRACED_BEGIN return E_INVALIDARG; D3D12M_TRACED_END() }
-    HRESULT STDMETHODCALLTYPE CreateMetaCommand(REFGUID, UINT, const void *, SIZE_T, REFIID, void **) override { D3D12M_TRACED_BEGIN return E_INVALIDARG; D3D12M_TRACED_END() }
+    // The DirectStorage GDeflate decompressor (meta_command.h).
+    HRESULT STDMETHODCALLTYPE EnumerateMetaCommands(UINT *count, D3D12_META_COMMAND_DESC *descs) override;
+    HRESULT STDMETHODCALLTYPE EnumerateMetaCommandParameters(REFGUID id, D3D12_META_COMMAND_PARAMETER_STAGE stage, UINT *total_size, UINT *count, D3D12_META_COMMAND_PARAMETER_DESC *descs) override;
+    HRESULT STDMETHODCALLTYPE CreateMetaCommand(REFGUID id, UINT node_mask, const void *parameters, SIZE_T size, REFIID riid, void **out) override;
     HRESULT STDMETHODCALLTYPE CreateStateObject(const D3D12_STATE_OBJECT_DESC *, REFIID, void **) override { D3D12M_STUB_HR(); }
     void STDMETHODCALLTYPE GetRaytracingAccelerationStructurePrebuildInfo(const D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS *, D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO *info) override
     {

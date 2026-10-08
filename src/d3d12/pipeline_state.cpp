@@ -4,6 +4,7 @@
 #include <cstring>
 
 #include "common/log.h"
+#include "common/quirks.h"
 #include "common/stats.h"
 #include "d3d12/device.h"
 #include "d3d12/formats.h"
@@ -211,6 +212,14 @@ HRESULT PipelineState::create_graphics(Device *device, const D3D12_GRAPHICS_PIPE
         pso->Release();
         return to_hresult(result);
     }
+    if (shader_hashes_logged()) {
+        const std::pair<const char *, const D3D12_SHADER_BYTECODE *> stages[] = {
+            {"vs", &desc.VS}, {"ps", &desc.PS}, {"gs", &desc.GS}, {"hs", &desc.HS}, {"ds", &desc.DS}};
+        for (const auto &[name, code] : stages) {
+            if (code->pShaderBytecode && code->BytecodeLength)
+                log_shader_hash(name, shader_hash(code->pShaderBytecode, code->BytecodeLength), 0);
+        }
+    }
     pso->root_signature_ = root_signature;
     root_signature->AddRef();
 
@@ -250,6 +259,11 @@ HRESULT PipelineState::create_compute(Device *device, const D3D12_COMPUTE_PIPELI
         return to_hresult(result);
     }
     pso->compute_ = true;
+    {
+        const uint64_t hash = shader_hash(desc.CS.pShaderBytecode, desc.CS.BytecodeLength);
+        pso->quirks_ = quirks_for_shader(hash);
+        log_shader_hash("cs", hash, pso->quirks_);
+    }
     pso->root_signature_ = root_signature;
     root_signature->AddRef();
     return hand_out(pso, riid, out);

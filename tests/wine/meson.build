@@ -93,9 +93,10 @@ else
     endforeach
     executable(
       'p_' + t[0], sources,
-      include_directories: include_directories('../portable', '../shaders'),
+      include_directories: [include_directories('../portable', '../shaders'), libdeflate_inc],
       cpp_args: wine_test_args,
       link_args: wine_test_link_args,
+      link_with: libdeflate_gdeflate,
     )
   endforeach
 endif

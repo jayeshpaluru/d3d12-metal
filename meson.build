@@ -57,7 +57,33 @@ portable_tests = [
   ['geometry', ['geometry'], []],
   ['tessellation', ['tessellation'], []],
   ['embedded_rs', ['embedded_rs_gfx'], ['embedded_rs']],
+  ['gdeflate', [], []],
 ]
+
+# The reference GDeflate codec (NVIDIA's libdeflate fork, MIT, as used by Microsoft's DirectStorage samples): only the
+# tests use it, to make compressed streams for the decompression meta command (tests/portable/p_gdeflate.cpp).
+libdeflate_gdeflate = []
+if not wine_unix
+  libdeflate_dir = 'third_party/libdeflate-gdeflate'
+  libdeflate_sources = files(
+    libdeflate_dir / 'lib/deflate_compress.c',
+    libdeflate_dir / 'lib/deflate_decompress.c',
+    libdeflate_dir / 'lib/gdeflate_compress.c',
+    libdeflate_dir / 'lib/gdeflate_decompress.c',
+    libdeflate_dir / 'lib/utils.c',
+  )
+  if host_machine.cpu_family() == 'x86_64'
+    libdeflate_sources += files(libdeflate_dir / 'lib/x86/cpu_features.c')
+  endif
+  libdeflate_gdeflate = static_library(
+    'libdeflate_gdeflate', libdeflate_sources,
+    include_directories: include_directories(libdeflate_dir, libdeflate_dir / 'lib', libdeflate_dir / 'common'),
+    # (MinGW's stdlib.h declares _rotr64, which the library's GCC header defines as a macro: include it first.)
+    c_args: host_system == 'windows' ? ['-O2', '-include', 'stdlib.h'] : ['-O2'],
+    override_options: ['warning_level=0', 'c_std=gnu11'],
+  )
+endif
+libdeflate_inc = include_directories('third_party/libdeflate-gdeflate')
 
 bridge_sources = []
 bridge_client_sources = []
