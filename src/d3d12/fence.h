@@ -1,10 +1,10 @@
 // ID3D12Fence backed by a Metal shared event.
 #pragma once
 
-#include <condition_variable>
+#include <map>
 #include <mutex>
 #include <thread>
-#include <vector>
+#include <unordered_map>
 
 #include "bridge/mtlb.h"
 #include "d3d12/object.h"
@@ -30,24 +30,31 @@ private:
     explicit Fence(Device *device) : ChildImpl(device) {}
     ~Fence() override;
 
-    // An application event waiting for the fence to reach `value`.
-    struct Waiter {
-        UINT64 value;
-        HANDLE event;
-    };
-
-    void waiter_loop();
-
     mtlb_event event_ = 0;
+};
 
-    // Events are signaled by one lazily started thread. It is an ordinary
-    // thread of this module (a Windows thread in the PE build), never a Metal
-    // callback thread.
+// Signals application events when fences reach the values they wait for. One
+// per device: a single ordinary thread of this module (a Windows thread in the
+// PE build, never a Metal callback thread) blocks in the bridge until a fence
+// notification arrives, then sets the events whose values were reached.
+class FenceWaiter {
+public:
+    FenceWaiter() = default;
+    ~FenceWaiter();
+
+    // Sets `event` once `fence` reaches `value`.
+    HRESULT add(Fence *fence, UINT64 value, HANDLE event);
+    // Drops the pending waits of a fence that is being destroyed.
+    void forget(Fence *fence);
+
+private:
+    void run();
+
     std::mutex mutex_;
-    std::condition_variable wake_;
-    std::vector<Waiter> waiters_;
+    mtlb_notify queue_ = 0;
     std::thread thread_;
-    bool stopping_ = false;
+    // Pending waits per fence, keyed by the value awaited.
+    std::unordered_map<Fence *, std::multimap<UINT64, HANDLE>> waits_;
 };
 
 } // namespace d3d12m

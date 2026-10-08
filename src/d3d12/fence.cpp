@@ -1,6 +1,6 @@
 #include "d3d12/fence.h"
 
-#include <algorithm>
+#include <vector>
 
 #include "common/platform.h"
 #include "d3d12/device.h"
@@ -23,13 +23,7 @@ HRESULT Fence::create(Device *device, UINT64 initial_value, REFIID riid, void **
 
 Fence::~Fence()
 {
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        stopping_ = true;
-    }
-    wake_.notify_all();
-    if (thread_.joinable())
-        thread_.join();
+    device()->fence_waiter().forget(this);
     if (event_)
         mtlb_event_destroy(event_);
 }
@@ -43,45 +37,69 @@ HRESULT Fence::SetEventOnCompletion(UINT64 value, HANDLE event)
 {
     if (!event)
         return mtlb_event_wait_cpu(event_, value, UINT64_MAX) == MTLB_OK ? S_OK : E_FAIL;
-
-    if (mtlb_event_completed_value(event_) >= value) {
+    if (GetCompletedValue() >= value) {
         platform_set_event(event);
         return S_OK;
     }
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        waiters_.push_back({value, event});
-        if (!thread_.joinable())
-            thread_ = std::thread([this] { waiter_loop(); });
-    }
-    wake_.notify_all();
-    return S_OK;
+    return device()->fence_waiter().add(this, value, event);
 }
 
-// Waits on the backend event for the lowest pending value and signals every
-// application event whose value has been reached. The wait has a timeout so a
-// newly added lower value, or shutdown, is noticed promptly.
-void Fence::waiter_loop()
+FenceWaiter::~FenceWaiter()
 {
-    constexpr uint64_t kPollMs = 10;
-    std::unique_lock<std::mutex> lock(mutex_);
-    while (!stopping_) {
-        if (waiters_.empty()) {
-            wake_.wait(lock, [this] { return stopping_ || !waiters_.empty(); });
-            continue;
-        }
-        const UINT64 lowest = std::min_element(waiters_.begin(), waiters_.end(),
-                                               [](const Waiter &a, const Waiter &b) { return a.value < b.value; })->value;
-        lock.unlock();
-        mtlb_event_wait_cpu(event_, lowest, kPollMs);
-        lock.lock();
+    if (!queue_)
+        return;
+    mtlb_notify_close(queue_);
+    thread_.join();
+    mtlb_notify_destroy(queue_);
+}
 
-        const UINT64 completed = mtlb_event_completed_value(event_);
-        auto reached = std::stable_partition(waiters_.begin(), waiters_.end(),
-                                             [&](const Waiter &w) { return w.value > completed; });
-        for (auto it = reached; it != waiters_.end(); ++it)
-            platform_set_event(it->event);
-        waiters_.erase(reached, waiters_.end());
+HRESULT FenceWaiter::add(Fence *fence, UINT64 value, HANDLE event)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!queue_) {
+        if (mtlb_notify_create(&queue_) != MTLB_OK)
+            return E_FAIL;
+        thread_ = std::thread([this] { run(); });
+    }
+    waits_[fence].emplace(value, event);
+    // Registered under the lock so the entry exists before the notification can
+    // arrive; the bridge fires at once if the value was reached meanwhile.
+    return mtlb_event_notify(fence->event(), value, queue_, reinterpret_cast<uint64_t>(fence)) == MTLB_OK ? S_OK : E_FAIL;
+}
+
+void FenceWaiter::forget(Fence *fence)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    waits_.erase(fence);
+}
+
+void FenceWaiter::run()
+{
+    mtlb_notification batch[16];
+    uint32_t count = 0;
+    std::vector<HANDLE> reached;
+    while (mtlb_notify_wait(queue_, batch, 16, &count) == MTLB_OK && count) {
+        reached.clear();
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            for (uint32_t i = 0; i < count; ++i) {
+                // The cookie may name a fence that was destroyed (or whose address
+                // was reused); looking it up in waits_ makes that harmless.
+                auto it = waits_.find(reinterpret_cast<Fence *>(batch[i].cookie));
+                if (it == waits_.end())
+                    continue;
+                const UINT64 completed = it->first->GetCompletedValue();
+                auto &pending = it->second;
+                while (!pending.empty() && pending.begin()->first <= completed) {
+                    reached.push_back(pending.begin()->second);
+                    pending.erase(pending.begin());
+                }
+                if (pending.empty())
+                    waits_.erase(it);
+            }
+        }
+        for (HANDLE event : reached)
+            platform_set_event(event);
     }
 }
 

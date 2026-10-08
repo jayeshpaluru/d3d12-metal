@@ -2,6 +2,7 @@
 #pragma once
 
 #include "bridge/mtlb.h"
+#include "d3d12/fence.h"
 #include "d3d12/object.h"
 
 namespace d3d12m {
@@ -12,6 +13,7 @@ public:
     static HRESULT create(ID3D12Device2 **out);
 
     mtlb_device handle() const { return device_; }
+    FenceWaiter &fence_waiter() { return fence_waiter_; }
 
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **out) override
     {
@@ -69,6 +71,7 @@ private:
 
     mtlb_device device_ = 0;
     mtlb_device_caps caps_{};
+    FenceWaiter fence_waiter_;
 };
 
 } // namespace d3d12m

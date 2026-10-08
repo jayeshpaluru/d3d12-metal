@@ -81,6 +81,8 @@ mtlb_result mtlb_device_create(mtlb_device *out)
     auto *device = new Device();
     device->device = mtl_device;
     device->residency = residency;
+    device->listener = [[MTLSharedEventListener alloc]
+        initWithDispatchQueue:dispatch_queue_create("d3d12-metal.event-listener", DISPATCH_QUEUE_SERIAL)];
     *out = to_handle(device);
     return MTLB_OK;
 }
@@ -223,7 +225,7 @@ mtlb_result mtlb_event_create(mtlb_device handle, uint64_t initial_value, mtlb_e
     if (!event)
         return fail(MTLB_ERROR_DEVICE, "newSharedEvent failed");
     event.signaledValue = initial_value;
-    *out = to_handle(new Event{event});
+    *out = to_handle(new Event{device, event});
     return MTLB_OK;
 }
 

@@ -20,6 +20,9 @@ struct Device {
     id<MTLResidencySet> residency;
     std::atomic<bool> residency_dirty{false};
 
+    // Listener shared by all events' notifications (see notify.mm).
+    MTLSharedEventListener *listener;
+
     // GPU address -> buffer, for resolving D3D12-style virtual addresses.
     std::mutex buffers_mutex;
     std::map<uint64_t, Buffer *> buffers;
@@ -67,6 +70,7 @@ struct Queue {
 };
 
 struct Event {
+    Device *device;
     id<MTLSharedEvent> event;
 };
 

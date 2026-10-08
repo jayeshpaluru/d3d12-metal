@@ -54,6 +54,7 @@ typedef uint64_t mtlb_texture;
 typedef uint64_t mtlb_pipeline;
 typedef uint64_t mtlb_queue;
 typedef uint64_t mtlb_event;
+typedef uint64_t mtlb_notify;
 
 /* ------------------------------------------------------------------------ */
 /* Formats                                                                  */
@@ -394,6 +395,34 @@ MTLB_EXPORT void mtlb_event_signal_cpu(mtlb_event event, uint64_t value);
  * Returns MTLB_ERROR_TIMEOUT on timeout. */
 MTLB_EXPORT mtlb_result mtlb_event_wait_cpu(mtlb_event event, uint64_t value, uint64_t timeout_ms);
 
+/* ------------------------------------------------------------------------ */
+/* Completion notifications                                                 */
+/* ------------------------------------------------------------------------ */
+
+/* A notification queue collects "event reached value" notifications. Metal
+ * delivers them on its own threads, which must not run front-end code (under
+ * Wine they have no Windows thread state), so the backend only records them;
+ * one front-end thread blocks in mtlb_notify_wait and acts on them. */
+typedef struct mtlb_notification {
+    uint64_t cookie;           /* the value given to mtlb_event_notify */
+    uint64_t value;            /* the value that was reached */
+} mtlb_notification;
+
+MTLB_EXPORT mtlb_result mtlb_notify_create(mtlb_notify *out);
+/* Closes the queue (waking any waiter) and releases the caller's handle.
+ * Registrations still pending in Metal are dropped safely. */
+MTLB_EXPORT void mtlb_notify_destroy(mtlb_notify queue);
+
+/* Queues {cookie, value} once `event` reaches `value` (at once if it already has). */
+MTLB_EXPORT mtlb_result mtlb_event_notify(mtlb_event event, uint64_t value, mtlb_notify queue, uint64_t cookie);
+
+/* Blocks (no timeout) until a notification is queued or the queue is closed,
+ * then moves up to `max` notifications to `out`. *count is 0 when closed. */
+MTLB_EXPORT mtlb_result mtlb_notify_wait(mtlb_notify queue, mtlb_notification *out, uint32_t max, uint32_t *count);
+/* Makes the current and every later mtlb_notify_wait return 0 notifications. */
+MTLB_EXPORT void mtlb_notify_close(mtlb_notify queue);
+
+MTLB_ASSERT_SIZE(mtlb_notification, 16);
 MTLB_ASSERT_SIZE(mtlb_span, 16);
 MTLB_ASSERT_OFFSET(mtlb_span, size, 8);
 MTLB_ASSERT_SIZE(mtlb_format_info, 16);
