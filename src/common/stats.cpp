@@ -57,7 +57,8 @@ void stats_frame()
     log_printf(
                  "d3d12-metal stats (per frame, last %u): fps %.1f, gpu %.2f ms (busy %.2f), submits %.1f, lists %.1f, command buffers %.1f, render passes %.1f, "
                  "compute encoders %.1f, blit encoders %.1f, barriers %.1f, fence syncs %.1f, descriptor writes %.0f, "
-                 "PSO creations %.2f, stream KB %.1f, unix calls %.1f; PSO creation total %llu in %.1f ms",
+                 "PSO creations %.2f, stream KB %.1f, unix calls %.1f; PSO creation total %llu in %.1f ms; "
+                 "ms per frame in submit %.2f, present %.2f, signal %.2f",
                  kFramesPerReport, seconds > 0 ? kFramesPerReport / seconds : 0.0,
                  per_frame(back.gpu_nanos, last_back.gpu_nanos) / 1e6,
                  per_frame(back.gpu_busy_nanos, last_back.gpu_busy_nanos) / 1e6, f(Stat::Submits), f(Stat::CommandLists), per_frame(back.command_buffers, last_back.command_buffers),
@@ -66,7 +67,8 @@ void stats_frame()
                  per_frame(back.syncs, last_back.syncs), f(Stat::DescriptorWrites), f(Stat::PsoCreations),
                  f(Stat::StreamBytes) / 1024.0, per_frame(calls, last_calls),
                  static_cast<unsigned long long>(front[static_cast<unsigned>(Stat::PsoTotal)]),
-                 front[static_cast<unsigned>(Stat::PsoNanos)] / 1e6);
+                 front[static_cast<unsigned>(Stat::PsoNanos)] / 1e6, f(Stat::SubmitNanos) / 1e6, f(Stat::PresentNanos) / 1e6,
+                 f(Stat::SignalNanos) / 1e6);
     for (unsigned i = 0; i < static_cast<unsigned>(Stat::Count); ++i)
         last_front[i] = front[i];
     last_back = back;

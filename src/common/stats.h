@@ -16,6 +16,9 @@ enum class Stat : unsigned {
     StreamBytes,       // command stream bytes handed to the backend
     PsoNanos,          // time spent in pipeline creation (all threads)
     PsoTotal,          // pipelines created since the start (never reset by a report)
+    SubmitNanos,       // time in the backend's submit (all threads)
+    PresentNanos,      // time in the backend's present (it can wait for a drawable)
+    SignalNanos,       // time in queue signals and waits
     Count
 };
 
@@ -39,6 +42,18 @@ struct PsoTimer {
         }
     }
     static uint64_t now();
+};
+
+// Measures a scope into `stat` (only when statistics are on).
+struct StatTimer {
+    explicit StatTimer(Stat s) : stat(s), start(g_stats_enabled ? PsoTimer::now() : 0) {}
+    ~StatTimer()
+    {
+        if (g_stats_enabled)
+            stat_add(stat, PsoTimer::now() - start);
+    }
+    Stat stat;
+    uint64_t start;
 };
 
 // Called by every Present; prints a report when enabled and enough frames have passed.

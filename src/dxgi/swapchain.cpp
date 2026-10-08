@@ -544,7 +544,11 @@ private:
         }
         stats_frame();
         trace_frame();
-        const mtlb_result result = mtlb_queue_present(queue_->handle(), handle_, buffer->texture(), sync_interval);
+        mtlb_result result;
+        {
+            StatTimer timer(Stat::PresentNanos);
+            result = mtlb_queue_present(queue_->handle(), handle_, buffer->texture(), sync_interval);
+        }
         buffer->Release();
         if (result != MTLB_OK) {
             D3D12M_LOG("present failed: %s", mtlb_last_error());

@@ -3,8 +3,12 @@
 #include "bridge/metal/log.h"
 #include "internal.h"
 
+#include <mach/mach_time.h>
+
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
+#include <unordered_map>
 #include <optional>
 #include <vector>
 
@@ -193,6 +197,73 @@ bool copy_region_bytes(Texture *texture, const mtlb_texture_copy_region &r, uint
     return true;
 }
 
+// D3D12METAL_PASS_PROFILE=1: every render, compute and blit encoder is timed on the GPU (counter samples at the
+// encoder's boundaries) and the totals per kind of pass (attachment sizes and formats) are logged every few seconds,
+// slowest first. For finding which passes of a frame cost the most; costs a little per encoder when on.
+struct PassProfile {
+    struct Entry {
+        std::string key;
+        uint32_t work = 0;  // draws or dispatches
+    };
+    static constexpr uint32_t kMaxEncoders = 256;
+    id<MTLCounterSampleBuffer> samples = nil;
+    std::vector<Entry> entries;
+};
+
+bool pass_profile_enabled()
+{
+    static const bool enabled = [] {
+        const char *v = std::getenv("D3D12METAL_PASS_PROFILE");
+        return v && *v && *v != '0';
+    }();
+    return enabled;
+}
+
+void report_pass_profile(const PassProfile &profile, id<MTLCounterSampleBuffer> samples, uint32_t used)
+{
+    struct Total {
+        double ns = 0;
+        uint32_t count = 0;
+        uint64_t work = 0;
+    };
+    static std::mutex mutex;
+    static std::unordered_map<std::string, Total> totals;
+    static std::chrono::steady_clock::time_point last = std::chrono::steady_clock::now();
+    NSData *data = [samples resolveCounterRange:NSMakeRange(0, used * 2)];
+    if (data.length < uint64_t(used) * 16)
+        return;
+    mach_timebase_info_data_t timebase;
+    mach_timebase_info(&timebase);
+    const auto *stamps = static_cast<const MTLCounterResultTimestamp *>(data.bytes);
+    std::lock_guard<std::mutex> lock(mutex);
+    for (uint32_t i = 0; i < used; ++i) {
+        const uint64_t start = stamps[i * 2].timestamp, end = stamps[i * 2 + 1].timestamp;
+        if (start == MTLCounterErrorValue || end == MTLCounterErrorValue || end < start)
+            continue;
+        Total &t = totals[profile.entries[i].key];
+        t.ns += double(end - start) * timebase.numer / timebase.denom;
+        t.count++;
+        t.work += profile.entries[i].work;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    const double seconds = std::chrono::duration<double>(now - last).count();
+    if (seconds < 5)
+        return;
+    last = now;
+    std::vector<std::pair<std::string, Total>> sorted(totals.begin(), totals.end());
+    std::sort(sorted.begin(), sorted.end(), [](const auto &a, const auto &b) { return a.second.ns > b.second.ns; });
+    double all = 0;
+    for (const auto &e : sorted)
+        all += e.second.ns;
+    backend_log("pass profile over %.1f s: %.1f ms of GPU time per second in encoders", seconds, all / 1e6 / seconds);
+    for (size_t i = 0; i < std::min<size_t>(sorted.size(), 14); ++i) {
+        const Total &t = sorted[i].second;
+        backend_log("  %6.2f ms/s %5.1f/s x %.3f ms (%.1f draws/dispatches each)  %s", t.ns / 1e6 / seconds, t.count / seconds,
+                    t.ns / 1e6 / t.count, double(t.work) / t.count, sorted[i].first.c_str());
+    }
+    totals.clear();
+}
+
 // The state that persists from record to record. A fresh DrawState is what a
 // command list starts from.
 struct DrawState {
@@ -242,6 +313,11 @@ public:
     void finish()
     {
         end_encoders();
+        if (profile_ && !profile_->entries.empty()) {
+            auto profile = profile_;
+            const uint32_t used = static_cast<uint32_t>(profile->entries.size());
+            [cb_ addCompletedHandler:^(id<MTLCommandBuffer>) { report_pass_profile(*profile, profile->samples, used); }];
+        }
         if (!timestamp_resolves_.empty()) {
             Queue *queue = queue_;
             if (!queue->resolve_event)
@@ -272,6 +348,44 @@ private:
         uint32_t start, count;
     };
     std::vector<TimestampResolve> timestamp_resolves_;
+
+    // Pass profiling (see PassProfile): the entry of the encoder being recorded, or -1.
+    std::shared_ptr<PassProfile> profile_;
+    int current_entry_ = -1;
+    // Starts an entry for an encoder: returns its first sample index, or -1 when it is not profiled.
+    int profile_begin(const std::string &key)
+    {
+        current_entry_ = -1;
+        if (!pass_profile_enabled())
+            return -1;
+        if (!profile_) {
+            MTLCounterSampleBufferDescriptor *d = [MTLCounterSampleBufferDescriptor new];
+            for (id<MTLCounterSet> set in queue_->device->device.counterSets) {
+                if ([set.name isEqualToString:MTLCommonCounterSetTimestamp])
+                    d.counterSet = set;
+            }
+            if (!d.counterSet || ![queue_->device->device supportsCounterSampling:MTLCounterSamplingPointAtStageBoundary])
+                return -1;
+            d.storageMode = MTLStorageModeShared;
+            d.sampleCount = PassProfile::kMaxEncoders * 2;
+            NSError *error = nil;
+            id<MTLCounterSampleBuffer> buffer = [queue_->device->device newCounterSampleBufferWithDescriptor:d error:&error];
+            if (!buffer)
+                return -1;
+            profile_ = std::make_shared<PassProfile>();
+            profile_->samples = buffer;
+        }
+        if (profile_->entries.size() >= PassProfile::kMaxEncoders)
+            return -1;
+        profile_->entries.push_back({key, 0});
+        current_entry_ = static_cast<int>(profile_->entries.size() - 1);
+        return current_entry_ * 2;
+    }
+    void profile_work()
+    {
+        if (profile_ && current_entry_ >= 0)
+            profile_->entries[current_entry_].work++;
+    }
 
     enum Dirty : uint32_t {
         kPipeline = 1u << 0,
@@ -509,7 +623,15 @@ id<MTLBlitCommandEncoder> Replay::blit()
         end_compute();
         end_render();
         flush_clears(false);
-        blit_ = [cb_ blitCommandEncoder];
+        if (const int slot = profile_begin("blit"); slot >= 0) {
+            MTLBlitPassDescriptor *pass = [MTLBlitPassDescriptor blitPassDescriptor];
+            pass.sampleBufferAttachments[0].sampleBuffer = profile_->samples;
+            pass.sampleBufferAttachments[0].startOfEncoderSampleIndex = slot;
+            pass.sampleBufferAttachments[0].endOfEncoderSampleIndex = slot + 1;
+            blit_ = [cb_ blitCommandEncoderWithDescriptor:pass];
+        } else {
+            blit_ = [cb_ blitCommandEncoder];
+        }
         stat_add(kStatBlitEncoders);
         if (sync_needed_ && queue_->fence_pending) {
             stat_add(kStatSyncs);
@@ -529,7 +651,16 @@ id<MTLComputeCommandEncoder> Replay::compute()
         end_render();
         flush_clears(false);
         // Dispatches may overlap; a barrier orders the ones around it.
-        compute_ = [cb_ computeCommandEncoderWithDispatchType:MTLDispatchTypeConcurrent];
+        if (const int slot = profile_begin("compute"); slot >= 0) {
+            MTLComputePassDescriptor *pass = [MTLComputePassDescriptor computePassDescriptor];
+            pass.dispatchType = MTLDispatchTypeConcurrent;
+            pass.sampleBufferAttachments[0].sampleBuffer = profile_->samples;
+            pass.sampleBufferAttachments[0].startOfEncoderSampleIndex = slot;
+            pass.sampleBufferAttachments[0].endOfEncoderSampleIndex = slot + 1;
+            compute_ = [cb_ computeCommandEncoderWithDescriptor:pass];
+        } else {
+            compute_ = [cb_ computeCommandEncoderWithDispatchType:MTLDispatchTypeConcurrent];
+        }
         stat_add(kStatComputeEncoders);
         if (sync_needed_ && queue_->fence_pending) {
             stat_add(kStatSyncs);
@@ -547,6 +678,23 @@ id<MTLRenderCommandEncoder> Replay::new_render_encoder(MTLRenderPassDescriptor *
     end_blit();
     end_compute();
     queue_->render_passes.fetch_add(1, std::memory_order_relaxed);
+    if (pass_profile_enabled()) {
+        char key[160];
+        id<MTLTexture> first = pass.colorAttachments[0].texture ? pass.colorAttachments[0].texture : pass.depthAttachment.texture;
+        int colors = 0;
+        for (int i = 0; i < 8; ++i)
+            colors += pass.colorAttachments[i].texture != nil;
+        std::snprintf(key, sizeof(key), "render %lux%lu c%d fmt%lu depth%lu%s", static_cast<unsigned long>(first.width),
+                      static_cast<unsigned long>(first.height), colors,
+                      static_cast<unsigned long>(pass.colorAttachments[0].texture.pixelFormat),
+                      static_cast<unsigned long>(pass.depthAttachment.texture.pixelFormat),
+                      pass.colorAttachments[0].loadAction == MTLLoadActionClear ? " clear" : "");
+        if (const int slot = profile_begin(key); slot >= 0) {
+            pass.sampleBufferAttachments[0].sampleBuffer = profile_->samples;
+            pass.sampleBufferAttachments[0].startOfVertexSampleIndex = slot;
+            pass.sampleBufferAttachments[0].endOfFragmentSampleIndex = slot + 1;
+        }
+    }
     id<MTLRenderCommandEncoder> encoder = [cb_ renderCommandEncoderWithDescriptor:pass];
     stat_add(kStatRenderEncoders);
     if (sync_needed_ && queue_->fence_pending) {
@@ -994,6 +1142,7 @@ mtlb_result Replay::draw(const mtlb_cmd_draw &cmd)
     mtlb_result result = begin_draw(&ready);
     if (result != MTLB_OK || !ready)
         return result;
+    profile_work();
     if (const EmulatedPipeline *emulated = state_.pipeline->emulated.get()) {
         IRRuntimePrimitiveType primitive;
         if (!emulated_topology_ok(*emulated, &primitive))
@@ -1027,6 +1176,7 @@ mtlb_result Replay::draw_indexed(const mtlb_cmd_draw_indexed &cmd)
             backend_log("indexed draw skipped, it reads past the index buffer view");
         return MTLB_OK;
     }
+    profile_work();
     if (const EmulatedPipeline *emulated = state_.pipeline->emulated.get()) {
         IRRuntimePrimitiveType primitive;
         if (!emulated_topology_ok(*emulated, &primitive))
@@ -1511,6 +1661,18 @@ mtlb_result Replay::dispatch_compute(const mtlb_cmd_dispatch &cmd)
     id<MTLComputeCommandEncoder> enc = prepare_dispatch();
     if (!enc)
         return MTLB_ERROR_DEVICE;
+    if (profile_ && current_entry_ >= 0) {
+        PassProfile::Entry &entry = profile_->entries[current_entry_];
+        if (entry.work == 0) {  // an encoder is named after its first dispatch
+            const MTLSize tg = state_.compute_pipeline->threadgroup_size;
+            char key[160];
+            std::snprintf(key, sizeof(key), "compute first=%p grid=%ux%ux%u tg=%lux%lux%lu", static_cast<void *>(state_.compute_pipeline),
+                          cmd.x, cmd.y, cmd.z, static_cast<unsigned long>(tg.width), static_cast<unsigned long>(tg.height),
+                          static_cast<unsigned long>(tg.depth));
+            entry.key = key;
+        }
+        entry.work++;
+    }
     [enc dispatchThreadgroups:MTLSizeMake(cmd.x, cmd.y, cmd.z) threadsPerThreadgroup:state_.compute_pipeline->threadgroup_size];
     return MTLB_OK;
 }
