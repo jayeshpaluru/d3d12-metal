@@ -430,7 +430,7 @@ Resource *Device::acquire_attachment(uint64_t id)
     std::shared_lock lock(attachments_mutex_);
     auto it = attachments_.find(id);
     // A resource whose last reference is gone is being destroyed (its destructor waits for this lock).
-    return it != attachments_.end() && it->second->try_add_ref() ? it->second : nullptr;
+    return it != attachments_.end() && it->second->try_add_internal_ref() ? it->second : nullptr;
 }
 
 // The CBV/SRV/UAV heap that holds a CPU handle and the index of the handle in it. The caller holds heaps_mutex_.
@@ -494,7 +494,7 @@ std::vector<Resource *> Device::take_pending_init(std::vector<uint8_t> &stream)
         // A resource whose last reference went away is being destroyed (its destructor waits for this lock):
         // nothing to initialise, and it must not be resurrected.
         for (Resource *resource : pending_init_) {
-            if (resource->try_add_ref())  // keeps it alive until the submission is done
+            if (resource->try_add_internal_ref())  // keeps it alive until the submission is done
                 held.push_back(resource);
         }
         pending_init_.clear();

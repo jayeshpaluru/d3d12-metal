@@ -71,7 +71,7 @@ void CommandQueue::ExecuteCommandLists(UINT count, ID3D12CommandList *const *lis
     if (mtlb_queue_submit(queue_, spans.data() + first, count + 1 - first) != MTLB_OK)
         D3D12M_LOG("command submission failed: %s", mtlb_last_error());
     for (Resource *resource : initialized)
-        resource->Release();
+        resource->release_internal_ref();
 }
 
 HRESULT CommandQueue::Signal(ID3D12Fence *fence, UINT64 value)

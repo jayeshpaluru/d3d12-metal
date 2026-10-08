@@ -20,6 +20,15 @@ namespace {
 
 } // namespace
 
+// Drops the list's internal reference to a root signature.
+static void release_signature(RootSignature *&signature)
+{
+    if (signature) {
+        signature->release_internal_ref();
+        signature = nullptr;
+    }
+}
+
 bool CommandList::resolve_attachment(D3D12_CPU_DESCRIPTOR_HANDLE handle, D3D12_DESCRIPTOR_HEAP_TYPE type,
                                      mtlb_render_target *target, uint32_t *flags)
 {
@@ -38,7 +47,7 @@ bool CommandList::resolve_attachment(D3D12_CPU_DESCRIPTOR_HANDLE handle, D3D12_D
         D3D12M_LOG("a render target or depth-stencil view names a resource that has been destroyed: treated as null");
         return true;
     }
-    refs_.adopt(static_cast<IUnknown *>(resource));
+    refs_.adopt(resource);
     *target = {resource->texture(), view.view_format, view.mip_level, view.array_slice, 0};
     if (flags)
         *flags = view.flags;
@@ -63,8 +72,8 @@ HRESULT CommandList::create(Device *device, D3D12_COMMAND_LIST_TYPE type, ID3D12
 
 CommandList::~CommandList()
 {
-    safe_release(graphics_.signature);
-    safe_release(compute_.signature);
+    release_signature(graphics_.signature);
+    release_signature(compute_.signature);
     drop_pass();
     refs_.clear();
 }
@@ -82,7 +91,7 @@ void CommandList::reset_state()
     refs_.clear();
     has_graphics_pipeline_ = has_compute_pipeline_ = false;
     for (RootState *state : {&graphics_, &compute_}) {
-        safe_release(state->signature);
+        release_signature(state->signature);
         state->args.clear();
         state->dirty = false;
     }
@@ -269,8 +278,8 @@ void CommandList::set_render_targets(UINT count, const D3D12_CPU_DESCRIPTOR_HAND
 void CommandList::drop_pass()
 {
     for (PassResolve &resolve : pass_resolves_) {
-        resolve.source->Release();
-        resolve.destination->Release();
+        resolve.source->release_internal_ref();
+        resolve.destination->release_internal_ref();
     }
     pass_resolves_.clear();
     in_pass_ = false;
@@ -321,10 +330,14 @@ void CommandList::BeginRenderPass(UINT count, const D3D12_RENDER_PASS_RENDER_TAR
         const auto &resolve = end.Resolve;
         if (!resolve.pSrcResource || !resolve.pDstResource || (resolve.SubresourceCount && !resolve.pSubresourceParameters))
             continue;
+        auto *source = ours<Resource>(resolve.pSrcResource);
+        auto *destination = ours<Resource>(resolve.pDstResource);
+        if (!source || !destination)
+            continue;
         for (UINT k = 0; k < resolve.SubresourceCount; ++k) {
-            resolve.pSrcResource->AddRef();
-            resolve.pDstResource->AddRef();
-            pass_resolves_.push_back({resolve.pSrcResource, resolve.pDstResource, resolve.pSubresourceParameters[k].SrcSubresource,
+            source->add_internal_ref();
+            destination->add_internal_ref();
+            pass_resolves_.push_back({source, destination, resolve.pSubresourceParameters[k].SrcSubresource,
                                       resolve.pSubresourceParameters[k].DstSubresource, resolve.Format});
         }
     }
@@ -346,8 +359,8 @@ void CommandList::EndRenderPass()
     for (PassResolve &resolve : resolves) {
         ResolveSubresource(resolve.destination, resolve.destination_subresource, resolve.source, resolve.source_subresource,
                            resolve.format);
-        resolve.source->Release();
-        resolve.destination->Release();
+        resolve.source->release_internal_ref();
+        resolve.destination->release_internal_ref();
     }
 }
 
@@ -395,8 +408,8 @@ void CommandList::set_root_signature(RootState &state, ID3D12RootSignature *sign
     if (rs == state.signature)
         return;  // the same signature keeps its bindings
     if (rs)
-        rs->AddRef();
-    safe_release(state.signature);
+        rs->add_internal_ref();
+    release_signature(state.signature);
     state.signature = rs;
     // Changing the root signature invalidates all root arguments.
     state.args.assign(rs ? rs->argument_buffer_size() : 0, 0);
@@ -714,8 +727,8 @@ void CommandList::ExecuteBundle(ID3D12GraphicsCommandList *bundle_ptr)
             continue;
         RootState &mine = state == &bundle->graphics_ ? graphics_ : compute_;
         if (state->signature != mine.signature) {
-            state->signature->AddRef();
-            safe_release(mine.signature);
+            state->signature->add_internal_ref();
+            release_signature(mine.signature);
             mine.signature = state->signature;
         }
         mine.args = state->args;

@@ -180,40 +180,33 @@ int main()
     }
 
     {
-        // Recorded, then released by the application, then executed: the list keeps everything alive.
+        // Recorded, then released by the application, then executed: the list keeps the memory alive without
+        // changing the reference counts the application sees (Release() reports 0, as on any driver).
         ComPtr<ID3D12Resource> src = ctx.create_upload_buffer("source data 0123", 16);
         ComPtr<ID3D12Resource> dst = ctx.create_buffer(D3D12_HEAP_TYPE_READBACK, 16);
-        ID3D12Resource *raw_src = src.Get(), *raw_dst = dst.Get();
+        ID3D12Resource *raw_src = src.Get();
         raw_src->AddRef();
         const ULONG before_src = raw_src->Release();
 
         ComPtr<ID3D12GraphicsCommandList> list = ctx.create_list();
         list->CopyBufferRegion(dst.Get(), 0, src.Get(), 0, 16);
         raw_src->AddRef();
-        const ULONG held_src = raw_src->Release();
-        CHECK(held_src == before_src + 1);  // the list holds a reference
+        CHECK(raw_src->Release() == before_src);  // recording takes no COM reference
         CHECK_HR(list->Close());
 
-        // The application lets go of both: only the list keeps them alive.
-        dst->AddRef();  // our own handle to read the result back
-        src.Reset();
-        dst.Reset();
-        ctx.execute_and_wait(list.Get());
+        CHECK(src.Detach()->Release() == 0);  // the application lets go of the source
+        ctx.execute_and_wait(list.Get());     // the list still copies from it
         void *mapped = nullptr;
-        CHECK_HR(raw_dst->Map(0, nullptr, &mapped));
+        CHECK_HR(dst->Map(0, nullptr, &mapped));
         CHECK(std::memcmp(mapped, "source data 0123", 16) == 0);
-        raw_dst->Unmap(0, nullptr);
+        dst->Unmap(0, nullptr);
 
-        // Reset gives the references back: the source is destroyed at last (observed through the allocator
-        // reset not crashing and the destination's count falling).
+        // Reset gives the internal references back (the source is freed at last); the list is usable again.
         CHECK_HR(ctx.allocators.back()->Reset());
-        raw_dst->AddRef();
-        const ULONG with_list = raw_dst->Release();
         CHECK_HR(list->Reset(ctx.allocators.back().Get(), nullptr));
-        raw_dst->AddRef();
-        const ULONG after_reset = raw_dst->Release();
-        CHECK(after_reset + 1 == with_list);
-        raw_dst->Release();  // our extra reference: the destination dies here
+        CHECK_HR(list->Close());
+        dst->AddRef();
+        CHECK(dst->Release() == 1);
     }
 
     {
@@ -228,7 +221,7 @@ int main()
         }
         ComPtr<ID3D12GraphicsCommandList> list = ctx.create_list();
         list->SetGraphicsRootSignature(signature.Get());
-        signature.Reset();
+        CHECK(signature.Detach()->Release() == 0);  // the list's hold on it is not a COM reference
         CHECK_HR(list->Close());
         ctx.execute_and_wait(list.Get());
     }

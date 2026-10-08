@@ -9,37 +9,59 @@
 
 namespace d3d12m {
 
-// Implements IUnknown reference counting for the most-derived interface `I`.
+// Internal keep-alive for objects the layer itself holds on to (a recorded command list names its pipelines and
+// resources until it is reset). It does not change the COM reference count the application sees: when the
+// application's last reference goes away the object only dies once the internal references are gone too.
+class InternalRefCounted {
+public:
+    virtual void add_internal_ref() = 0;
+    virtual void release_internal_ref() = 0;
+    // Takes an internal reference unless the object is already being destroyed.
+    virtual bool try_add_internal_ref() = 0;
+
+protected:
+    ~InternalRefCounted() = default;
+};
+
+// Implements IUnknown reference counting for the most-derived interface `I`. One atomic word holds both counts:
+// the application's COM references in the low half, internal references in the high half; the object is deleted
+// when the whole word reaches zero.
 // The final class provides QueryInterface (see query_interfaces below).
 template <typename I>
-class RefCounted : public I {
+class RefCounted : public I, public InternalRefCounted {
 public:
-    ULONG STDMETHODCALLTYPE AddRef() override { return ++refs_; }
-
-    // Takes a reference unless the object is already being destroyed (a reference count that reached zero).
-    bool try_add_ref()
-    {
-        ULONG n = refs_.load();
-        while (n != 0) {
-            if (refs_.compare_exchange_weak(n, n + 1))
-                return true;
-        }
-        return false;
-    }
+    ULONG STDMETHODCALLTYPE AddRef() override { return static_cast<ULONG>(counts_.fetch_add(1) + 1); }
 
     ULONG STDMETHODCALLTYPE Release() override
     {
-        ULONG n = --refs_;
-        if (n == 0)
+        const uint64_t after = counts_.fetch_sub(1) - 1;
+        if (after == 0)
             delete this;
-        return n;
+        return static_cast<ULONG>(after & 0xffffffffu);
+    }
+
+    void add_internal_ref() override { counts_.fetch_add(kInternal); }
+    void release_internal_ref() override
+    {
+        if (counts_.fetch_sub(kInternal) - kInternal == 0)
+            delete this;
+    }
+    bool try_add_internal_ref() override
+    {
+        uint64_t n = counts_.load();
+        while (n != 0) {
+            if (counts_.compare_exchange_weak(n, n + kInternal))
+                return true;
+        }
+        return false;
     }
 
 protected:
     virtual ~RefCounted() = default;
 
 private:
-    std::atomic<ULONG> refs_{1};
+    static constexpr uint64_t kInternal = uint64_t(1) << 32;
+    std::atomic<uint64_t> counts_{1};
 };
 
 // Private identification of this layer's own objects. Application-supplied COM

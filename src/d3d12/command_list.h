@@ -16,10 +16,13 @@
 
 namespace d3d12m {
 
-// Strong references to the objects a recorded stream names by handle (pipelines, resources, query heaps, ...).
-// The backend dereferences those handles when the list is executed, so an application that releases an object
-// between recording and execution (D3D12 does not allow it, but must not crash this layer) cannot free what the
-// stream still points at. Released when the list is reset or destroyed.
+class Resource;
+
+// Internal keep-alive references to the objects a recorded stream names by handle (pipelines, resources, query
+// heaps, ...). The backend dereferences those handles when the list is executed, so an application that releases an
+// object between recording and execution (D3D12 does not allow it, but must not crash this layer) cannot free what the
+// stream still points at. They are not COM references: the reference count the application sees is unchanged
+// (an object released to zero stays allocated, invisible to the application, until the list is reset or destroyed).
 class ObjectRefs {
 public:
     ObjectRefs() = default;
@@ -27,36 +30,36 @@ public:
     ObjectRefs &operator=(const ObjectRefs &) = delete;
     ~ObjectRefs() { clear(); }
 
-    // Takes a reference of its own.
-    void add(IUnknown *object)
+    // Takes an internal reference of its own.
+    void add(InternalRefCounted *object)
     {
         if (!object || seen(object))
             return;
-        object->AddRef();
+        object->add_internal_ref();
         all_.push_back(object);
     }
-    // Takes over the caller's reference (which is dropped when the object is already held).
-    void adopt(IUnknown *object)
+    // Takes over an internal reference the caller holds (dropped when the object is already held).
+    void adopt(InternalRefCounted *object)
     {
         if (!object)
             return;
         if (seen(object)) {
-            object->Release();
+            object->release_internal_ref();
             return;
         }
         all_.push_back(object);
     }
     void append(const ObjectRefs &other)
     {
-        for (IUnknown *object : other.all_)
+        for (InternalRefCounted *object : other.all_)
             add(object);
     }
     void clear()
     {
-        for (IUnknown *object : all_)
-            object->Release();
+        for (InternalRefCounted *object : all_)
+            object->release_internal_ref();
         all_.clear();
-        for (IUnknown *&slot : recent_)
+        for (InternalRefCounted *&slot : recent_)
             slot = nullptr;
     }
     size_t size() const { return all_.size(); }
@@ -64,17 +67,17 @@ public:
 private:
     // A small direct-mapped table of the objects added lately keeps a draw-heavy list from taking a reference
     // per draw; collisions only cost an extra reference (released in the end all the same).
-    bool seen(IUnknown *object)
+    bool seen(InternalRefCounted *object)
     {
-        IUnknown *&slot = recent_[(reinterpret_cast<uintptr_t>(object) >> 4) % kRecent];
+        InternalRefCounted *&slot = recent_[(reinterpret_cast<uintptr_t>(object) >> 4) % kRecent];
         if (slot == object)
             return true;
         slot = object;
         return false;
     }
     static constexpr size_t kRecent = 64;
-    IUnknown *recent_[kRecent] = {};
-    std::vector<IUnknown *> all_;
+    InternalRefCounted *recent_[kRecent] = {};
+    std::vector<InternalRefCounted *> all_;
 };
 
 class CommandList final : public ChildImpl<ID3D12GraphicsCommandList7> {
@@ -186,14 +189,14 @@ private:
     // The root signature and root arguments of one pipeline type. The arguments are the shader
     // converter's top-level argument buffer, kept as bytes and sent whole before the next draw or dispatch.
     struct RootState {
-        RootSignature *signature = nullptr;  // owned reference
+        RootSignature *signature = nullptr;  // internal reference
         std::vector<uint8_t> args;
         bool dirty = false;
     };
 
     // The resolves a render pass performs when it ends (the resources are referenced until then).
     struct PassResolve {
-        ID3D12Resource *source, *destination;
+        Resource *source, *destination;  // internal references
         UINT source_subresource, destination_subresource;
         DXGI_FORMAT format;
     };
@@ -204,13 +207,13 @@ private:
     bool in_pass_ = false;
 
     void reset_state();
-    // ours<T>(p) that also keeps the object alive until the list is reset (see ObjectRefs).
+    // ours<T>(p) that also keeps the object allocated until the list is reset (see ObjectRefs).
     template <typename T, typename P>
     T *hold(P *p)
     {
         T *object = ours<T>(p);
         if (object)
-            refs_.add(static_cast<IUnknown *>(object));
+            refs_.add(object);
         return object;
     }
     // The texture an RTV or DSV descriptor names, as a record's render target. False when the handle is not a

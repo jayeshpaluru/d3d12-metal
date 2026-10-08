@@ -54,7 +54,7 @@ public:
 
     // Render targets and depth-stencils by id, for the RTV/DSV descriptors (which hold an id, not a pointer: a
     // descriptor outlives its resource when the application never clears it). acquire_attachment returns the
-    // resource with a new reference, or null once it is destroyed.
+    // resource with a new internal reference (release_internal_ref), or null once it is destroyed.
     uint64_t register_attachment(Resource *resource);
     void unregister_attachment(uint64_t id);
     Resource *acquire_attachment(uint64_t id);
