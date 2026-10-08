@@ -1,0 +1,23 @@
+# Windows x86-64 (PE) build with Homebrew's mingw-w64: d3d12.dll, dxgi.dll and the
+# Win32 test programs.
+#   meson setup build-wine/mingw --cross-file cross/mingw-x86_64.txt -Ddxc=<path to dxc>
+[binaries]
+c = 'x86_64-w64-mingw32-gcc'
+cpp = 'x86_64-w64-mingw32-g++'
+ar = 'x86_64-w64-mingw32-ar'
+strip = 'x86_64-w64-mingw32-strip'
+windres = 'x86_64-w64-mingw32-windres'
+
+[host_machine]
+system = 'windows'
+cpu_family = 'x86_64'
+cpu = 'x86_64'
+endian = 'little'
+
+[properties]
+needs_exe_wrapper = true
+
+[built-in options]
+# Nothing but the Windows system DLLs at run time: no libstdc++, libgcc or winpthread DLLs.
+c_link_args = ['-static', '-static-libgcc']
+cpp_link_args = ['-static', '-static-libgcc', '-static-libstdc++']

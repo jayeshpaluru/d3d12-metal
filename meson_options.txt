@@ -2,3 +2,5 @@ option('dxc', type: 'string', value: '',
        description: 'Path to the DXC compiler used to build the test shaders (default: dxc from PATH)')
 option('directx_headers_prefix', type: 'string', value: '/opt/homebrew',
        description: 'Prefix of the DirectX-Headers install, used when pkg-config cannot find it')
+option('wine_unix', type: 'boolean', value: false,
+       description: 'Build only d3d12metal.so, the unix half of the Wine build (set by cross/macos-x86_64.txt)')

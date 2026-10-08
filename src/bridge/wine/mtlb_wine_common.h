@@ -32,10 +32,10 @@ static inline void mtlb_wine_trace_call(const char *side, const char *name, cons
     fprintf(stderr, "%s)\n", line);
 }
 
-static inline void mtlb_wine_trace_result(const char *name, int64_t value, int has_value)
+static inline void mtlb_wine_trace_result(const char *side, const char *name, int64_t value, int has_value)
 {
     if (has_value)
-        fprintf(stderr, "d3d12-metal:   %s -> %lld\n", name, (long long)value);
+        fprintf(stderr, "d3d12-metal[%s]:   %s -> %lld\n", side, name, (long long)value);
 }
 
 #endif

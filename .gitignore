@@ -1,4 +1,5 @@
 build/
+build-wine/
 *.dll
 *.exe
 *.dylib

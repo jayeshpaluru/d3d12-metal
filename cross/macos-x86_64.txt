@@ -1,0 +1,21 @@
+# x86-64 macOS build of the unix half of the Wine build, d3d12metal.so. Wine here
+# is an x86-64 build running under Rosetta, so the module must be x86-64 too.
+#   meson setup build-wine/unix --cross-file cross/macos-x86_64.txt
+[binaries]
+c = ['clang', '-arch', 'x86_64']
+cpp = ['clang++', '-arch', 'x86_64']
+objcpp = ['clang++', '-arch', 'x86_64']
+ar = 'ar'
+strip = 'strip'
+
+[host_machine]
+system = 'darwin'
+cpu_family = 'x86_64'
+cpu = 'x86_64'
+endian = 'little'
+
+[properties]
+needs_exe_wrapper = true
+
+[project options]
+wine_unix = true

@@ -28,3 +28,17 @@ D3D12M_EXPORT HRESULT D3D12GetDebugInterface(REFIID, void **debug)
         *debug = nullptr;
     return E_NOINTERFACE;
 }
+
+D3D12M_EXPORT HRESULT D3D12EnableExperimentalFeatures(UINT num_features, const IID *, void *, UINT *)
+{
+    // No experimental features exist; asking for none succeeds like on Windows.
+    return num_features == 0 ? S_OK : E_NOINTERFACE;
+}
+
+D3D12M_EXPORT HRESULT D3D12GetInterface(REFCLSID, REFIID, void **object)
+{
+    // The Agility SDK configuration interfaces are not provided.
+    if (object)
+        *object = nullptr;
+    return E_NOINTERFACE;
+}

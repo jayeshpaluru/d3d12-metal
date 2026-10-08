@@ -109,9 +109,9 @@ def client_inc(functions):
             out.append("    memcpy(text_, p.ret, sizeof(text_));")
             out.append("    return text_;")
         elif ret == "void":
-            out.append('    if (MTLB_WINE_LOG()) mtlb_wine_trace_result("%s", 0, 0);' % name)
+            out.append('    if (MTLB_WINE_LOG()) mtlb_wine_trace_result(MTLB_WINE_SIDE, "%s", 0, 0);' % name)
         else:
-            out.append('    if (MTLB_WINE_LOG()) mtlb_wine_trace_result("%s", (int64_t)p.ret, 1);' % name)
+            out.append('    if (MTLB_WINE_LOG()) mtlb_wine_trace_result(MTLB_WINE_SIDE, "%s", (int64_t)p.ret, 1);' % name)
             out.append("    return p.ret;")
         out += ["}", ""]
     return "\n".join(out)
@@ -134,9 +134,9 @@ def unix_inc(functions):
             out.append(f"    p->ret = {name}({call_args});")
         out.append("    MTLB_UNIX_POOL_END")
         if ret in ("void", "const char *"):
-            out.append('    if (MTLB_WINE_LOG()) mtlb_wine_trace_result("%s", 0, 0);' % name)
+            out.append('    if (MTLB_WINE_LOG()) mtlb_wine_trace_result(MTLB_WINE_SIDE, "%s", 0, 0);' % name)
         else:
-            out.append('    if (MTLB_WINE_LOG()) mtlb_wine_trace_result("%s", (int64_t)p->ret, 1);' % name)
+            out.append('    if (MTLB_WINE_LOG()) mtlb_wine_trace_result(MTLB_WINE_SIDE, "%s", (int64_t)p->ret, 1);' % name)
         out += ["    return 0;", "}", ""]
     out.append("MTLB_UNIX_TABLE_EXPORT extern const unixlib_entry_t __wine_unix_call_funcs[];")
     out.append("MTLB_UNIX_TABLE_EXPORT const unixlib_entry_t __wine_unix_call_funcs[] = {")
