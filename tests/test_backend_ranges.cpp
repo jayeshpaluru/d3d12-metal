@@ -187,6 +187,53 @@ int main()
     CHECK(resolve(0, 0, 1) != MTLB_OK);
     CHECK(resolve(1, 0, 0) != MTLB_OK);  // mip 1 is 8x8, the source is 16x16
 
+    // ---- block-compressed mips smaller than a block ------------------------------------------------------------
+    // D3D12 copies a whole 2x2 or 1x1 mip of a BC texture with a box rounded up to the block size (4x4).
+    for (mtlb_format format : {MTLB_FORMAT_BC1_UNORM, MTLB_FORMAT_BC7_UNORM}) {
+        mtlb_texture_desc bc = {};
+        bc.dimension = MTLB_TEXTURE_2D;
+        bc.format = format;
+        bc.width = bc.height = 4;  // mips: 4x4, 2x2, 1x1
+        bc.depth_or_array_size = 1;
+        bc.mip_levels = 3;
+        bc.sample_count = 1;
+        bc.usage = MTLB_TEXTURE_USAGE_SHADER_READ;
+        bc.storage = MTLB_STORAGE_PRIVATE;
+        mtlb_texture bc_a = 0, bc_b = 0;
+        CHECK(mtlb_texture_create(device, &bc, &bc_a, nullptr) == MTLB_OK);
+        CHECK(mtlb_texture_create(device, &bc, &bc_b, nullptr) == MTLB_OK);
+        const uint32_t block_bytes = format == MTLB_FORMAT_BC1_UNORM ? 8 : 16;
+        for (uint32_t mip : {1u, 2u}) {
+            for (mtlb_cmd_type type : {MTLB_CMD_COPY_BUFFER_TO_TEXTURE, MTLB_CMD_COPY_TEXTURE_TO_BUFFER}) {
+                mtlb_cmd_copy_texture c = {};
+                c.region.texture = bc_a;
+                c.region.buffer = big;
+                c.region.bytes_per_row = block_bytes;
+                c.region.bytes_per_image = block_bytes;
+                c.region.mip_level = mip;
+                c.region.width = c.region.height = 4;  // rounded up to the block: covers the whole 2x2 / 1x1 mip
+                c.region.depth = 1;
+                CHECK(submit(record(type, c)) == MTLB_OK);
+                c.region.width = 8;                      // beyond the rounding
+                CHECK(submit(record(type, c)) != MTLB_OK);
+                c.region.width = 4;
+                c.region.x = 4;                          // starting past the mip
+                CHECK(submit(record(type, c)) != MTLB_OK);
+            }
+            mtlb_cmd_copy_texture_texture t = {};
+            t.dst = bc_b;
+            t.src = bc_a;
+            t.dst_mip = t.src_mip = mip;
+            t.width = t.height = 4;
+            t.depth = 1;
+            CHECK(submit(record(MTLB_CMD_COPY_TEXTURE_TEXTURE, t)) == MTLB_OK);
+            t.width = 8;
+            CHECK(submit(record(MTLB_CMD_COPY_TEXTURE_TEXTURE, t)) != MTLB_OK);
+        }
+        mtlb_texture_destroy(bc_b);
+        mtlb_texture_destroy(bc_a);
+    }
+
     // The queue is still usable.
     CHECK(clear(0, 0) == MTLB_OK);
 

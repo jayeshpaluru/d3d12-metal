@@ -86,15 +86,32 @@ bool subresource_exists(id<MTLTexture> texture, uint32_t mip, uint32_t slice)
     return mip < texture.mipmapLevelCount && slice < slice_count_of(texture);
 }
 
-// The box [x, x + width) x ... lies inside the mip level of the texture.
-bool box_fits(id<MTLTexture> texture, uint32_t mip, uint32_t x, uint32_t y, uint32_t z, uint32_t width, uint32_t height,
-              uint32_t depth)
+// The box [x, x + width) x ... lies inside the mip level of the texture. A block-compressed texture's copy box may be
+// rounded up to whole blocks (D3D12 copies 4x4 boxes out of the 2x2 and 1x1 mips of BC formats): the rounding is
+// accepted and clamped away, `width`, `height` and `depth` receive the part that is really inside the mip.
+bool fit_box(Texture *texture, uint32_t mip, uint32_t x, uint32_t y, uint32_t z, uint32_t *width, uint32_t *height,
+             uint32_t *depth)
 {
-    if (mip >= texture.mipmapLevelCount)
+    id<MTLTexture> t = texture->texture;
+    if (mip >= t.mipmapLevelCount)
         return false;
-    const uint64_t w = mip_dimension(texture.width, mip), h = mip_dimension(texture.height, mip);
-    const uint64_t d = texture.textureType == MTLTextureType3D ? mip_dimension(texture.depth, mip) : 1;
-    return range_fits(x, width, w) && range_fits(y, height, h) && range_fits(z, depth, d);
+    mtlb_format_info info;
+    const bool known = mtlb_format_get_info(texture->format, &info) == MTLB_OK;
+    const uint32_t block_width = known ? std::max<uint32_t>(info.block_width, 1) : 1;
+    const uint32_t block_height = known ? std::max<uint32_t>(info.block_height, 1) : 1;
+    auto fit = [](uint64_t origin, uint32_t *length, uint64_t extent, uint32_t block) {
+        if (origin > extent)
+            return false;
+        const uint64_t rounded = (extent + block - 1) / block * block;
+        if (origin + *length > rounded)
+            return false;
+        if (origin + *length > extent)
+            *length = static_cast<uint32_t>(extent - origin);
+        return true;
+    };
+    const uint64_t d = t.textureType == MTLTextureType3D ? mip_dimension(t.depth, mip) : 1;
+    return fit(x, width, mip_dimension(t.width, mip), block_width) && fit(y, height, mip_dimension(t.height, mip), block_height)
+           && fit(z, depth, d, 1);
 }
 
 // Bytes a buffer must hold for a texture copy of `region` (row pitch and image pitch as given).
@@ -873,14 +890,15 @@ mtlb_result Replay::copy_texture(const mtlb_texture_copy_region &r, bool to_buff
     if (!texture || !buffer || !enc)
         return fail(MTLB_ERROR_INVALID_ARGUMENT, "invalid texture copy");
     uint64_t bytes = 0;
+    uint32_t width = r.width, height = r.height, depth = r.depth;
     if (!subresource_exists(texture->texture, r.mip_level, r.array_slice)
-        || !box_fits(texture->texture, r.mip_level, r.x, r.y, r.z, r.width, r.height, r.depth)
+        || !fit_box(texture, r.mip_level, r.x, r.y, r.z, &width, &height, &depth)
         || !copy_region_bytes(texture, r, &bytes) || !range_fits(r.buffer_offset, bytes, buffer->size))
         return fail(MTLB_ERROR_INVALID_ARGUMENT, "texture copy outside the texture or the buffer");
-    if (!r.width || !r.height || !r.depth)
+    if (!width || !height || !depth)
         return MTLB_OK;
     MTLOrigin origin = {r.x, r.y, r.z};
-    MTLSize size = {r.width, r.height, r.depth};
+    MTLSize size = {width, height, depth};
     // A depth-stencil texture is copied one plane at a time.
     MTLBlitOption options = MTLBlitOptionNone;
     if (texture->texture.pixelFormat == MTLPixelFormatDepth32Float_Stencil8)
@@ -1552,15 +1570,23 @@ mtlb_result Replay::copy_texture_texture(const mtlb_cmd_copy_texture_texture &cm
     Texture *dst = from_handle<Texture>(cmd.dst), *src = from_handle<Texture>(cmd.src);
     if (!dst || !src)
         return fail(MTLB_ERROR_INVALID_ARGUMENT, "invalid texture copy");
+    uint32_t copy_w = cmd.width, copy_h = cmd.height, copy_d = cmd.depth;
     if (cmd.whole) {
         if (src->texture.mipmapLevelCount != dst->texture.mipmapLevelCount || slice_count_of(src->texture) != slice_count_of(dst->texture)
             || src->texture.width != dst->texture.width || src->texture.height != dst->texture.height
             || src->texture.depth != dst->texture.depth)
             return fail(MTLB_ERROR_INVALID_ARGUMENT, "whole-resource copy between textures of different shapes");
-    } else if (!subresource_exists(src->texture, cmd.src_mip, cmd.src_slice) || !subresource_exists(dst->texture, cmd.dst_mip, cmd.dst_slice)
-               || !box_fits(src->texture, cmd.src_mip, cmd.src_x, cmd.src_y, cmd.src_z, cmd.width, cmd.height, cmd.depth)
-               || !box_fits(dst->texture, cmd.dst_mip, cmd.dst_x, cmd.dst_y, cmd.dst_z, cmd.width, cmd.height, cmd.depth)) {
-        return fail(MTLB_ERROR_INVALID_ARGUMENT, "texture copy outside its textures");
+    } else {
+        uint32_t src_w = cmd.width, src_h = cmd.height, src_d = cmd.depth, dst_w = cmd.width, dst_h = cmd.height, dst_d = cmd.depth;
+        if (!subresource_exists(src->texture, cmd.src_mip, cmd.src_slice) || !subresource_exists(dst->texture, cmd.dst_mip, cmd.dst_slice)
+            || !fit_box(src, cmd.src_mip, cmd.src_x, cmd.src_y, cmd.src_z, &src_w, &src_h, &src_d)
+            || !fit_box(dst, cmd.dst_mip, cmd.dst_x, cmd.dst_y, cmd.dst_z, &dst_w, &dst_h, &dst_d))
+            return fail(MTLB_ERROR_INVALID_ARGUMENT, "texture copy outside its textures");
+        copy_w = std::min(src_w, dst_w);
+        copy_h = std::min(src_h, dst_h);
+        copy_d = std::min(src_d, dst_d);
+        if (!copy_w || !copy_h || !copy_d)
+            return MTLB_OK;
     }
     id<MTLBlitCommandEncoder> enc = blit();
     id<MTLTexture> source = reinterpreted(src, dst->texture.pixelFormat);
@@ -1574,7 +1600,7 @@ mtlb_result Replay::copy_texture_texture(const mtlb_cmd_copy_texture_texture &cm
     }
     [enc copyFromTexture:source sourceSlice:cmd.src_slice sourceLevel:cmd.src_mip
             sourceOrigin:MTLOriginMake(cmd.src_x, cmd.src_y, cmd.src_z)
-              sourceSize:MTLSizeMake(cmd.width, cmd.height, cmd.depth)
+              sourceSize:MTLSizeMake(copy_w, copy_h, copy_d)
                toTexture:dst->texture destinationSlice:cmd.dst_slice destinationLevel:cmd.dst_mip
        destinationOrigin:MTLOriginMake(cmd.dst_x, cmd.dst_y, cmd.dst_z)];
     return MTLB_OK;
