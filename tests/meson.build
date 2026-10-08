@@ -72,7 +72,7 @@ foreach t : tests
   test(t[0], exe, timeout: 60, env: {'D3D12METAL_CACHE_DIR': test_cache_root / t[0]})
   if t[0] == 'test_shader_cache'
     shader_cache_exe = exe
-    foreach mode : ['disabled', 'evict']  # the same program in two more modes (see its header)
+    foreach mode : ['disabled', 'evict', 'large']  # the same program in two more modes (see its header)
       test('test_shader_cache_' + mode, exe, args: [mode], timeout: 120, env: {'D3D12METAL_CACHE_DIR': test_cache_root / ('shader_cache_' + mode)})
     endforeach
   endif

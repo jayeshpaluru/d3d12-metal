@@ -56,6 +56,8 @@ public:
     };
     Stats &stats() { return stats_; }
     uint64_t bytes_on_disk();
+    // Waits for a running eviction and runs one more, so the directory is within its limit (for tests and statistics).
+    void settle();
 
 private:
     DiskCache() = default;

@@ -150,6 +150,8 @@ int main(int argc, char **argv)
             setenv("D3D12METAL_CACHE", "0", 1);
         if (mode == "evict")
             setenv("D3D12METAL_CACHE_MAX_MB", "1", 1);
+        if (mode == "large")
+            setenv("D3D12METAL_CACHE_MAX_MB", "4096", 1);
     } else {
         dir += "/cold-warm-" + std::to_string(getpid());  // repeated runs may overlap: one directory per process
         setenv("D3D12METAL_CACHE_DIR", dir.c_str(), 1);
@@ -169,6 +171,29 @@ int main(int argc, char **argv)
         CHECK(s.hits == 0 && s.misses == 0 && s.writes == 0);
         CHECK(entry_files(dir).empty());
         std::printf("test_shader_cache disabled: OK\n");
+        return 0;
+    }
+
+    if (mode == "large") {
+        // A big cache directory left by earlier runs: the first store must not list it while holding up the caller
+        // (that pass used to run inline under the cache's global lock).
+        for (int i = 0; i < 30000; ++i) {
+            char shard[8];
+            std::snprintf(shard, sizeof(shard), "%02x", i % 256);
+            std::filesystem::create_directories(dir + "/" + shard, ignored);
+            std::ofstream(dir + "/" + shard + "/old-" + std::to_string(i) + ".d3mc", std::ios::binary) << "xxxxxxxxxxxxxxxx";
+        }
+        const double cold = create_pipelines(2);
+        const auto t0 = std::chrono::steady_clock::now();
+        const mtlb_cache_stats s = stats();  // settles the background pass, then lists the directory once more
+        const double listing = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        std::printf("large: creating pipelines took %.1f ms; listing the directory (settle + stats) took %.1f ms; %llu bytes\n",
+                    cold * 1e3, listing * 1e3, (unsigned long long)s.bytes_on_disk);
+        CHECK(s.writes > 0);
+        if (listing > 0.05)  // on a machine where the listing is that quick there is nothing to tell apart
+            CHECK(cold < listing / 2);
+        create_pipelines(2);
+        std::printf("test_shader_cache large: OK\n");
         return 0;
     }
 

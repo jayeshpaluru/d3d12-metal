@@ -21,10 +21,13 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <chrono>
+#include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
+#include <thread>
 
 #include <metal_irconverter/metal_irconverter.h>
 
@@ -47,21 +50,33 @@ struct Header {
 };
 
 struct State {
-    std::mutex mutex;  // configuration and eviction
+    std::mutex mutex;  // configuration (before the first use) only
     std::string app_name;
-    bool resolved = false;
+    std::once_flag resolve_once;
+    // Written once by resolve(); read without a lock afterwards (std::call_once orders them).
     bool is_enabled = false;
     std::string dir;
     uint64_t max_bytes = kDefaultMaxBytes;
-    bool scanned = false;
+    // Eviction runs on a thread of its own, one at a time.
+    std::atomic<bool> scanned{false};
+    std::atomic<bool> evicting{false};
+    std::atomic<int64_t> last_eviction_ms{0};
+    std::mutex evict_mutex;  // pairs with evict_done for waiters
+    std::condition_variable evict_done;
     std::atomic<uint64_t> total_bytes{0};
     std::atomic<uint64_t> sequence{0};
 };
 
+// Never destroyed: an eviction thread may still be running at process exit.
 State &state()
 {
-    static State s;
+    static State &s = *new State;
     return s;
+}
+
+int64_t now_ms()
+{
+    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
 std::string hex(const CacheKey &key)
@@ -91,9 +106,7 @@ bool make_directories(const std::string &path)
 // default ~/Library/Caches/d3d12metal/<application>.
 void resolve(State &s)
 {
-    if (s.resolved)
-        return;
-    s.resolved = true;
+    std::lock_guard<std::mutex> lock(s.mutex);  // against configure()
     const char *on = std::getenv("D3D12METAL_CACHE");
     if (on && std::string(on) == "0")
         return;
@@ -172,7 +185,8 @@ std::vector<FileInfo> list_files(const std::string &dir)
     return files;
 }
 
-// Deletes the oldest files until the directory is at 80% of its limit. Called with the state mutex held.
+// Deletes the oldest files until the directory is at 80% of its limit. Works from a snapshot of the directory
+// listing and holds no lock the cache's readers take.
 void evict(State &s, DiskCache::Stats &stats)
 {
     std::vector<FileInfo> files = list_files(s.dir);
@@ -192,6 +206,26 @@ void evict(State &s, DiskCache::Stats &stats)
         }
     }
     s.total_bytes = total;
+}
+
+// Starts an eviction pass on a thread of its own unless one is running (or one finished a moment ago and the
+// directory is not far over its limit).
+void schedule_eviction(State &s, DiskCache::Stats &stats, bool force)
+{
+    const bool far_over = s.total_bytes.load() > s.max_bytes + s.max_bytes / 4;
+    if (!force && !far_over && now_ms() - s.last_eviction_ms.load() < 5000)
+        return;
+    if (s.evicting.exchange(true))
+        return;
+    std::thread([&s, &stats] {
+        evict(s, stats);
+        s.last_eviction_ms = now_ms();
+        {
+            std::lock_guard<std::mutex> lock(s.evict_mutex);
+            s.evicting = false;
+        }
+        s.evict_done.notify_all();
+    }).detach();
 }
 
 } // namespace
@@ -235,15 +269,14 @@ void DiskCache::configure(const std::string &app_name)
 {
     State &s = state();
     std::lock_guard<std::mutex> lock(s.mutex);
-    if (!s.resolved && s.app_name.empty())
-        s.app_name = app_name;
+    if (s.app_name.empty())
+        s.app_name = app_name;  // only matters before the first lookup resolved the directory
 }
 
 bool DiskCache::enabled()
 {
     State &s = state();
-    std::lock_guard<std::mutex> lock(s.mutex);
-    resolve(s);
+    std::call_once(s.resolve_once, [&s] { resolve(s); });
     return s.is_enabled;
 }
 
@@ -358,13 +391,25 @@ void DiskCache::store(CacheKind kind, const CacheKey &key, const void *first, si
     stats_.writes++;
 
     const uint64_t size = sizeof(header) + first_size + second.size();
-    std::lock_guard<std::mutex> lock(s.mutex);
-    if (!s.scanned) {
-        s.scanned = true;
-        evict(s, stats_);  // measures the directory (and trims it if an earlier run left it too big)
-    } else if ((s.total_bytes += size) > s.max_bytes) {
-        evict(s, stats_);
-    }
+    // The first store measures the directory (an earlier run may have left it too big); after that the running total
+    // decides. Both happen on the eviction thread.
+    if (!s.scanned.exchange(true))
+        schedule_eviction(s, stats_, true);
+    else if (s.total_bytes.fetch_add(size) + size > s.max_bytes)
+        schedule_eviction(s, stats_, false);
+}
+
+void DiskCache::settle()
+{
+    State &s = state();
+    if (!enabled())
+        return;
+    std::unique_lock<std::mutex> lock(s.evict_mutex);
+    s.evict_done.wait(lock, [&s] { return !s.evicting.load(); });
+    lock.unlock();
+    schedule_eviction(s, stats_, true);  // the running total is approximate: measure again
+    lock.lock();
+    s.evict_done.wait(lock, [&s] { return !s.evicting.load(); });
 }
 
 uint64_t DiskCache::bytes_on_disk()
@@ -391,6 +436,7 @@ extern "C" void mtlb_cache_get_stats(mtlb_cache_stats *out)
     if (!out)
         return;
     mtlb::DiskCache &cache = mtlb::DiskCache::instance();
+    cache.settle();
     const mtlb::DiskCache::Stats &s = cache.stats();
     *out = {s.hits, s.misses, s.writes, s.corrupt, s.evicted, cache.bytes_on_disk()};
 }
