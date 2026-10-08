@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <cstdio>
 #include <vector>
 
 #include <metal_irconverter/metal_irconverter.h>
@@ -216,13 +217,18 @@ MTLStencilDescriptor *to_stencil(const mtlb_stencil_face &face, uint32_t read_ma
     return s;
 }
 
+// Render passes never attach depth-stencil yet (DSV milestone). Until they do,
+// pipelines declare no depth or stencil format and depth-stencil state stays off.
+constexpr bool kDepthStencilSupported = false;
+
 // Returns the shared depth-stencil state for the description's relevant fields.
-id<MTLDepthStencilState> get_depth_stencil(Device *device, const mtlb_pipeline_desc &desc)
+id<MTLDepthStencilState> get_depth_stencil(Device *device, const mtlb_pipeline_desc &desc, bool enabled)
 {
+    const bool depth_enable = enabled && desc.depth_enable, stencil_enable = enabled && desc.stencil_enable;
     DepthStencilKey key{};
-    key[0] = desc.depth_enable ? desc.depth_func : MTLB_COMPARE_ALWAYS;
-    key[1] = desc.depth_enable && desc.depth_write_enable;
-    if (desc.stencil_enable) {
+    key[0] = depth_enable ? desc.depth_func : MTLB_COMPARE_ALWAYS;
+    key[1] = depth_enable && desc.depth_write_enable;
+    if (stencil_enable) {
         key[2] = 1;
         key[3] = desc.stencil_read_mask;
         key[4] = desc.stencil_write_mask;
@@ -243,7 +249,7 @@ id<MTLDepthStencilState> get_depth_stencil(Device *device, const mtlb_pipeline_d
     MTLDepthStencilDescriptor *dd = [MTLDepthStencilDescriptor new];
     dd.depthCompareFunction = to_compare(key[0]);
     dd.depthWriteEnabled = key[1] != 0;
-    if (desc.stencil_enable) {
+    if (stencil_enable) {
         dd.frontFaceStencil = to_stencil(desc.front_face, desc.stencil_read_mask, desc.stencil_write_mask);
         dd.backFaceStencil = to_stencil(desc.back_face, desc.stencil_read_mask, desc.stencil_write_mask);
     }
@@ -369,15 +375,11 @@ extern "C" mtlb_result mtlb_pipeline_create(mtlb_device handle, const mtlb_pipel
         ca.alphaBlendOperation = to_blend_op(blend.blend_op_alpha);
     }
 
-    if (desc->dsv_format != MTLB_FORMAT_UNKNOWN) {
-        mtlb_format_info info;
-        MTLPixelFormat format = to_pixel_format(desc->dsv_format);
-        if (format == MTLPixelFormatInvalid || mtlb_format_get_info(static_cast<mtlb_format>(desc->dsv_format), &info) != MTLB_OK)
-            return fail(MTLB_ERROR_UNSUPPORTED, "unsupported depth format " + std::to_string(desc->dsv_format));
-        if (info.flags & MTLB_FORMAT_FLAG_DEPTH)
-            pd.depthAttachmentPixelFormat = format;
-        if (info.flags & MTLB_FORMAT_FLAG_STENCIL)
-            pd.stencilAttachmentPixelFormat = format;
+    if (!kDepthStencilSupported
+        && (desc->dsv_format != MTLB_FORMAT_UNKNOWN || desc->depth_enable || desc->stencil_enable)) {
+        static std::atomic<bool> logged{false};
+        if (!logged.exchange(true))
+            std::fprintf(stderr, "d3d12-metal: depth-stencil is not supported yet, pipelines render without it\n");
     }
 
     NSError *ns_error = nil;
@@ -385,7 +387,7 @@ extern "C" mtlb_result mtlb_pipeline_create(mtlb_device handle, const mtlb_pipel
     if (!state)
         return fail(MTLB_ERROR_COMPILE_FAILED, std::string("newRenderPipelineState: ") + ns_error.localizedDescription.UTF8String);
 
-    id<MTLDepthStencilState> depth_stencil = get_depth_stencil(device, *desc);
+    id<MTLDepthStencilState> depth_stencil = get_depth_stencil(device, *desc, kDepthStencilSupported);
     if (!depth_stencil)
         return fail(MTLB_ERROR_COMPILE_FAILED, "newDepthStencilState failed");
 

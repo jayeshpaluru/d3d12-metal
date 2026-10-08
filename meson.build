@@ -54,3 +54,9 @@ d3d12_metal = shared_library(
 )
 
 subdir('tests')
+
+# Runs the tests under Metal's API validation: meson test --setup validation
+add_test_setup(
+  'validation',
+  env: {'MTL_DEBUG_LAYER': '1', 'METAL_DEVICE_WRAPPER_TYPE': '1'},
+)

@@ -612,13 +612,14 @@ constexpr uint32_t kMaxOpenSubmits = 32;
 
 // The queue's open command buffer, created on first use. Work stays in it until
 // something needs the GPU to see it (a signal, enough submits, queue teardown).
-// D3D12 requires applications to keep resources alive while the GPU uses them,
-// so the buffer does not retain what it references.
+// The buffer retains what it references: an application may release a pipeline
+// or fence as soon as it sees a fence signalled, which can be before the buffer
+// retires, and Metal's validation layer rejects that for unretained buffers.
 id<MTLCommandBuffer> open_command_buffer(Queue *queue)
 {
     if (!queue->open) {
         commit_residency(queue->device);
-        queue->open = [queue->queue commandBufferWithUnretainedReferences];
+        queue->open = [queue->queue commandBuffer];
         [queue->open addCompletedHandler:^(id<MTLCommandBuffer> done) {
             if (done.error)
                 std::fprintf(stderr, "d3d12-metal: command buffer failed: %s\n", done.error.localizedDescription.UTF8String);

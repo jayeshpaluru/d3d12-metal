@@ -35,9 +35,10 @@
   copy arrives or the submit ends. Clears that never meet a draw run as
   clear-only passes. `mtlb_queue_render_pass_count` exposes the number of
   encoders for tests.
-- **One queue synchronisation mechanism.** A queue keeps one open, uncommitted,
-  unretained-references `MTLCommandBuffer` (D3D12 requires applications to keep
-  resources alive). Submits and `Wait` append to it; `Signal` appends and
+- **One queue synchronisation mechanism.** A queue keeps one open, uncommitted
+  `MTLCommandBuffer` (retaining its references: applications release objects as
+  soon as a fence is signalled, possibly before the buffer retires, and
+  `commandBufferWithUnretainedReferences` trips Metal's validation layer then). Submits and `Wait` append to it; `Signal` appends and
   commits, so Execute followed by Signal costs one commit. It is also committed
   after 32 submits and when the queue is destroyed.
 - **GPU virtual addresses are Metal `gpuAddress`.** `D3D12_GPU_VIRTUAL_ADDRESS`

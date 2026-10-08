@@ -57,8 +57,12 @@ in the vtable, log `<function> is not implemented` once to stderr and return
 - Textures exist only in DEFAULT heaps (private storage). Depth-stencil targets
   cannot be bound yet: the command stream and the replay have no depth plumbing
   (`SET_RENDER_TARGETS` carries colour views only, there is no `CLEAR_DSV`); it
-  comes with the DSV milestone, together with a test that exercises it. Draws
-  with no render targets are skipped with a one-time message.
+  comes with the DSV milestone, together with a test that exercises it. Until
+  then pipelines declare no depth or stencil format and depth-stencil state is
+  off (logged once when a PSO asks for it). Draws with no render targets are
+  skipped with a one-time message.
+- `meson test -C build --setup validation` runs the suite under Metal API
+  validation (`MTL_DEBUG_LAYER=1`, `METAL_DEVICE_WRAPPER_TYPE=1`).
 - The native build uses by-value struct returns for methods such as `GetDesc`;
   the Win32 (MinGW/Wine) ABI variants are not handled.
 - `D3D12_FEATURE_LEVEL` is capped at 12_0.
