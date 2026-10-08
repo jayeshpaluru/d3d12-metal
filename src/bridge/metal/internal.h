@@ -233,9 +233,8 @@ mtlb_result fail(mtlb_result code, const std::string &message);
 void register_buffer(Buffer *buffer);
 void unregister_buffer(Buffer *buffer);
 
-// The Metal descriptor for a texture of `desc`; nil (with `error` set) for formats Metal cannot do. Placed
-// textures are not hazard tracked.
-MTLTextureDescriptor *make_texture_descriptor(const mtlb_texture_desc *desc, bool placed, std::string *error);
+// The Metal descriptor for a texture of `desc`; nil (with `error` set) for formats Metal cannot do.
+MTLTextureDescriptor *make_texture_descriptor(const mtlb_texture_desc *desc, bool untracked, std::string *error);
 
 // Finds the buffer containing `address` and the offset of `address` inside it.
 Buffer *find_buffer(Device *device, uint64_t address, uint64_t *offset);

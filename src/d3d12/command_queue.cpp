@@ -6,6 +6,7 @@
 #include "d3d12/command_list.h"
 #include "d3d12/device.h"
 #include "d3d12/fence.h"
+#include "d3d12/resource.h"
 
 namespace d3d12m {
 
@@ -35,27 +36,35 @@ CommandQueue::~CommandQueue()
 void CommandQueue::ExecuteCommandLists(UINT count, ID3D12CommandList *const *lists)
 {
     // All lists go to the backend in a single submit, one span per list.
+    // Placed render targets and depth-stencils created since the last submission are cleared first.
+    std::vector<uint8_t> init_stream;
+    std::vector<Resource *> initialized = device()->take_pending_init(init_stream);
+    const UINT first = init_stream.empty() ? 0 : 1;
     std::vector<mtlb_span> spans;
     try {
-        spans.resize(count);
+        spans.resize(count + first);
     } catch (const std::bad_alloc &) {
+        for (Resource *resource : initialized)
+            resource->Release();
         return;
     }
+    if (first)
+        spans[0] = {init_stream.data(), init_stream.size()};
     for (UINT i = 0; i < count; ++i) {
         // Only this layer's command lists can be submitted.
         auto *list = ours<CommandList>(lists[i]);
-        if (!list) {
-            D3D12M_LOG("ExecuteCommandLists: command list %u is not from this layer", i);
+        if (!list || !list->closed()) {
+            D3D12M_LOG("ExecuteCommandLists: command list %u is %s", i, list ? "still recording" : "not from this layer");
+            for (Resource *resource : initialized)
+                resource->Release();
             return;
         }
-        if (!list->closed()) {
-            D3D12M_LOG("ExecuteCommandLists: command list %u is still recording", i);
-            return;
-        }
-        spans[i] = {list->stream().data(), list->stream().size()};
+        spans[first + i] = {list->stream().data(), list->stream().size()};
     }
-    if (mtlb_queue_submit(queue_, spans.data(), count) != MTLB_OK)
+    if (mtlb_queue_submit(queue_, spans.data(), count + first) != MTLB_OK)
         D3D12M_LOG("command submission failed: %s", mtlb_last_error());
+    for (Resource *resource : initialized)
+        resource->Release();
 }
 
 HRESULT CommandQueue::Signal(ID3D12Fence *fence, UINT64 value)

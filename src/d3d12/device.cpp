@@ -13,6 +13,7 @@
 #include "d3d12/dred.h"
 #include "d3d12/fence.h"
 #include "d3d12/formats.h"
+#include "d3d12/heap.h"
 #include "d3d12/pipeline_state.h"
 #include "d3d12/resource.h"
 #include "dxgi/dxgi_interfaces.h"
@@ -255,6 +256,20 @@ HRESULT Device::CreateFence(UINT64 initial_value, D3D12_FENCE_FLAGS flags, REFII
     return Fence::create(this, initial_value, flags, riid, out);
 }
 
+HRESULT Device::CreateHeap(const D3D12_HEAP_DESC *desc, REFIID riid, void **out)
+{
+    return desc ? Heap::create(this, *desc, riid, out) : E_INVALIDARG;
+}
+
+HRESULT Device::CreatePlacedResource(ID3D12Heap *heap_ptr, UINT64 offset, const D3D12_RESOURCE_DESC *desc,
+                                     D3D12_RESOURCE_STATES, const D3D12_CLEAR_VALUE *, REFIID riid, void **out)
+{
+    auto *heap = ours<Heap>(heap_ptr);
+    if (!heap || !desc)
+        return E_INVALIDARG;
+    return Resource::create_placed(this, heap, offset, *desc, riid, out);
+}
+
 HRESULT Device::CreateCommittedResource(const D3D12_HEAP_PROPERTIES *heap, D3D12_HEAP_FLAGS, const D3D12_RESOURCE_DESC *desc,
                                         D3D12_RESOURCE_STATES, const D3D12_CLEAR_VALUE *, REFIID riid, void **out)
 {
@@ -356,6 +371,72 @@ void Device::copy_view_info(D3D12_CPU_DESCRIPTOR_HANDLE dest, D3D12_CPU_DESCRIPT
         if (to)
             *to = from ? *from : ViewInfo{};
     }
+}
+
+// ---- Forced initial state of placed render targets and depth-stencils ---------
+
+void Device::add_pending_init(Resource *resource)
+{
+    std::lock_guard<std::mutex> lock(init_mutex_);
+    pending_init_.push_back(resource);
+}
+
+void Device::remove_pending_init(Resource *resource)
+{
+    std::lock_guard<std::mutex> lock(init_mutex_);
+    pending_init_.erase(std::remove(pending_init_.begin(), pending_init_.end(), resource), pending_init_.end());
+}
+
+namespace {
+
+template <class T>
+T *append_record(std::vector<uint8_t> &stream, mtlb_cmd_type type)
+{
+    const size_t size = mtlb_cmd_align(sizeof(T));
+    const size_t at = stream.size();
+    stream.resize(at + size);
+    auto *cmd = reinterpret_cast<T *>(stream.data() + at);
+    cmd->header = {static_cast<uint32_t>(type), static_cast<uint32_t>(size)};
+    return cmd;
+}
+
+} // namespace
+
+std::vector<Resource *> Device::take_pending_init(std::vector<uint8_t> &stream)
+{
+    std::vector<Resource *> held;
+    {
+        std::lock_guard<std::mutex> lock(init_mutex_);
+        held.swap(pending_init_);
+        for (Resource *resource : held) {
+            resource->AddRef();  // keeps it alive until the submission is done
+            resource->clear_init_flag();
+        }
+    }
+    if (held.empty())
+        return held;
+    append_record<mtlb_cmd_reset_state>(stream, MTLB_CMD_RESET_STATE);
+    for (Resource *resource : held) {
+        const D3D12_RESOURCE_DESC &desc = resource->desc();
+        const bool depth = desc.Flags & D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
+        const UINT mips = desc.MipLevels;
+        for (UINT mip = 0; mip < mips; ++mip) {
+            const UINT slices = desc.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE3D ? mip_extent(desc.DepthOrArraySize, mip)
+                                                                                     : array_size(desc);
+            for (UINT slice = 0; slice < slices; ++slice) {
+                const mtlb_render_target target = {resource->texture(), 0, mip, slice, 0};
+                if (depth) {
+                    auto *cmd = append_record<mtlb_cmd_clear_dsv>(stream, MTLB_CMD_CLEAR_DSV);
+                    cmd->target = target;
+                    cmd->flags = MTLB_CLEAR_DEPTH | MTLB_CLEAR_STENCIL;
+                } else {
+                    auto *cmd = append_record<mtlb_cmd_clear_rtv>(stream, MTLB_CMD_CLEAR_RTV);
+                    cmd->target = target;
+                }
+            }
+        }
+    }
+    return held;
 }
 
 // ---- Descriptors -----------------------------------------------------------
@@ -490,18 +571,32 @@ void Device::CopyDescriptorsSimple(UINT count, D3D12_CPU_DESCRIPTOR_HANDLE dest,
 
 // ---- Resources -------------------------------------------------------------
 
+// The size and alignment a resource takes in a heap, as Metal places it.
+bool Device::resource_size_align(const D3D12_RESOURCE_DESC &desc, mtlb_size_align *out) const
+{
+    if (desc.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER)
+        return desc.Width != 0 && mtlb_buffer_size_align(device_, desc.Width, MTLB_STORAGE_PRIVATE, out) == MTLB_OK;
+    mtlb_texture_desc td;
+    return to_texture_desc(desc, MTLB_STORAGE_PRIVATE, &td) && mtlb_texture_size_align(device_, &td, out) == MTLB_OK;
+}
+
+// Resources laid out one after the other, each at the alignment it needs (at least 64 KB, D3D12's placement
+// alignment).
 D3D12_RESOURCE_ALLOCATION_INFO Device::allocation_info(UINT count, const D3D12_RESOURCE_DESC *descs,
                                                        D3D12_RESOURCE_ALLOCATION_INFO1 *info1) const
 {
     D3D12_RESOURCE_ALLOCATION_INFO info{0, kResourceAlignment};
     for (UINT i = 0; i < count; ++i) {
-        UINT64 size = 0;
-        if (!compute_copyable_footprints(descs[i], 0, subresource_count(descs[i]), 0, nullptr, nullptr, nullptr, &size))
+        mtlb_size_align size_align;
+        if (!resource_size_align(descs[i], &size_align))
             return {UINT64_MAX, kResourceAlignment};
-        const UINT64 aligned = align_up(size, kResourceAlignment);
+        const UINT64 alignment = std::max<UINT64>(kResourceAlignment, size_align.align);
+        const UINT64 offset = align_up(info.SizeInBytes, alignment);
+        const UINT64 size = align_up(size_align.size, kResourceAlignment);
         if (info1)
-            info1[i] = {info.SizeInBytes, kResourceAlignment, aligned};
-        info.SizeInBytes += aligned;
+            info1[i] = {offset, alignment, size};
+        info.SizeInBytes = offset + size;
+        info.Alignment = std::max(info.Alignment, alignment);
     }
     return info;
 }

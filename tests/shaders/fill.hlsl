@@ -40,6 +40,12 @@ void CSMain(uint3 id : SV_DispatchThreadID, uint3 group : SV_GroupID, uint index
     case 4:  // byte address buffer
         raw_buffer.Store(linear_index * 4, linear_index * 3 + value);
         break;
+    case 6:  // vertex data for a triangle: x, y, z of three vertices
+        if (linear_index < 9) {
+            const float v[9] = {-0.8, -0.8, 0.5, 0.8, -0.8, 0.5, 0.0, 0.8, 0.5};
+            out_buffer[linear_index] = asuint(v[linear_index] * (value ? float(value) / 100.0 : 1.0));
+        }
+        break;
     case 5:  // group ids and thread index
         out_buffer[linear_index] = (group.x << 16) | (group.y << 8) | index;
         break;

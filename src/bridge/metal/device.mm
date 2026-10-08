@@ -152,8 +152,11 @@ mtlb_result mtlb_buffer_create(mtlb_device handle, uint64_t size, mtlb_storage s
     if (!device || !out || size == 0)
         return MTLB_ERROR_INVALID_ARGUMENT;
 
-    MTLResourceOptions options = storage == MTLB_STORAGE_SHARED ? MTLResourceStorageModeShared
-                                                                 : MTLResourceStorageModePrivate;
+    // Resources are not hazard tracked: shaders reach them through GPU addresses and descriptor tables,
+    // which Metal's tracking does not see, so the queue orders work itself (barriers, see queue.mm).
+    MTLResourceOptions options = (storage == MTLB_STORAGE_SHARED ? MTLResourceStorageModeShared
+                                                                  : MTLResourceStorageModePrivate)
+                                 | MTLResourceHazardTrackingModeUntracked;
     id<MTLBuffer> mtl_buffer = [device->device newBufferWithLength:size options:options];
     if (!mtl_buffer)
         return fail(MTLB_ERROR_OUT_OF_MEMORY, "newBufferWithLength failed");
@@ -196,7 +199,7 @@ mtlb_result mtlb_texture_create(mtlb_device handle, const mtlb_texture_desc *des
         return MTLB_ERROR_INVALID_ARGUMENT;
 
     std::string error;
-    MTLTextureDescriptor *td = make_texture_descriptor(desc, false, &error);
+    MTLTextureDescriptor *td = make_texture_descriptor(desc, true, &error);
     if (!td)
         return fail(MTLB_ERROR_UNSUPPORTED, error);
     id<MTLTexture> mtl_texture = [device->device newTextureWithDescriptor:td];

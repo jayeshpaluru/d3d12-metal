@@ -56,6 +56,7 @@ typedef enum mtlb_cmd_type {
     MTLB_CMD_CLEAR_BUFFER,
     MTLB_CMD_CLEAR_TEXTURE_UAV,
     MTLB_CMD_CLEAR_DSV,
+    MTLB_CMD_BARRIER,
 } mtlb_cmd_type;
 
 typedef struct mtlb_cmd_header {
@@ -314,7 +315,34 @@ typedef struct mtlb_cmd_clear_texture_uav {
     uint32_t x, y, width, height;  /* region of the level; width 0 = all of it */
 } mtlb_cmd_clear_texture_uav;
 
+/* Resource barriers. Resources are not hazard tracked: work on the queue is ordered by explicit
+ * synchronisation, which a barrier asks for. Between two encoders nothing waits unless a barrier (or a
+ * command list boundary) came in between; inside a compute or render encoder a barrier orders the
+ * dispatches or draws around it; a barrier on a render target or depth-stencil ends the render pass
+ * that has it attached. */
+enum {
+    MTLB_BARRIER_TRANSITION = 1,
+    MTLB_BARRIER_UAV = 2,
+    MTLB_BARRIER_ALIASING = 3,
+};
+
+typedef struct mtlb_barrier {
+    uint32_t type;             /* MTLB_BARRIER_* */
+    uint32_t reserved;
+    mtlb_texture texture;      /* the resource the barrier names, a texture or a buffer; both 0: all resources */
+    mtlb_buffer buffer;
+} mtlb_barrier;
+
+typedef struct mtlb_cmd_barrier {
+    mtlb_cmd_header header;
+    uint32_t count;
+    uint32_t reserved;
+    mtlb_barrier barriers[];
+} mtlb_cmd_barrier;
+
 MTLB_ASSERT_SIZE(mtlb_cmd_header, 8);
+MTLB_ASSERT_SIZE(mtlb_barrier, 24);
+MTLB_ASSERT_SIZE(mtlb_cmd_barrier, 16);
 MTLB_ASSERT_SIZE(mtlb_cmd_clear_buffer, 56);
 MTLB_ASSERT_SIZE(mtlb_cmd_clear_texture_uav, 88);
 MTLB_ASSERT_SIZE(mtlb_cmd_dispatch, 24);

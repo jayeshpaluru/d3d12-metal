@@ -110,24 +110,29 @@ struct Probe {
         gpu.device->CreateSampler(&desc, gpu.cpu_handle(sampler_heap.Get(), 0));
     }
 
-    std::vector<Float4> run(UINT mode, const std::vector<Float4> &coords)
+    // Records the probe into `list` (the parameters are written now, so a recording must be executed before
+    // the next one is made; the results are in `results`).
+    void record(ID3D12GraphicsCommandList *list, UINT mode, const std::vector<Float4> &coords)
     {
         CHECK(coords.size() <= kMaxProbes);
         const UINT header[4] = {mode, static_cast<UINT>(coords.size()), 0, 0};
         std::memcpy(mapped_params, header, sizeof(header));
         std::memcpy(mapped_params + 16, coords.data(), coords.size() * sizeof(Float4));
-        gpu.run([&](ID3D12GraphicsCommandList *list) {
-            ID3D12DescriptorHeap *heaps[] = {srv_heap.Get(), sampler_heap.Get()};
-            list->SetDescriptorHeaps(2, heaps);
-            list->SetComputeRootSignature(signature.Get());
-            list->SetPipelineState(pso.Get());
-            list->SetComputeRootDescriptorTable(0, gpu.gpu_handle(srv_heap.Get(), 0));
-            list->SetComputeRootDescriptorTable(1, gpu.gpu_handle(sampler_heap.Get(), 0));
-            list->SetComputeRootConstantBufferView(2, params->GetGPUVirtualAddress());
-            list->SetComputeRootUnorderedAccessView(3, results->GetGPUVirtualAddress());
-            list->SetComputeRootDescriptorTable(4, gpu.gpu_handle(srv_heap.Get(), 7));
-            list->Dispatch(1, 1, 1);
-        });
+        ID3D12DescriptorHeap *heaps[] = {srv_heap.Get(), sampler_heap.Get()};
+        list->SetDescriptorHeaps(2, heaps);
+        list->SetComputeRootSignature(signature.Get());
+        list->SetPipelineState(pso.Get());
+        list->SetComputeRootDescriptorTable(0, gpu.gpu_handle(srv_heap.Get(), 0));
+        list->SetComputeRootDescriptorTable(1, gpu.gpu_handle(sampler_heap.Get(), 0));
+        list->SetComputeRootConstantBufferView(2, params->GetGPUVirtualAddress());
+        list->SetComputeRootUnorderedAccessView(3, results->GetGPUVirtualAddress());
+        list->SetComputeRootDescriptorTable(4, gpu.gpu_handle(srv_heap.Get(), 7));
+        list->Dispatch(1, 1, 1);
+    }
+
+    std::vector<Float4> run(UINT mode, const std::vector<Float4> &coords)
+    {
+        gpu.run([&](ID3D12GraphicsCommandList *list) { record(list, mode, coords); });
         const std::vector<uint8_t> bytes = gpu.read_buffer(results.Get(), coords.size() * sizeof(Float4));
         std::vector<Float4> out(coords.size());
         std::memcpy(out.data(), bytes.data(), bytes.size());

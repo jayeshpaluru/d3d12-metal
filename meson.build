@@ -33,6 +33,7 @@ portable_tests = [
   ['hello_texture', ['hello_texture', 'const_buffers'], []],
   ['compute', [], ['fill']],
   ['depth', ['color'], ['probe']],
+  ['heaps', [], ['probe']],
 ]
 
 bridge_sources = []

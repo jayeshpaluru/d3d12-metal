@@ -11,6 +11,9 @@
 
 namespace d3d12m {
 
+// The bridge's description of a texture for a resource (storage as given).
+bool to_texture_desc(const D3D12_RESOURCE_DESC &desc, mtlb_storage storage, mtlb_texture_desc *out);
+
 class Resource final : public ChildImpl<ID3D12Resource2> {
 public:
     static HRESULT create_committed(Device *device, const D3D12_HEAP_PROPERTIES &heap,
@@ -18,8 +21,8 @@ public:
     // A resource at `offset` of a heap; it may overlap other resources of the heap.
     static HRESULT create_placed(Device *device, Heap *heap, UINT64 offset, const D3D12_RESOURCE_DESC &desc,
                                  REFIID riid, void **out);
-    // Clears a placed render target or depth-stencil texture to zero (see Device::take_pending_init).
-    bool needs_initial_clear() const { return needs_init_; }
+    // Placed render targets and depth-stencils are cleared before first use (see Device::take_pending_init).
+    void clear_init_flag() { needs_init_ = false; }
 
     bool is_buffer() const { return desc_.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER; }
     mtlb_buffer buffer() const { return buffer_; }

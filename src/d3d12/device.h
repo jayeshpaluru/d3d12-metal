@@ -2,6 +2,7 @@
 #pragma once
 
 #include <array>
+#include <vector>
 #include <map>
 #include <mutex>
 #include <shared_mutex>
@@ -13,6 +14,8 @@
 
 namespace d3d12m {
 
+class Resource;
+
 class Device final : public ObjectImpl<ID3D12Device10> {
 public:
     // Creates a device on the Metal device behind `adapter` (an IDXGIAdapter
@@ -23,6 +26,14 @@ public:
     const mtlb_device_caps &caps() const { return caps_; }
     // The descriptor a null view of mtlb_null_kind `kind` gets (cached after the first request).
     mtlb_descriptor null_descriptor(uint32_t kind);
+
+    // Placed render targets and depth-stencils start in a defined state: they are cleared to zero before
+    // the first submission after their creation. Resources register at creation (and unregister when
+    // destroyed); ExecuteCommandLists takes the pending ones, with a reference each, together with the
+    // command stream that clears them.
+    void add_pending_init(Resource *resource);
+    void remove_pending_init(Resource *resource);
+    std::vector<Resource *> take_pending_init(std::vector<uint8_t> &stream);
 
     // Descriptor heaps by CPU memory, to find the heap behind a CPU descriptor handle.
     void register_heap(DescriptorHeap *heap);
@@ -69,8 +80,9 @@ public:
     D3D12_HEAP_PROPERTIES STDMETHODCALLTYPE GetCustomHeapProperties(UINT, D3D12_HEAP_TYPE) override { D3D12M_STUB_LOG(); return {}; }
 #endif
     HRESULT STDMETHODCALLTYPE CreateCommittedResource(const D3D12_HEAP_PROPERTIES *pHeapProperties, D3D12_HEAP_FLAGS HeapFlags, const D3D12_RESOURCE_DESC *pDesc, D3D12_RESOURCE_STATES InitialResourceState, const D3D12_CLEAR_VALUE *pOptimizedClearValue, REFIID riidResource, void **ppvResource) override;
-    HRESULT STDMETHODCALLTYPE CreateHeap(const D3D12_HEAP_DESC *, REFIID, void **) override { D3D12M_STUB_HR(); }
-    HRESULT STDMETHODCALLTYPE CreatePlacedResource(ID3D12Heap *, UINT64, const D3D12_RESOURCE_DESC *, D3D12_RESOURCE_STATES, const D3D12_CLEAR_VALUE *, REFIID, void **) override { D3D12M_STUB_HR(); }
+    HRESULT STDMETHODCALLTYPE CreateHeap(const D3D12_HEAP_DESC *pDesc, REFIID riid, void **ppvHeap) override;
+    HRESULT STDMETHODCALLTYPE CreatePlacedResource(ID3D12Heap *pHeap, UINT64 HeapOffset, const D3D12_RESOURCE_DESC *pDesc, D3D12_RESOURCE_STATES InitialState, const D3D12_CLEAR_VALUE *pOptimizedClearValue, REFIID riid, void **ppvResource) override;
+    // Tiled (reserved) resources need sparse residency, which the layer does not offer (TiledResourcesTier is NOT_SUPPORTED).
     HRESULT STDMETHODCALLTYPE CreateReservedResource(const D3D12_RESOURCE_DESC *, D3D12_RESOURCE_STATES, const D3D12_CLEAR_VALUE *, REFIID, void **) override { D3D12M_STUB_HR(); }
     HRESULT STDMETHODCALLTYPE CreateSharedHandle(ID3D12DeviceChild *, const SECURITY_ATTRIBUTES *, DWORD, LPCWSTR, HANDLE *) override { D3D12M_STUB_HR(); }
     HRESULT STDMETHODCALLTYPE OpenSharedHandle(HANDLE, REFIID, void **) override { D3D12M_STUB_HR(); }
@@ -88,7 +100,7 @@ public:
     // ID3D12Device1
     HRESULT STDMETHODCALLTYPE CreatePipelineLibrary(const void *, SIZE_T, REFIID, void **) override { D3D12M_STUB_HR(); }
     HRESULT STDMETHODCALLTYPE SetEventOnMultipleFenceCompletion(ID3D12Fence *const *, const UINT64 *, UINT, D3D12_MULTIPLE_FENCE_WAIT_FLAGS, HANDLE) override { D3D12M_STUB_HR(); }
-    HRESULT STDMETHODCALLTYPE SetResidencyPriority(UINT, ID3D12Pageable *const *, const D3D12_RESIDENCY_PRIORITY *) override { D3D12M_STUB_HR(); }
+    HRESULT STDMETHODCALLTYPE SetResidencyPriority(UINT, ID3D12Pageable *const *, const D3D12_RESIDENCY_PRIORITY *) override { return S_OK; }  // everything is resident
     // ID3D12Device2
     HRESULT STDMETHODCALLTYPE CreatePipelineState(const D3D12_PIPELINE_STATE_STREAM_DESC *pDesc, REFIID riid, void **ppPipelineState) override;
     // ID3D12Device3
@@ -175,6 +187,9 @@ private:
     ~Device() override;
 
     mtlb_device device_ = 0;
+    std::mutex init_mutex_;
+    std::vector<Resource *> pending_init_;
+    bool resource_size_align(const D3D12_RESOURCE_DESC &desc, mtlb_size_align *out) const;
     std::shared_mutex heaps_mutex_;
     std::map<uintptr_t, DescriptorHeap *> heaps_;
     std::mutex null_mutex_;

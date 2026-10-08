@@ -31,7 +31,7 @@ void unregister_buffer(Buffer *buffer)
     }
 }
 
-MTLTextureDescriptor *make_texture_descriptor(const mtlb_texture_desc *desc, bool placed, std::string *error)
+MTLTextureDescriptor *make_texture_descriptor(const mtlb_texture_desc *desc, bool untracked, std::string *error)
 {
     const bool depth_stencil = desc->usage & MTLB_TEXTURE_USAGE_DEPTH_STENCIL;
     MTLPixelFormat pixel_format = to_texture_pixel_format(desc->format, depth_stencil);
@@ -47,7 +47,7 @@ MTLTextureDescriptor *make_texture_descriptor(const mtlb_texture_desc *desc, boo
     td.mipmapLevelCount = desc->mip_levels ? desc->mip_levels : 1;
     td.sampleCount = desc->sample_count ? desc->sample_count : 1;
     td.storageMode = desc->storage == MTLB_STORAGE_SHARED ? MTLStorageModeShared : MTLStorageModePrivate;
-    if (placed)
+    if (untracked)
         td.hazardTrackingMode = MTLHazardTrackingModeUntracked;
 
     // Metal shader converter 3 expects 1D textures to be 2D textures.

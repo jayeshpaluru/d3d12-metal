@@ -156,6 +156,7 @@ private:
     mtlb_result set_compute_root_args(const mtlb_cmd_set_graphics_root_args &cmd);
     mtlb_result set_descriptor_heaps(const mtlb_cmd_set_descriptor_heaps &cmd);
     mtlb_result dispatch_compute(const mtlb_cmd_dispatch &cmd);
+    mtlb_result barrier(const mtlb_cmd_barrier &cmd);
     mtlb_result clear_buffer(const mtlb_cmd_clear_buffer &cmd);
     mtlb_result clear_texture_uav(const mtlb_cmd_clear_texture_uav &cmd);
     mtlb_result copy_texture_texture(const mtlb_cmd_copy_texture_texture &cmd);
@@ -234,6 +235,10 @@ private:
     bool warned_no_targets_ = false;
     uint32_t dirty_ = kAll;  // state_ pieces the current render encoder has not seen
     uint32_t dirty_compute_ = kAll;  // the same for the compute encoder
+    // The next encoder must wait for the one before it: a barrier or the start of a command list (command
+    // lists may rely on D3D12's implicit state promotion and decay) came in between. A submission starts
+    // with it set, as do the lists of one.
+    bool sync_needed_ = true;
     NSUInteger target_width_ = 0, target_height_ = 0;
     MTLPixelFormat pass_depth_format_ = MTLPixelFormatInvalid;    // attachments of the open pass
     MTLPixelFormat pass_stencil_format_ = MTLPixelFormatInvalid;
@@ -280,10 +285,11 @@ id<MTLBlitCommandEncoder> Replay::blit()
         end_render();
         flush_clears(false);
         blit_ = [cb_ blitCommandEncoder];
-        if (queue_->fence_pending) {
+        if (sync_needed_ && queue_->fence_pending) {
             [blit_ waitForFence:queue_->fence];
             queue_->fence_pending = false;
         }
+        sync_needed_ = false;
     }
     return blit_;
 }
@@ -295,11 +301,13 @@ id<MTLComputeCommandEncoder> Replay::compute()
         end_blit();
         end_render();
         flush_clears(false);
-        compute_ = [cb_ computeCommandEncoder];
-        if (queue_->fence_pending) {
+        // Dispatches may overlap; a barrier orders the ones around it.
+        compute_ = [cb_ computeCommandEncoderWithDispatchType:MTLDispatchTypeConcurrent];
+        if (sync_needed_ && queue_->fence_pending) {
             [compute_ waitForFence:queue_->fence];
             queue_->fence_pending = false;
         }
+        sync_needed_ = false;
         dirty_compute_ = kAll;
     }
     return compute_;
@@ -311,10 +319,11 @@ id<MTLRenderCommandEncoder> Replay::new_render_encoder(MTLRenderPassDescriptor *
     end_compute();
     queue_->render_passes.fetch_add(1, std::memory_order_relaxed);
     id<MTLRenderCommandEncoder> encoder = [cb_ renderCommandEncoderWithDescriptor:pass];
-    if (queue_->fence_pending) {
+    if (sync_needed_ && queue_->fence_pending) {
         [encoder waitForFence:queue_->fence beforeStages:MTLRenderStageVertex];
         queue_->fence_pending = false;
     }
+    sync_needed_ = false;
     return encoder;
 }
 
@@ -725,6 +734,7 @@ mtlb_result Replay::dispatch(const mtlb_cmd_header *header, mtlb_result (Replay:
 
 mtlb_result Replay::reset_state(const mtlb_cmd_reset_state &)
 {
+    sync_needed_ = true;
     // Whatever the previous list left (open pass, pending clears) completes first.
     mtlb_result result = flush_clears(false);
     if (result != MTLB_OK)
@@ -885,6 +895,42 @@ mtlb_result Replay::dispatch_compute(const mtlb_cmd_dispatch &cmd)
     return MTLB_OK;
 }
 
+// Barriers synchronise the work before them with the work after. Between encoders that is the fence; inside
+// an open encoder a memory barrier (compute, render pass) orders the dispatches and draws around it, and
+// a render target or depth-stencil barrier ends the pass so its writes are stored.
+mtlb_result Replay::barrier(const mtlb_cmd_barrier &cmd)
+{
+    if (!array_fits<mtlb_barrier>(cmd, cmd.count))
+        return fail(MTLB_ERROR_INVALID_ARGUMENT, "barrier count exceeds the record");
+    bool ends_pass = false;
+    for (uint32_t i = 0; i < cmd.count; ++i) {
+        const mtlb_barrier &b = cmd.barriers[i];
+        if (!b.texture && !b.buffer) {
+            ends_pass = true;  // a barrier on all resources
+            continue;
+        }
+        Texture *texture = b.texture ? from_handle<Texture>(b.texture) : nullptr;
+        if (texture && render_) {
+            const Target any{texture, 0, 0, 0};
+            const auto is_target = [&](const Target &t) { return t.texture == any.texture; };
+            if (is_target(state_.depth) || std::any_of(state_.targets, state_.targets + state_.num_targets, is_target))
+                ends_pass = true;
+        }
+    }
+    sync_needed_ = true;
+    if (blit_)
+        end_blit();
+    if (ends_pass)
+        end_render();
+    if (render_) {
+        [render_ memoryBarrierWithScope:MTLBarrierScopeBuffers | MTLBarrierScopeTextures afterStages:MTLRenderStageFragment
+                           beforeStages:MTLRenderStageVertex];
+    }
+    if (compute_)
+        [compute_ memoryBarrierWithScope:MTLBarrierScopeBuffers | MTLBarrierScopeTextures];
+    return MTLB_OK;
+}
+
 // Our own kernels share the compute encoder with the application's dispatches and rebind the same slots.
 mtlb_result Replay::clear_buffer(const mtlb_cmd_clear_buffer &cmd)
 {
@@ -1019,6 +1065,7 @@ mtlb_result Replay::execute(const mtlb_cmd_header *header)
     case MTLB_CMD_SET_COMPUTE_ROOT_ARGS: return dispatch(header, &Replay::set_compute_root_args);
     case MTLB_CMD_SET_DESCRIPTOR_HEAPS: return dispatch(header, &Replay::set_descriptor_heaps);
     case MTLB_CMD_DISPATCH: return dispatch(header, &Replay::dispatch_compute);
+    case MTLB_CMD_BARRIER: return dispatch(header, &Replay::barrier);
     case MTLB_CMD_CLEAR_BUFFER: return dispatch(header, &Replay::clear_buffer);
     case MTLB_CMD_CLEAR_TEXTURE_UAV: return dispatch(header, &Replay::clear_texture_uav);
     case MTLB_CMD_COPY_TEXTURE_TEXTURE: return dispatch(header, &Replay::copy_texture_texture);

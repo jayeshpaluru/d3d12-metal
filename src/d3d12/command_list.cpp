@@ -382,9 +382,58 @@ void CommandList::SetComputeRoot32BitConstants(UINT index, UINT count, const voi
     set_root_constants(compute_, index, count, data, dest_offset);
 }
 
-// Backend resources use hazard tracking, so barriers record nothing yet.
-void CommandList::ResourceBarrier(UINT, const D3D12_RESOURCE_BARRIER *)
+// Barriers are recorded for the backend to turn into synchronisation (resources are not hazard tracked).
+// A transition to the state a resource is already in, and the "begin" half of a split barrier, need nothing.
+void CommandList::ResourceBarrier(UINT count, const D3D12_RESOURCE_BARRIER *barriers)
 {
+    if (!barriers)
+        return;
+    std::vector<mtlb_barrier> entries;
+    for (UINT i = 0; i < count; ++i) {
+        const D3D12_RESOURCE_BARRIER &b = barriers[i];
+        mtlb_barrier entry{};
+        ID3D12Resource *resource = nullptr;
+        switch (b.Type) {
+        case D3D12_RESOURCE_BARRIER_TYPE_TRANSITION:
+            if (b.Transition.StateBefore == b.Transition.StateAfter || (b.Flags & D3D12_RESOURCE_BARRIER_FLAG_BEGIN_ONLY))
+                continue;
+            entry.type = MTLB_BARRIER_TRANSITION;
+            resource = b.Transition.pResource;
+            break;
+        case D3D12_RESOURCE_BARRIER_TYPE_UAV:
+            entry.type = MTLB_BARRIER_UAV;
+            resource = b.UAV.pResource;
+            break;
+        case D3D12_RESOURCE_BARRIER_TYPE_ALIASING:
+            entry.type = MTLB_BARRIER_ALIASING;
+            resource = b.Aliasing.pResourceAfter ? b.Aliasing.pResourceAfter : b.Aliasing.pResourceBefore;
+            break;
+        default:
+            continue;
+        }
+        if (resource) {
+            auto *r = ours<Resource>(resource);
+            if (!r) {
+                D3D12M_LOG("ResourceBarrier: a resource is not from this layer");
+                continue;
+            }
+            (r->is_buffer() ? entry.buffer : entry.texture) = r->is_buffer() ? r->buffer() : r->texture();
+        }
+        entries.push_back(entry);
+        // An aliasing barrier names two resources: the memory is reused, so both need the synchronisation.
+        if (b.Type == D3D12_RESOURCE_BARRIER_TYPE_ALIASING && b.Aliasing.pResourceBefore && b.Aliasing.pResourceAfter) {
+            if (auto *before = ours<Resource>(b.Aliasing.pResourceBefore)) {
+                mtlb_barrier second{MTLB_BARRIER_ALIASING, 0, 0, 0};
+                (before->is_buffer() ? second.buffer : second.texture) = before->is_buffer() ? before->buffer() : before->texture();
+                entries.push_back(second);
+            }
+        }
+    }
+    if (entries.empty())
+        return;
+    auto *cmd = append<mtlb_cmd_barrier>(MTLB_CMD_BARRIER, entries.size() * sizeof(mtlb_barrier));
+    cmd->count = static_cast<uint32_t>(entries.size());
+    std::copy(entries.begin(), entries.end(), cmd->barriers);
 }
 
 // GPU descriptor handles are plain addresses and every allocation is resident, so root
