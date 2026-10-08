@@ -186,6 +186,11 @@ mtlb_result encode_present(id<MTLCommandBuffer> command_buffer, Swapchain *swapc
 
 extern "C" {
 
+void mtlb_native_set_layer_provider(LayerProvider provider)
+{
+    set_layer_provider(provider);
+}
+
 mtlb_result mtlb_swapchain_create(mtlb_device handle, const mtlb_swapchain_desc *desc, mtlb_swapchain *out)
 {
     Device *device = from_handle<Device>(handle);

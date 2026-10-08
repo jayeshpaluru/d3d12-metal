@@ -35,3 +35,10 @@ executable(
   cpp_args: wine_test_args,
   link_args: ['-ld3d12', '-ldxgi', '-luser32', '-lgdi32'],
 )
+
+executable(
+  'swapchain_test',
+  'swapchain_test.cpp',
+  cpp_args: wine_test_args,
+  link_args: ['-ld3d12', '-ldxgi', '-luser32', '-lgdi32'],
+)

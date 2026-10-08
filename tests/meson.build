@@ -50,3 +50,13 @@ foreach t : tests
   )
   test(t[0], exe, timeout: 60)
 endforeach
+
+# The swap chain test: its Objective-C half (a layer standing in for a window) is a separate file.
+test_swapchain = executable(
+  'test_swapchain', 'test_swapchain.cpp', 'swapchain_support.mm',
+  include_directories: test_inc,
+  dependencies: [test_deps, dependency('appleframeworks', modules: ['QuartzCore', 'ImageIO', 'CoreGraphics', 'Foundation', 'Metal'])],
+  objcpp_args: ['-fobjc-arc'],
+  link_with: d3d12_metal,
+)
+test('test_swapchain', test_swapchain, timeout: 60)

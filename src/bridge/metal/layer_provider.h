@@ -20,3 +20,6 @@ void set_layer_provider(LayerProvider provider);
 LayerProvider layer_provider();
 
 } // namespace mtlb
+
+// For native tests, which have no windows: installs `provider` (see above).
+extern "C" __attribute__((visibility("default"))) void mtlb_native_set_layer_provider(mtlb::LayerProvider provider);
