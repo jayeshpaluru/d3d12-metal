@@ -18,22 +18,9 @@ const RenderTargetDescriptor &rtv_from_handle(D3D12_CPU_DESCRIPTOR_HANDLE handle
     return *reinterpret_cast<const RenderTargetDescriptor *>(handle.ptr);
 }
 
-bool same_target(const RenderTargetDescriptor &a, const RenderTargetDescriptor &b)
+mtlb_render_target to_render_target(const RenderTargetDescriptor &rtv)
 {
-    return a.texture == b.texture && a.view_format == b.view_format && a.mip_level == b.mip_level
-           && a.array_slice == b.array_slice;
-}
-
-void fill_color_attachment(mtlb_color_attachment &a, const RenderTargetDescriptor &rtv, bool clear,
-                           const float color[4])
-{
-    a.texture = rtv.texture;
-    a.view_format = rtv.view_format;
-    a.mip_level = rtv.mip_level;
-    a.array_slice = rtv.array_slice;
-    a.load_action = clear ? MTLB_LOAD_CLEAR : MTLB_LOAD_LOAD;
-    a.store_action = MTLB_STORE_STORE;
-    std::copy_n(color, 4, a.clear_color);
+    return {rtv.texture, rtv.view_format, rtv.mip_level, rtv.array_slice, 0};
 }
 
 UINT mip_extent(UINT size, UINT mip)
@@ -81,9 +68,6 @@ T *CommandList::append(mtlb_cmd_type type, size_t extra_bytes)
 void CommandList::reset_state()
 {
     stream_.clear();
-    std::fill(std::begin(targets_), std::end(targets_), Target{});
-    num_targets_ = 0;
-    pass_open_ = false;
     has_pipeline_ = false;
     safe_release(root_signature_);
     root_args_.clear();
@@ -92,55 +76,14 @@ void CommandList::reset_state()
     append<mtlb_cmd_reset_state>(MTLB_CMD_RESET_STATE);
 }
 
-// ---- Render passes ----------------------------------------------------------
-
-void CommandList::begin_pass()
-{
-    auto *cmd = append<mtlb_cmd_begin_render_pass>(MTLB_CMD_BEGIN_RENDER_PASS);
-    cmd->num_colors = num_targets_;
-    for (UINT i = 0; i < num_targets_; ++i) {
-        fill_color_attachment(cmd->colors[i], targets_[i].rtv, targets_[i].clear, targets_[i].color);
-        targets_[i].clear = false;
-    }
-    pass_open_ = true;
-}
-
-void CommandList::end_pass()
-{
-    if (!pass_open_)
-        return;
-    append<mtlb_cmd_end_render_pass>(MTLB_CMD_END_RENDER_PASS);
-    pass_open_ = false;
-}
-
-// Emits a pass that only performs the pending clears. Needed whenever work that
-// cannot live inside a render pass (copies, end of list) follows a clear.
-void CommandList::flush_clears()
-{
-    if (pass_open_ || std::none_of(targets_, targets_ + num_targets_, [](const Target &t) { return t.clear; }))
-        return;
-    begin_pass();
-    end_pass();
-}
-
-void CommandList::emit_clear_pass(const RenderTargetDescriptor &rtv, const float color[4])
-{
-    auto *cmd = append<mtlb_cmd_begin_render_pass>(MTLB_CMD_BEGIN_RENDER_PASS);
-    cmd->num_colors = 1;
-    fill_color_attachment(cmd->colors[0], rtv, true, color);
-    append<mtlb_cmd_end_render_pass>(MTLB_CMD_END_RENDER_PASS);
-}
-
-// Gets the stream ready for a draw: a pass must be open and the root arguments
-// current. Returns false (after logging) when the draw cannot be recorded.
+// Gets the stream ready for a draw: the root arguments must be current. Returns
+// false (after logging) when the draw cannot be recorded.
 bool CommandList::prepare_draw()
 {
-    if (closed_ || !has_pipeline_ || !root_signature_ || num_targets_ == 0) {
-        D3D12M_LOG("draw skipped: needs an open list, a pipeline, a root signature and render targets");
+    if (closed_ || !has_pipeline_ || !root_signature_) {
+        D3D12M_LOG("draw skipped: needs an open list, a pipeline and a root signature");
         return false;
     }
-    if (!pass_open_)
-        begin_pass();
     if (root_args_dirty_ && !root_args_.empty()) {
         auto *cmd = append<mtlb_cmd_set_graphics_root_args>(MTLB_CMD_SET_GRAPHICS_ROOT_ARGS, root_args_.size());
         cmd->data_size = static_cast<uint32_t>(root_args_.size());
@@ -156,8 +99,6 @@ HRESULT CommandList::Close()
 {
     if (closed_)
         return E_FAIL;
-    flush_clears();
-    end_pass();
     closed_ = true;
     return S_OK;
 }
@@ -266,15 +207,13 @@ void CommandList::OMSetRenderTargets(UINT count, const D3D12_CPU_DESCRIPTOR_HAND
         return;
     if (dsv)
         D3D12M_STUB_LOG();  // depth-stencil views are not implemented
-    flush_clears();
-    end_pass();
-    std::fill(std::begin(targets_), std::end(targets_), Target{});
-    num_targets_ = count;
+    auto *cmd = append<mtlb_cmd_set_render_targets>(MTLB_CMD_SET_RENDER_TARGETS, count * sizeof(mtlb_render_target));
+    cmd->count = count;
     for (UINT i = 0; i < count; ++i) {
         D3D12_CPU_DESCRIPTOR_HANDLE handle = single_handle_to_range
                                                  ? D3D12_CPU_DESCRIPTOR_HANDLE{rtvs[0].ptr + i * kDescriptorSize}
                                                  : rtvs[i];
-        targets_[i].rtv = rtv_from_handle(handle);
+        cmd->targets[i] = to_render_target(rtv_from_handle(handle));
     }
 }
 
@@ -286,19 +225,9 @@ void CommandList::ClearRenderTargetView(D3D12_CPU_DESCRIPTOR_HANDLE view, const 
         return;
     if (num_rects)
         D3D12M_LOG("ClearRenderTargetView: clear rectangles are ignored, the whole view is cleared");
-
-    // Before the first draw, fold the clear into the load action of the pass.
-    if (!pass_open_) {
-        for (UINT i = 0; i < num_targets_; ++i) {
-            if (same_target(targets_[i].rtv, rtv)) {
-                targets_[i].clear = true;
-                std::copy_n(color, 4, targets_[i].color);
-                return;
-            }
-        }
-    }
-    end_pass();
-    emit_clear_pass(rtv, color);
+    auto *cmd = append<mtlb_cmd_clear_rtv>(MTLB_CMD_CLEAR_RTV);
+    cmd->target = to_render_target(rtv);
+    std::copy_n(color, 4, cmd->color);
 }
 
 // ---- Root arguments ---------------------------------------------------------
@@ -419,8 +348,6 @@ void CommandList::CopyBufferRegion(ID3D12Resource *dst, UINT64 dst_offset, ID3D1
         D3D12M_LOG("CopyBufferRegion needs two buffers");
         return;
     }
-    flush_clears();
-    end_pass();
     auto *cmd = append<mtlb_cmd_copy_buffer>(MTLB_CMD_COPY_BUFFER);
     cmd->dst = d->buffer();
     cmd->src = s->buffer();
@@ -516,8 +443,6 @@ void CommandList::CopyTextureRegion(const D3D12_TEXTURE_COPY_LOCATION *dst, UINT
     r.height = size[1];
     r.depth = size[2];
 
-    flush_clears();
-    end_pass();
     if (to_buffer)
         append<mtlb_cmd_copy_texture_to_buffer>(MTLB_CMD_COPY_TEXTURE_TO_BUFFER)->region = r;
     else

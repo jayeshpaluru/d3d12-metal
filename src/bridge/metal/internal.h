@@ -103,6 +103,7 @@ struct Queue {
     std::mutex mutex;
     id<MTLCommandBuffer> open = nil;
     uint32_t open_submits = 0;
+    std::atomic<uint64_t> render_passes{0};
 };
 
 struct Event {

@@ -25,20 +25,6 @@ MTLPrimitiveType to_primitive_type(uint32_t topology)
     }
 }
 
-MTLLoadAction to_load_action(uint32_t action)
-{
-    switch (action) {
-    case MTLB_LOAD_CLEAR: return MTLLoadActionClear;
-    case MTLB_LOAD_DONT_CARE: return MTLLoadActionDontCare;
-    default: return MTLLoadActionLoad;
-    }
-}
-
-MTLStoreAction to_store_action(uint32_t action)
-{
-    return action == MTLB_STORE_DONT_CARE ? MTLStoreActionDontCare : MTLStoreActionStore;
-}
-
 // Returns the texture, or a cached view of it when `view_format` asks for another format.
 id<MTLTexture> attachment_texture(Texture *texture, uint32_t view_format)
 {
@@ -61,7 +47,12 @@ public:
     Replay(Queue *queue, id<MTLCommandBuffer> command_buffer) : queue_(queue), cb_(command_buffer) {}
 
     mtlb_result run(const uint8_t *stream, size_t length);
-    void finish() { end_blit(); end_render(); }
+    void finish()
+    {
+        end_blit();
+        end_render();
+        flush_clears(false);
+    }
 
 private:
     enum Dirty : uint32_t {
@@ -75,14 +66,42 @@ private:
         kAll = 0x7fu,
     };
 
+    // A render target view with its texture resolved.
+    struct Target {
+        Texture *texture = nullptr;
+        uint32_t view_format = 0;  // 0 = the texture's own format
+        uint32_t mip_level = 0;
+        uint32_t array_slice = 0;
+
+        bool operator==(const Target &o) const
+        {
+            return texture == o.texture && view_format == o.view_format && mip_level == o.mip_level
+                   && array_slice == o.array_slice;
+        }
+    };
+
+    // A CLEAR_RTV waiting for the next pass that binds its view (or a clear-only pass).
+    struct PendingClear {
+        Target target;
+        float color[4];
+    };
+
     mtlb_result execute(const mtlb_cmd_header *cmd);
     mtlb_result reset_state();
-    mtlb_result begin_render_pass(const mtlb_cmd_begin_render_pass *cmd);
+    mtlb_result resolve_target(const mtlb_render_target &t, Target *out);
+    mtlb_result set_render_targets(const mtlb_cmd_set_render_targets *cmd);
+    mtlb_result clear_rtv(const mtlb_cmd_clear_rtv *cmd);
+    bool is_bound(const Target &t) const;
+    mtlb_result open_render_pass();
+    mtlb_result flush_clears(bool keep_bound);
+    mtlb_result clear_only_pass(const PendingClear &clear);
+    mtlb_result begin_draw(bool *ready);
     mtlb_result apply_state();
     mtlb_result draw(const mtlb_cmd_draw *cmd);
     mtlb_result draw_indexed(const mtlb_cmd_draw_indexed *cmd);
     mtlb_result copy_texture(const mtlb_texture_copy_region &r, bool to_buffer);
     id<MTLBlitCommandEncoder> blit();
+    id<MTLRenderCommandEncoder> new_render_encoder(MTLRenderPassDescriptor *pass);
 
     void end_blit()
     {
@@ -100,6 +119,12 @@ private:
     id<MTLCommandBuffer> cb_;
     id<MTLRenderCommandEncoder> render_ = nil;
     id<MTLBlitCommandEncoder> blit_ = nil;
+
+    // Render targets and the clears waiting to run.
+    Target targets_[MTLB_MAX_RENDER_TARGETS];
+    uint32_t num_targets_ = 0;
+    std::vector<PendingClear> clears_;
+    bool warned_no_targets_ = false;
 
     // Persistent draw state.
     Pipeline *pipeline_ = nullptr;
@@ -133,75 +158,155 @@ mtlb_result Replay::run(const uint8_t *stream, size_t length)
     return MTLB_OK;
 }
 
+// The blit encoder, opened on demand. Copies end the render pass and run any
+// pending clears first so they observe the cleared contents.
 id<MTLBlitCommandEncoder> Replay::blit()
 {
-    if (render_)
-        return nil;
-    if (!blit_)
+    if (!blit_) {
+        end_render();
+        flush_clears(false);
         blit_ = [cb_ blitCommandEncoder];
+    }
     return blit_;
 }
 
-mtlb_result Replay::begin_render_pass(const mtlb_cmd_begin_render_pass *cmd)
+id<MTLRenderCommandEncoder> Replay::new_render_encoder(MTLRenderPassDescriptor *pass)
 {
-    if (render_)
-        return fail(MTLB_ERROR_INVALID_ARGUMENT, "nested render pass");
-    if (cmd->num_colors > MTLB_MAX_RENDER_TARGETS)
-        return fail(MTLB_ERROR_INVALID_ARGUMENT, "too many colour attachments");
     end_blit();
+    queue_->render_passes.fetch_add(1, std::memory_order_relaxed);
+    return [cb_ renderCommandEncoderWithDescriptor:pass];
+}
+
+mtlb_result Replay::resolve_target(const mtlb_render_target &t, Target *out)
+{
+    *out = {};
+    if (!t.texture)
+        return MTLB_OK;  // unbound slot
+    Texture *texture = from_handle<Texture>(t.texture);
+    if (!texture)
+        return fail(MTLB_ERROR_INVALID_ARGUMENT, "invalid render target texture");
+    *out = {texture, t.view_format == texture->format ? 0u : t.view_format, t.mip_level, t.array_slice};
+    return MTLB_OK;
+}
+
+bool Replay::is_bound(const Target &t) const
+{
+    return std::find(targets_, targets_ + num_targets_, t) != targets_ + num_targets_;
+}
+
+mtlb_result Replay::set_render_targets(const mtlb_cmd_set_render_targets *cmd)
+{
+    Target targets[MTLB_MAX_RENDER_TARGETS];
+    for (uint32_t i = 0; i < cmd->count; ++i) {
+        mtlb_result result = resolve_target(cmd->targets[i], &targets[i]);
+        if (result != MTLB_OK)
+            return result;
+    }
+    // Binding the same targets again must not break the pass.
+    if (cmd->count == num_targets_ && std::equal(targets, targets + cmd->count, targets_))
+        return MTLB_OK;
+
+    end_render();
+    std::copy(targets, targets + cmd->count, targets_);
+    std::fill(targets_ + cmd->count, targets_ + MTLB_MAX_RENDER_TARGETS, Target{});
+    num_targets_ = cmd->count;
+    // Clears for views that are no longer bound can only run as passes of their own.
+    return flush_clears(true);
+}
+
+mtlb_result Replay::clear_rtv(const mtlb_cmd_clear_rtv *cmd)
+{
+    Target target;
+    mtlb_result result = resolve_target(cmd->target, &target);
+    if (result != MTLB_OK)
+        return result;
+    if (!target.texture)
+        return fail(MTLB_ERROR_INVALID_ARGUMENT, "CLEAR_RTV without a texture");
+    // Draws may already have landed in the open pass; the clear must come after them.
+    if (render_ && is_bound(target))
+        end_render();
+    // A newer clear of the same view supersedes a pending one.
+    clears_.erase(std::remove_if(clears_.begin(), clears_.end(),
+                                 [&](const PendingClear &c) { return c.target == target; }),
+                  clears_.end());
+    PendingClear clear{target, {}};
+    std::copy_n(cmd->color, 4, clear.color);
+    clears_.push_back(clear);
+    return MTLB_OK;
+}
+
+// Runs pending clears as passes of their own. With `keep_bound`, clears of the
+// current targets stay pending so the next pass can fold them into load actions.
+mtlb_result Replay::flush_clears(bool keep_bound)
+{
+    end_render();
+    for (auto it = clears_.begin(); it != clears_.end();) {
+        if (keep_bound && is_bound(it->target)) {
+            ++it;
+            continue;
+        }
+        mtlb_result result = clear_only_pass(*it);
+        it = clears_.erase(it);
+        if (result != MTLB_OK)
+            return result;
+    }
+    return MTLB_OK;
+}
+
+mtlb_result Replay::clear_only_pass(const PendingClear &clear)
+{
+    id<MTLTexture> view = attachment_texture(clear.target.texture, clear.target.view_format);
+    if (!view)
+        return fail(MTLB_ERROR_UNSUPPORTED, "unsupported attachment view format");
+    MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
+    MTLRenderPassColorAttachmentDescriptor *ca = pass.colorAttachments[0];
+    ca.texture = view;
+    ca.level = clear.target.mip_level;
+    ca.slice = clear.target.array_slice;
+    ca.loadAction = MTLLoadActionClear;
+    ca.storeAction = MTLStoreActionStore;
+    ca.clearColor = MTLClearColorMake(clear.color[0], clear.color[1], clear.color[2], clear.color[3]);
+    [new_render_encoder(pass) endEncoding];
+    return MTLB_OK;
+}
+
+// Opens the render encoder for the current targets, turning pending clears of
+// bound views into load actions.
+mtlb_result Replay::open_render_pass()
+{
+    // Clears of views this pass does not bind cannot join it.
+    mtlb_result result = flush_clears(true);
+    if (result != MTLB_OK)
+        return result;
 
     MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
     target_width_ = target_height_ = 0;
-    auto note_size = [&](id<MTLTexture> t, uint32_t mip) {
-        NSUInteger w = std::max<NSUInteger>(t.width >> mip, 1), h = std::max<NSUInteger>(t.height >> mip, 1);
-        target_width_ = target_width_ ? std::min(target_width_, w) : w;
-        target_height_ = target_height_ ? std::min(target_height_, h) : h;
-    };
-
-    for (uint32_t i = 0; i < cmd->num_colors; ++i) {
-        const mtlb_color_attachment &a = cmd->colors[i];
-        Texture *texture = from_handle<Texture>(a.texture);
-        if (!texture)
-            continue;  // unbound slot
-        id<MTLTexture> view = attachment_texture(texture, a.view_format);
+    for (uint32_t i = 0; i < num_targets_; ++i) {
+        const Target &t = targets_[i];
+        if (!t.texture)
+            continue;
+        id<MTLTexture> view = attachment_texture(t.texture, t.view_format);
         if (!view)
             return fail(MTLB_ERROR_UNSUPPORTED, "unsupported attachment view format");
         MTLRenderPassColorAttachmentDescriptor *ca = pass.colorAttachments[i];
         ca.texture = view;
-        ca.level = a.mip_level;
-        ca.slice = a.array_slice;
-        ca.loadAction = to_load_action(a.load_action);
-        ca.storeAction = to_store_action(a.store_action);
-        ca.clearColor = MTLClearColorMake(a.clear_color[0], a.clear_color[1], a.clear_color[2], a.clear_color[3]);
-        note_size(view, a.mip_level);
-    }
-
-    if (cmd->has_depth) {
-        const mtlb_depth_attachment &d = cmd->depth;
-        Texture *texture = from_handle<Texture>(d.texture);
-        if (!texture)
-            return fail(MTLB_ERROR_INVALID_ARGUMENT, "invalid depth attachment");
-        id<MTLTexture> view = attachment_texture(texture, d.view_format);
-        if (!view)
-            return fail(MTLB_ERROR_UNSUPPORTED, "unsupported attachment view format");
-        pass.depthAttachment.texture = view;
-        pass.depthAttachment.level = d.mip_level;
-        pass.depthAttachment.slice = d.array_slice;
-        pass.depthAttachment.loadAction = to_load_action(d.depth_load_action);
-        pass.depthAttachment.storeAction = to_store_action(d.depth_store_action);
-        pass.depthAttachment.clearDepth = d.clear_depth;
-        if (view.pixelFormat == MTLPixelFormatDepth32Float_Stencil8) {
-            pass.stencilAttachment.texture = view;
-            pass.stencilAttachment.level = d.mip_level;
-            pass.stencilAttachment.slice = d.array_slice;
-            pass.stencilAttachment.loadAction = to_load_action(d.stencil_load_action);
-            pass.stencilAttachment.storeAction = to_store_action(d.stencil_store_action);
-            pass.stencilAttachment.clearStencil = d.clear_stencil;
+        ca.level = t.mip_level;
+        ca.slice = t.array_slice;
+        ca.loadAction = MTLLoadActionLoad;
+        ca.storeAction = MTLStoreActionStore;
+        auto clear = std::find_if(clears_.begin(), clears_.end(), [&](const PendingClear &c) { return c.target == t; });
+        if (clear != clears_.end()) {
+            ca.loadAction = MTLLoadActionClear;
+            ca.clearColor = MTLClearColorMake(clear->color[0], clear->color[1], clear->color[2], clear->color[3]);
+            clears_.erase(clear);
         }
-        note_size(view, d.mip_level);
+        NSUInteger w = std::max<NSUInteger>(view.width >> t.mip_level, 1);
+        NSUInteger h = std::max<NSUInteger>(view.height >> t.mip_level, 1);
+        target_width_ = target_width_ ? std::min(target_width_, w) : w;
+        target_height_ = target_height_ ? std::min(target_height_, h) : h;
     }
 
-    render_ = [cb_ renderCommandEncoderWithDescriptor:pass];
+    render_ = new_render_encoder(pass);
     if (!render_)
         return fail(MTLB_ERROR_DEVICE, "renderCommandEncoderWithDescriptor failed");
     dirty_ = kAll;
@@ -211,12 +316,13 @@ mtlb_result Replay::begin_render_pass(const mtlb_cmd_begin_render_pass *cmd)
 // Pushes the state changed since the last draw (or everything, on a new encoder).
 mtlb_result Replay::apply_state()
 {
-    if (!render_)
-        return fail(MTLB_ERROR_INVALID_ARGUMENT, "draw outside a render pass");
+    if (!render_) {
+        mtlb_result result = open_render_pass();
+        if (result != MTLB_OK)
+            return result;
+    }
 
     if (dirty_ & kPipeline) {
-        if (!pipeline_)
-            return fail(MTLB_ERROR_INVALID_ARGUMENT, "draw without a pipeline");
         [render_ setRenderPipelineState:pipeline_->state];
         [render_ setDepthStencilState:pipeline_->depth_stencil];
         [render_ setCullMode:pipeline_->cull_mode];
@@ -253,10 +359,29 @@ mtlb_result Replay::apply_state()
     return MTLB_OK;
 }
 
+// Gets a draw ready: validates it, opens the pass and applies state. Sets
+// *ready to false for draws that are skipped: those without render targets
+// (reported once), since depth-only rendering is not supported yet.
+mtlb_result Replay::begin_draw(bool *ready)
+{
+    *ready = false;
+    if (!pipeline_)
+        return fail(MTLB_ERROR_INVALID_ARGUMENT, "draw without a pipeline");
+    if (std::none_of(targets_, targets_ + num_targets_, [](const Target &t) { return t.texture; })) {
+        if (!warned_no_targets_)
+            std::fprintf(stderr, "d3d12-metal: draw skipped, no render targets are bound\n");
+        warned_no_targets_ = true;
+        return MTLB_OK;
+    }
+    *ready = true;
+    return apply_state();
+}
+
 mtlb_result Replay::draw(const mtlb_cmd_draw *cmd)
 {
-    mtlb_result result = apply_state();
-    if (result != MTLB_OK)
+    bool ready;
+    mtlb_result result = begin_draw(&ready);
+    if (result != MTLB_OK || !ready)
         return result;
     IRRuntimeDrawPrimitives(render_, to_primitive_type(topology_), cmd->start_vertex, cmd->vertex_count,
                             cmd->instance_count, cmd->start_instance);
@@ -265,8 +390,9 @@ mtlb_result Replay::draw(const mtlb_cmd_draw *cmd)
 
 mtlb_result Replay::draw_indexed(const mtlb_cmd_draw_indexed *cmd)
 {
-    mtlb_result result = apply_state();
-    if (result != MTLB_OK)
+    bool ready;
+    mtlb_result result = begin_draw(&ready);
+    if (result != MTLB_OK || !ready)
         return result;
     uint64_t offset = 0;
     Buffer *buffer = index_address_ ? find_buffer(queue_->device, index_address_, &offset) : nullptr;
@@ -304,8 +430,8 @@ mtlb_result Replay::copy_texture(const mtlb_texture_copy_region &r, bool to_buff
 size_t fixed_size(uint32_t type)
 {
     switch (type) {
-    case MTLB_CMD_BEGIN_RENDER_PASS: return sizeof(mtlb_cmd_begin_render_pass);
-    case MTLB_CMD_END_RENDER_PASS: return sizeof(mtlb_cmd_end_render_pass);
+    case MTLB_CMD_SET_RENDER_TARGETS: return sizeof(mtlb_cmd_set_render_targets);
+    case MTLB_CMD_CLEAR_RTV: return sizeof(mtlb_cmd_clear_rtv);
     case MTLB_CMD_SET_PIPELINE: return sizeof(mtlb_cmd_set_pipeline);
     case MTLB_CMD_SET_VIEWPORTS: return sizeof(mtlb_cmd_set_viewports);
     case MTLB_CMD_SET_SCISSORS: return sizeof(mtlb_cmd_set_scissors);
@@ -334,8 +460,12 @@ bool array_fits(uint32_t size, size_t fixed, uint64_t count, size_t element_size
 
 mtlb_result Replay::reset_state()
 {
-    if (render_)
-        return fail(MTLB_ERROR_INVALID_ARGUMENT, "RESET_STATE inside a render pass");
+    // Whatever the previous list left (open pass, pending clears) completes first.
+    mtlb_result result = flush_clears(false);
+    if (result != MTLB_OK)
+        return result;
+    num_targets_ = 0;
+    std::fill(targets_, targets_ + MTLB_MAX_RENDER_TARGETS, Target{});
     pipeline_ = nullptr;
     viewports_.clear();
     scissors_.clear();
@@ -361,13 +491,14 @@ mtlb_result Replay::execute(const mtlb_cmd_header *header)
     switch (header->type) {
     case MTLB_CMD_RESET_STATE:
         return reset_state();
-    case MTLB_CMD_BEGIN_RENDER_PASS:
-        return begin_render_pass(reinterpret_cast<const mtlb_cmd_begin_render_pass *>(header));
-    case MTLB_CMD_END_RENDER_PASS:
-        if (!render_)
-            return fail(MTLB_ERROR_INVALID_ARGUMENT, "END_RENDER_PASS without a render pass");
-        end_render();
-        return MTLB_OK;
+    case MTLB_CMD_SET_RENDER_TARGETS: {
+        auto *cmd = reinterpret_cast<const mtlb_cmd_set_render_targets *>(header);
+        if (cmd->count > MTLB_MAX_RENDER_TARGETS || !array_fits(header->size, fixed, cmd->count, sizeof(mtlb_render_target)))
+            return fail(MTLB_ERROR_INVALID_ARGUMENT, "render target count out of range");
+        return set_render_targets(cmd);
+    }
+    case MTLB_CMD_CLEAR_RTV:
+        return clear_rtv(reinterpret_cast<const mtlb_cmd_clear_rtv *>(header));
     case MTLB_CMD_SET_PIPELINE: {
         pipeline_ = from_handle<Pipeline>(reinterpret_cast<const mtlb_cmd_set_pipeline *>(header)->pipeline);
         dirty_ |= kPipeline;
@@ -531,6 +662,12 @@ mtlb_result mtlb_queue_submit(mtlb_queue handle, const mtlb_span *spans, uint32_
     if (++queue->open_submits >= kMaxOpenSubmits)
         commit_open(queue);
     return result;
+}
+
+uint64_t mtlb_queue_render_pass_count(mtlb_queue handle)
+{
+    Queue *queue = from_handle<Queue>(handle);
+    return queue ? queue->render_passes.load() : 0;
 }
 
 // Appends a signal to the open buffer and commits it, so a signal after

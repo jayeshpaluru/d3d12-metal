@@ -42,6 +42,15 @@ public:
     Com(const Com &) = delete;
     Com &operator=(const Com &) = delete;
     Com(Com &&other) noexcept : p_(other.p_) { other.p_ = nullptr; }
+    Com &operator=(Com &&other) noexcept
+    {
+        if (this != &other) {
+            reset();
+            p_ = other.p_;
+            other.p_ = nullptr;
+        }
+        return *this;
+    }
     ~Com() { reset(); }
 
     T *operator->() const { return p_; }

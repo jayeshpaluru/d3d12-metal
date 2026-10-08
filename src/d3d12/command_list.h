@@ -1,10 +1,8 @@
 // ID3D12GraphicsCommandList (implemented up to ID3D12GraphicsCommandList1).
 //
 // Calls are recorded into an mtlb command stream (bridge/mtlb_cmd.h) that
-// ExecuteCommandLists hands to the backend. Render passes are opened lazily:
-// a ClearRenderTargetView on a bound target is folded into the pass's clear
-// load action when no draw has happened yet, otherwise it gets a pass of its
-// own.
+// ExecuteCommandLists hands to the backend. The records mirror the D3D12 calls;
+// the backend decides how they map onto Metal render passes.
 #pragma once
 
 #include <vector>
@@ -96,22 +94,12 @@ public:
     void STDMETHODCALLTYPE SetViewInstanceMask(UINT) override { D3D12M_STUB_LOG(); }
 
 private:
-    struct Target {
-        RenderTargetDescriptor rtv{};
-        bool clear = false;  // clear on the next pass start
-        float color[4] = {};
-    };
-
     CommandList(Device *device, D3D12_COMMAND_LIST_TYPE type) : ChildImpl(device), type_(type) {}
     ~CommandList() override;
 
     void reset_state();
     template <typename T>
     T *append(mtlb_cmd_type type, size_t extra_bytes = 0);
-    void begin_pass();
-    void end_pass();
-    void flush_clears();
-    void emit_clear_pass(const RenderTargetDescriptor &rtv, const float color[4]);
     bool prepare_draw();
     const RootSignature::Slot *find_slot(UINT index, D3D12_ROOT_PARAMETER_TYPE type);
     void set_root_address(UINT index, D3D12_ROOT_PARAMETER_TYPE type, uint64_t address);
@@ -119,10 +107,6 @@ private:
     D3D12_COMMAND_LIST_TYPE type_;
     bool closed_ = false;
     std::vector<uint8_t> stream_;
-
-    Target targets_[MTLB_MAX_RENDER_TARGETS];
-    UINT num_targets_ = 0;
-    bool pass_open_ = false;
 
     bool has_pipeline_ = false;
     RootSignature *root_signature_ = nullptr;  // owned reference

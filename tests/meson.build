@@ -36,7 +36,7 @@ foreach stage : [['vs', 'vs_6_0', 'VSMain'], ['ps', 'ps_6_0', 'PSMain']]
   )
 endforeach
 
-foreach name : ['test_triangle', 'test_cbv_table', 'test_vertex_input']
+foreach name : ['test_triangle', 'test_cbv_table', 'test_vertex_input', 'test_render_pass']
   exe = executable(
     name, [name + '.cpp', shader_headers],
     include_directories: test_inc,

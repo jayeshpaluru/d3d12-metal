@@ -404,6 +404,10 @@ typedef struct mtlb_span {
  * completed. */
 MTLB_EXPORT mtlb_result mtlb_queue_submit(mtlb_queue queue, const mtlb_span *spans, uint32_t count);
 
+/* Number of render passes (render command encoders) the queue has encoded so
+ * far; for tests and diagnostics. */
+MTLB_EXPORT uint64_t mtlb_queue_render_pass_count(mtlb_queue queue);
+
 /* GPU-timeline signal and wait, ordered with respect to prior submissions. */
 MTLB_EXPORT mtlb_result mtlb_queue_signal(mtlb_queue queue, mtlb_event event, uint64_t value);
 MTLB_EXPORT mtlb_result mtlb_queue_wait(mtlb_queue queue, mtlb_event event, uint64_t value);

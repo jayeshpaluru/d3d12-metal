@@ -13,9 +13,12 @@
  *  - Draw state (pipeline, viewports, scissors, topology, vertex/index buffers,
  *    root arguments, blend factor, stencil reference) persists across records
  *    and is re-applied automatically whenever a new render encoder is opened.
- *  - Render encoders exist between BEGIN_RENDER_PASS and END_RENDER_PASS. Copy
- *    records open and close a blit encoder lazily and must not appear inside a
- *    render pass.
+ *  - Records are D3D12-shaped. The backend owns render passes: SET_RENDER_TARGETS
+ *    and CLEAR_RTV only update its state, a render encoder opens at the first
+ *    draw (pending clears become load actions) and closes when the targets
+ *    change, a copy arrives or the submit ends. Clears that never meet a draw
+ *    run as clear-only passes. Setting the same targets again keeps the pass.
+ *    Copy records open and close a blit encoder lazily.
  *  - GPU addresses are mtlb_buffer_info::gpu_address values (buffer base plus
  *    offset); the backend resolves them back to the owning buffer.
  */
@@ -29,8 +32,8 @@ extern "C" {
 #endif
 
 typedef enum mtlb_cmd_type {
-    MTLB_CMD_BEGIN_RENDER_PASS = 1,
-    MTLB_CMD_END_RENDER_PASS,
+    MTLB_CMD_SET_RENDER_TARGETS = 1,
+    MTLB_CMD_CLEAR_RTV,
     MTLB_CMD_SET_PIPELINE,
     MTLB_CMD_SET_VIEWPORTS,
     MTLB_CMD_SET_SCISSORS,
@@ -60,59 +63,37 @@ static inline uint32_t mtlb_cmd_align(uint32_t size)
 
 /* Resets the persistent draw state to its defaults. The front-end starts every
  * command list with one, so state never leaks from one list to the next within
- * a single submit. Must not appear inside a render pass. */
+ * a single submit. Also unbinds the render targets. */
 typedef struct mtlb_cmd_reset_state {
     mtlb_cmd_header header;
 } mtlb_cmd_reset_state;
 
-/* ---- Render passes ------------------------------------------------------ */
+/* ---- Render targets ------------------------------------------------------ */
 
-typedef enum mtlb_load_action {
-    MTLB_LOAD_LOAD = 0,
-    MTLB_LOAD_CLEAR = 1,
-    MTLB_LOAD_DONT_CARE = 2,
-} mtlb_load_action;
-
-typedef enum mtlb_store_action {
-    MTLB_STORE_STORE = 0,
-    MTLB_STORE_DONT_CARE = 1,
-} mtlb_store_action;
-
-typedef struct mtlb_color_attachment {
-    mtlb_texture texture;
+/* A render target view: one mip and slice of a texture, viewed as `view_format`. */
+typedef struct mtlb_render_target {
+    mtlb_texture texture;      /* 0 leaves the slot unbound */
     uint32_t view_format;      /* mtlb_format to view the texture as; 0 = texture's own */
     uint32_t mip_level;
     uint32_t array_slice;
-    uint32_t load_action;      /* mtlb_load_action */
-    uint32_t store_action;     /* mtlb_store_action */
     uint32_t reserved;
-    float clear_color[4];
-} mtlb_color_attachment;
+} mtlb_render_target;
 
-typedef struct mtlb_depth_attachment {
-    mtlb_texture texture;
-    uint32_t view_format;
-    uint32_t mip_level;
-    uint32_t array_slice;
-    uint32_t depth_load_action;
-    uint32_t depth_store_action;
-    uint32_t stencil_load_action;
-    uint32_t stencil_store_action;
-    float clear_depth;
-    uint32_t clear_stencil;
-} mtlb_depth_attachment;
-
-typedef struct mtlb_cmd_begin_render_pass {
+/* Binds the colour targets for later draws. Depth-stencil views are not
+ * recorded yet (DSV milestone). */
+typedef struct mtlb_cmd_set_render_targets {
     mtlb_cmd_header header;
-    uint32_t num_colors;
-    uint32_t has_depth;
-    mtlb_color_attachment colors[MTLB_MAX_RENDER_TARGETS];
-    mtlb_depth_attachment depth;
-} mtlb_cmd_begin_render_pass;
+    uint32_t count;            /* at most MTLB_MAX_RENDER_TARGETS */
+    uint32_t reserved;
+    mtlb_render_target targets[];
+} mtlb_cmd_set_render_targets;
 
-typedef struct mtlb_cmd_end_render_pass {
+/* Clears one view. The view need not be bound. */
+typedef struct mtlb_cmd_clear_rtv {
     mtlb_cmd_header header;
-} mtlb_cmd_end_render_pass;
+    mtlb_render_target target;
+    float color[4];
+} mtlb_cmd_clear_rtv;
 
 /* ---- Draw state --------------------------------------------------------- */
 
@@ -255,12 +236,11 @@ typedef struct mtlb_cmd_copy_buffer_to_texture {
 } mtlb_cmd_copy_buffer_to_texture;
 
 MTLB_ASSERT_SIZE(mtlb_cmd_header, 8);
-MTLB_ASSERT_SIZE(mtlb_color_attachment, 48);
-MTLB_ASSERT_OFFSET(mtlb_color_attachment, clear_color, 32);
-MTLB_ASSERT_SIZE(mtlb_depth_attachment, 48);
-MTLB_ASSERT_SIZE(mtlb_cmd_begin_render_pass, 448);
-MTLB_ASSERT_OFFSET(mtlb_cmd_begin_render_pass, colors, 16);
-MTLB_ASSERT_SIZE(mtlb_cmd_end_render_pass, 8);
+MTLB_ASSERT_SIZE(mtlb_render_target, 24);
+MTLB_ASSERT_SIZE(mtlb_cmd_set_render_targets, 16);
+MTLB_ASSERT_OFFSET(mtlb_cmd_set_render_targets, targets, 16);
+MTLB_ASSERT_SIZE(mtlb_cmd_clear_rtv, 48);
+MTLB_ASSERT_OFFSET(mtlb_cmd_clear_rtv, color, 32);
 MTLB_ASSERT_SIZE(mtlb_cmd_reset_state, 8);
 MTLB_ASSERT_SIZE(mtlb_cmd_set_pipeline, 16);
 MTLB_ASSERT_SIZE(mtlb_viewport, 24);

@@ -90,13 +90,18 @@ int main()
     root_args.add(MTLB_CMD_SET_GRAPHICS_ROOT_ARGS, sizeof(mtlb_cmd_set_graphics_root_args) + 16, big_size, sizeof(big_size));
     CHECK(submit(root_args) != MTLB_OK);
 
+    Stream render_targets;
+    const uint32_t many[2] = {MTLB_MAX_RENDER_TARGETS + 1, 0};
+    render_targets.add(MTLB_CMD_SET_RENDER_TARGETS, sizeof(mtlb_cmd_set_render_targets), many, sizeof(many));
+    CHECK(submit(render_targets) != MTLB_OK);
+
     // Structural errors.
-    Stream end_without_begin;
-    end_without_begin.add(MTLB_CMD_END_RENDER_PASS, sizeof(mtlb_cmd_end_render_pass));
-    CHECK(submit(end_without_begin) != MTLB_OK);
-    Stream draw_outside_pass;
-    draw_outside_pass.add(MTLB_CMD_DRAW, sizeof(mtlb_cmd_draw));
-    CHECK(submit(draw_outside_pass) != MTLB_OK);
+    Stream clear_without_texture;
+    clear_without_texture.add(MTLB_CMD_CLEAR_RTV, sizeof(mtlb_cmd_clear_rtv));
+    CHECK(submit(clear_without_texture) != MTLB_OK);
+    Stream draw_without_pipeline;
+    draw_without_pipeline.add(MTLB_CMD_DRAW, sizeof(mtlb_cmd_draw));
+    CHECK(submit(draw_without_pipeline) != MTLB_OK);
 
     // The queue still works after rejected streams.
     CHECK(submit(valid) == MTLB_OK);
