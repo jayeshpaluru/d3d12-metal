@@ -276,9 +276,26 @@ uint64_t profile_begin(TraceSite &site)
     return calls % kProfileSample == 0 ? profile_now() : 0;
 }
 
+// What reading the clock twice back to back costs (the least of many tries): a timed call's interval includes the
+// second read and the tail of the first, which would otherwise be counted as time of the method (a clock read costs
+// hundreds of nanoseconds under Wine, many times what a cheap method does).
+static uint64_t clock_overhead()
+{
+    static const uint64_t overhead = [] {
+        uint64_t least = UINT64_MAX;
+        for (int i = 0; i < 256; ++i) {
+            const uint64_t a = profile_now(), b = profile_now();
+            least = std::min(least, b - a);
+        }
+        return least;
+    }();
+    return overhead;
+}
+
 void profile_end(TraceSite &site, uint64_t start)
 {
-    site.nanos.fetch_add((profile_now() - start) * kProfileSample, std::memory_order_relaxed);
+    const uint64_t elapsed = profile_now() - start, overhead = clock_overhead();
+    site.nanos.fetch_add((elapsed > overhead ? elapsed - overhead : 0) * kProfileSample, std::memory_order_relaxed);
 }
 
 void profile_report(unsigned frames)
