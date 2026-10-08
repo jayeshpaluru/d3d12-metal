@@ -19,7 +19,8 @@ else
   foreach shader : [['color', '../shaders/color.hlsl'], ['triangle', 'shaders/triangle.hlsl'],
                     ['vertex_input', '../shaders/vertex_input.hlsl'],
                     ['hello_texture', '../shaders/hello_texture.hlsl'],
-                    ['const_buffers', '../shaders/const_buffers.hlsl']]
+                    ['const_buffers', '../shaders/const_buffers.hlsl'],
+                    ['instanced', '../shaders/instanced.hlsl']]
     headers = []
     foreach stage : [['vs', 'vs_6_0', 'VSMain'], ['ps', 'ps_6_0', 'PSMain']]
       headers += custom_target(

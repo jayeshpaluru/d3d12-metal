@@ -1,5 +1,9 @@
 #include "common/platform.h"
 
+#ifndef _WIN32
+#include <mach/mach_time.h>
+#endif
+
 #ifdef _WIN32
 #include <windows.h>
 
@@ -29,6 +33,13 @@ HWND platform_root_window(HWND window)
 HANDLE platform_create_event(bool signaled)
 {
     return CreateEventW(nullptr, TRUE, signaled ? TRUE : FALSE, nullptr);
+}
+
+uint64_t platform_performance_counter()
+{
+    LARGE_INTEGER counter;
+    QueryPerformanceCounter(&counter);
+    return static_cast<uint64_t>(counter.QuadPart);
 }
 
 void platform_reset_event(HANDLE event)
@@ -91,6 +102,11 @@ HWND platform_root_window(HWND window)
 HANDLE platform_create_event(bool)
 {
     return nullptr;
+}
+
+uint64_t platform_performance_counter()
+{
+    return mach_absolute_time();
 }
 
 void platform_reset_event(HANDLE)

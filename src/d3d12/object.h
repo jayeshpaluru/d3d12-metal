@@ -64,11 +64,18 @@ inline HRESULT to_hresult(mtlb_result result)
     }
 }
 
-// The command list types this layer can create allocators, lists and queues for.
-inline bool supported_list_type(D3D12_COMMAND_LIST_TYPE type)
+// The command list types this layer can create queues for.
+inline bool supported_queue_type(D3D12_COMMAND_LIST_TYPE type)
 {
     return type == D3D12_COMMAND_LIST_TYPE_DIRECT || type == D3D12_COMMAND_LIST_TYPE_COMPUTE
            || type == D3D12_COMMAND_LIST_TYPE_COPY;
+}
+
+// The types it can create allocators and lists for: those and bundles, which are recorded like any list and
+// inlined into the list that executes them.
+inline bool supported_list_type(D3D12_COMMAND_LIST_TYPE type)
+{
+    return supported_queue_type(type) || type == D3D12_COMMAND_LIST_TYPE_BUNDLE;
 }
 
 // Answers ID3D12DeviceChild::GetDevice for `device`.

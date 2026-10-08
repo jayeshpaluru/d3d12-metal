@@ -5,6 +5,7 @@
 // the backend decides how they map onto Metal render passes.
 #pragma once
 
+#include <string>
 #include <vector>
 
 #include "bridge/mtlb_cmd.h"
@@ -54,7 +55,7 @@ public:
     void STDMETHODCALLTYPE OMSetStencilRef(UINT StencilRef) override;
     void STDMETHODCALLTYPE SetPipelineState(ID3D12PipelineState *pPipelineState) override;
     void STDMETHODCALLTYPE ResourceBarrier(UINT NumBarriers, const D3D12_RESOURCE_BARRIER *pBarriers) override;
-    void STDMETHODCALLTYPE ExecuteBundle(ID3D12GraphicsCommandList *) override { D3D12M_STUB_LOG(); }
+    void STDMETHODCALLTYPE ExecuteBundle(ID3D12GraphicsCommandList *pCommandList) override;
     void STDMETHODCALLTYPE SetDescriptorHeaps(UINT NumDescriptorHeaps, ID3D12DescriptorHeap *const *ppDescriptorHeaps) override;
     void STDMETHODCALLTYPE SetComputeRootSignature(ID3D12RootSignature *pRootSignature) override;
     void STDMETHODCALLTYPE SetGraphicsRootSignature(ID3D12RootSignature *pRootSignature) override;
@@ -79,13 +80,14 @@ public:
     void STDMETHODCALLTYPE ClearUnorderedAccessViewUint(D3D12_GPU_DESCRIPTOR_HANDLE ViewGPUHandleInCurrentHeap, D3D12_CPU_DESCRIPTOR_HANDLE ViewCPUHandle, ID3D12Resource *pResource, const UINT Values[ 4 ], UINT NumRects, const D3D12_RECT *pRects) override;
     void STDMETHODCALLTYPE ClearUnorderedAccessViewFloat(D3D12_GPU_DESCRIPTOR_HANDLE ViewGPUHandleInCurrentHeap, D3D12_CPU_DESCRIPTOR_HANDLE ViewCPUHandle, ID3D12Resource *pResource, const FLOAT Values[ 4 ], UINT NumRects, const D3D12_RECT *pRects) override;
     void STDMETHODCALLTYPE DiscardResource(ID3D12Resource *, const D3D12_DISCARD_REGION *) override {}  // contents may be dropped: nothing to do
-    void STDMETHODCALLTYPE BeginQuery(ID3D12QueryHeap *, D3D12_QUERY_TYPE, UINT) override { D3D12M_STUB_LOG(); }
-    void STDMETHODCALLTYPE EndQuery(ID3D12QueryHeap *, D3D12_QUERY_TYPE, UINT) override { D3D12M_STUB_LOG(); }
-    void STDMETHODCALLTYPE ResolveQueryData(ID3D12QueryHeap *, D3D12_QUERY_TYPE, UINT, UINT, ID3D12Resource *, UINT64) override { D3D12M_STUB_LOG(); }
+    void STDMETHODCALLTYPE BeginQuery(ID3D12QueryHeap *pQueryHeap, D3D12_QUERY_TYPE Type, UINT Index) override;
+    void STDMETHODCALLTYPE EndQuery(ID3D12QueryHeap *pQueryHeap, D3D12_QUERY_TYPE Type, UINT Index) override;
+    void STDMETHODCALLTYPE ResolveQueryData(ID3D12QueryHeap *pQueryHeap, D3D12_QUERY_TYPE Type, UINT StartIndex, UINT NumQueries, ID3D12Resource *pDestinationBuffer, UINT64 AlignedDestinationBufferOffset) override;
+    // Predicated operations always execute: Metal has no predication, and the data it would test is on the GPU.
     void STDMETHODCALLTYPE SetPredication(ID3D12Resource *, UINT64, D3D12_PREDICATION_OP) override { D3D12M_STUB_LOG(); }
-    void STDMETHODCALLTYPE SetMarker(UINT, const void *, UINT) override { D3D12M_STUB_LOG(); }
-    void STDMETHODCALLTYPE BeginEvent(UINT, const void *, UINT) override { D3D12M_STUB_LOG(); }
-    void STDMETHODCALLTYPE EndEvent() override { D3D12M_STUB_LOG(); }
+    void STDMETHODCALLTYPE SetMarker(UINT Metadata, const void *pData, UINT Size) override;
+    void STDMETHODCALLTYPE BeginEvent(UINT Metadata, const void *pData, UINT Size) override;
+    void STDMETHODCALLTYPE EndEvent() override;
     void STDMETHODCALLTYPE ExecuteIndirect(ID3D12CommandSignature *pCommandSignature, UINT MaxCommandCount, ID3D12Resource *pArgumentBuffer, UINT64 ArgumentBufferOffset, ID3D12Resource *pCountBuffer, UINT64 CountBufferOffset) override;
     // ID3D12GraphicsCommandList1
     void STDMETHODCALLTYPE AtomicCopyBufferUINT(ID3D12Resource *, UINT64, ID3D12Resource *, UINT64, UINT, ID3D12Resource *const *, const D3D12_SUBRESOURCE_RANGE_UINT64 *) override { D3D12M_STUB_LOG(); }
@@ -95,7 +97,7 @@ public:
     void STDMETHODCALLTYPE ResolveSubresourceRegion(ID3D12Resource *pDstResource, UINT DstSubresource, UINT DstX, UINT DstY, ID3D12Resource *pSrcResource, UINT SrcSubresource, D3D12_RECT *pSrcRect, DXGI_FORMAT Format, D3D12_RESOLVE_MODE ResolveMode) override;
     void STDMETHODCALLTYPE SetViewInstanceMask(UINT) override { D3D12M_STUB_LOG(); }
     // ID3D12GraphicsCommandList2
-    void STDMETHODCALLTYPE WriteBufferImmediate(UINT, const D3D12_WRITEBUFFERIMMEDIATE_PARAMETER *, const D3D12_WRITEBUFFERIMMEDIATE_MODE *) override { D3D12M_STUB_LOG(); }
+    void STDMETHODCALLTYPE WriteBufferImmediate(UINT Count, const D3D12_WRITEBUFFERIMMEDIATE_PARAMETER *pParams, const D3D12_WRITEBUFFERIMMEDIATE_MODE *pModes) override;
     // ID3D12GraphicsCommandList3
     void STDMETHODCALLTYPE SetProtectedResourceSession(ID3D12ProtectedResourceSession *) override { D3D12M_STUB_LOG(); }
     // ID3D12GraphicsCommandList4
@@ -137,6 +139,7 @@ private:
     void set_root_address(RootState &state, UINT index, D3D12_ROOT_PARAMETER_TYPE type, uint64_t address);
     void set_root_constants(RootState &state, UINT index, UINT count, const void *data, UINT dest_offset);
     void flush_root_args(RootState &state, mtlb_cmd_type type);
+    void marker(UINT kind, const std::string &text);
     void clear_uav(D3D12_CPU_DESCRIPTOR_HANDLE view_handle, ID3D12Resource *resource, const uint32_t values[4],
                    bool from_float, UINT num_rects, const D3D12_RECT *rects);
     void copy_texture_to_texture(const D3D12_TEXTURE_COPY_LOCATION &dst, UINT dst_x, UINT dst_y, UINT dst_z,

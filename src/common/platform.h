@@ -5,6 +5,9 @@
 // event object; the PE build maps the same calls onto the real Win32 API.
 #pragma once
 
+#include <cstdint>
+#include <string>
+
 #include "common/com.h"
 #include "common/export.h"
 
@@ -27,6 +30,32 @@ void platform_reset_event(HANDLE event);
 // A new handle to the same event, or null.
 HANDLE platform_duplicate_event(HANDLE event);
 void platform_close_event(HANDLE event);
+
+// The CPU clock the application sees (QueryPerformanceCounter), for GetClockCalibration.
+uint64_t platform_performance_counter();
+
+// The text of a marker or event (ID3D12GraphicsCommandList::SetMarker): metadata 1 is an ANSI string, 0 a
+// UTF-16 one; PIX's binary encodings get a generic label.
+inline std::string marker_text(UINT metadata, const void *data, UINT size)
+{
+    if (!data || !size)
+        return std::string();
+    if (metadata == 1) {
+        const char *s = static_cast<const char *>(data);
+        size_t length = 0;
+        while (length < size && s[length])
+            ++length;
+        return std::string(s, length);
+    }
+    if (metadata == 0) {
+        const uint16_t *w = static_cast<const uint16_t *>(data);
+        std::string text;
+        for (UINT i = 0; i < size / 2 && w[i]; ++i)
+            text.push_back(w[i] < 0x80 ? static_cast<char>(w[i]) : '?');
+        return text;
+    }
+    return "event";
+}
 
 } // namespace d3d12m
 

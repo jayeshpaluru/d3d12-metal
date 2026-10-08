@@ -16,6 +16,7 @@ d3d12_sources += files(
   'heap.cpp',
   'pipeline_state.cpp',
   'pipeline_stream.cpp',
+  'query_heap.cpp',
   'resource.cpp',
   'root_signature.cpp',
   'sdk_config.cpp',

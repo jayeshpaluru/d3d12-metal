@@ -3,6 +3,7 @@
 #include <new>
 #include <vector>
 
+#include "common/platform.h"
 #include "d3d12/command_list.h"
 #include "d3d12/device.h"
 #include "d3d12/fence.h"
@@ -14,7 +15,7 @@ HRESULT CommandQueue::create(Device *device, const D3D12_COMMAND_QUEUE_DESC &des
 {
     if (!out)
         return E_POINTER;
-    if (!supported_list_type(desc.Type))
+    if (!supported_queue_type(desc.Type))
         return E_INVALIDARG;
     auto *queue = new CommandQueue(device);
     queue->desc_ = desc;
@@ -87,8 +88,39 @@ HRESULT CommandQueue::GetTimestampFrequency(UINT64 *frequency)
 {
     if (!frequency)
         return E_INVALIDARG;
-    *frequency = 1000000000;  // Metal timestamps are in nanoseconds
+    *frequency = mtlb_timestamp_frequency(device()->handle());
     return S_OK;
+}
+
+// The GPU clock in timestamp query ticks, and the CPU clock in QueryPerformanceCounter ticks, sampled together.
+HRESULT CommandQueue::GetClockCalibration(UINT64 *gpu_timestamp, UINT64 *cpu_timestamp)
+{
+    if (!gpu_timestamp || !cpu_timestamp)
+        return E_INVALIDARG;
+    uint64_t gpu, cpu_mach;
+    if (mtlb_gpu_clock(device()->handle(), &gpu, &cpu_mach) != MTLB_OK)
+        return E_FAIL;
+    *gpu_timestamp = gpu;
+    *cpu_timestamp = platform_performance_counter();
+    return S_OK;
+}
+
+// Queue markers label the work the queue has recorded so far.
+void CommandQueue::SetMarker(UINT metadata, const void *data, UINT size)
+{
+    const std::string text = marker_text(metadata, data, size);
+    mtlb_queue_marker(queue_, 0, text.c_str());
+    mtlb_queue_marker(queue_, 1, nullptr);
+}
+
+void CommandQueue::BeginEvent(UINT metadata, const void *data, UINT size)
+{
+    mtlb_queue_marker(queue_, 0, marker_text(metadata, data, size).c_str());
+}
+
+void CommandQueue::EndEvent()
+{
+    mtlb_queue_marker(queue_, 1, nullptr);
 }
 
 } // namespace d3d12m

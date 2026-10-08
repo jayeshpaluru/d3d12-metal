@@ -93,6 +93,9 @@ struct DrawState {
 
 // Replays one command stream into a command buffer, opening and closing
 // encoders on demand and re-applying draw state on every new render encoder.
+id<MTLCommandBuffer> open_command_buffer(Queue *queue);
+void commit_open(Queue *queue);
+
 class Replay {
 public:
     Replay(Queue *queue, id<MTLCommandBuffer> command_buffer) : queue_(queue), cb_(command_buffer) {}
@@ -989,6 +992,20 @@ mtlb_result Replay::resolve_query(const mtlb_cmd_resolve_query &cmd)
         return fail(MTLB_ERROR_INVALID_ARGUMENT, "query results do not fit the destination");
     if (!bytes)
         return MTLB_OK;
+    // Counter samples are not visible to a blit encoder in the same command buffer (it read zeros for the later
+    // samples), so the work that wrote them is finished first.
+    if (cmd.type == MTLB_QUERY_TIMESTAMP && heap->samples) {
+        end_blit();
+        end_compute();
+        mtlb_result result = flush_clears(false);
+        if (result != MTLB_OK)
+            return result;
+        id<MTLCommandBuffer> previous = cb_;
+        commit_open(queue_);
+        [previous waitUntilCompleted];
+        cb_ = open_command_buffer(queue_);
+        sync_needed_ = false;
+    }
     id<MTLBlitCommandEncoder> enc = blit();
     if (element != 8 || cmd.type == MTLB_QUERY_PIPELINE_STATISTICS || cmd.type == MTLB_QUERY_SO_STATISTICS) {
         [enc fillBuffer:dst->buffer range:NSMakeRange(cmd.dst_offset, bytes) value:0];

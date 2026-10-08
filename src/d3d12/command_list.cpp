@@ -3,12 +3,14 @@
 #include <algorithm>
 #include <cstring>
 
+#include "common/platform.h"
 #include "d3d12/clear_value.h"
 #include "d3d12/command_allocator.h"
 #include "d3d12/command_signature.h"
 #include "d3d12/device.h"
 #include "d3d12/formats.h"
 #include "d3d12/pipeline_state.h"
+#include "d3d12/query_heap.h"
 #include "d3d12/resource.h"
 
 namespace d3d12m {
@@ -82,7 +84,9 @@ void CommandList::reset_state()
 // false (after logging) when the draw cannot be recorded.
 bool CommandList::prepare_draw()
 {
-    if (closed_ || !has_graphics_pipeline_ || !graphics_.signature) {
+    // A bundle inherits the pipeline, root signature and arguments of the list that executes it.
+    const bool bundle = type_ == D3D12_COMMAND_LIST_TYPE_BUNDLE;
+    if (closed_ || (!bundle && (!has_graphics_pipeline_ || !graphics_.signature))) {
         D3D12M_LOG("draw skipped: needs an open list, a graphics pipeline and a root signature");
         return false;
     }
@@ -483,6 +487,118 @@ void CommandList::DrawIndexedInstanced(UINT index_count, UINT instance_count, UI
     cmd->start_instance = start_instance;
 }
 
+// ---- Queries, markers, immediate writes, bundles -------------------------------------------------------------------
+
+void CommandList::BeginQuery(ID3D12QueryHeap *heap_ptr, D3D12_QUERY_TYPE type, UINT index)
+{
+    auto *heap = ours<QueryHeap>(heap_ptr);
+    if (closed_ || !heap || index >= heap->count() || !query_matches_heap(type, heap->type())) {
+        D3D12M_LOG("BeginQuery: invalid query heap, index or type");
+        return;
+    }
+    auto *cmd = append<mtlb_cmd_query>(MTLB_CMD_BEGIN_QUERY);
+    cmd->heap = heap->handle();
+    cmd->type = type;
+    cmd->index = index;
+}
+
+void CommandList::EndQuery(ID3D12QueryHeap *heap_ptr, D3D12_QUERY_TYPE type, UINT index)
+{
+    auto *heap = ours<QueryHeap>(heap_ptr);
+    if (closed_ || !heap || index >= heap->count() || !query_matches_heap(type, heap->type())) {
+        D3D12M_LOG("EndQuery: invalid query heap, index or type");
+        return;
+    }
+    auto *cmd = append<mtlb_cmd_query>(MTLB_CMD_END_QUERY);
+    cmd->heap = heap->handle();
+    cmd->type = type;
+    cmd->index = index;
+}
+
+void CommandList::ResolveQueryData(ID3D12QueryHeap *heap_ptr, D3D12_QUERY_TYPE type, UINT start, UINT count,
+                                   ID3D12Resource *destination, UINT64 offset)
+{
+    auto *heap = ours<QueryHeap>(heap_ptr);
+    auto *dst = ours<Resource>(destination);
+    if (closed_ || !heap || !dst || !dst->is_buffer() || uint64_t(start) + count > heap->count()
+        || !query_matches_heap(type, heap->type())) {
+        D3D12M_LOG("ResolveQueryData: invalid query heap, range or destination");
+        return;
+    }
+    auto *cmd = append<mtlb_cmd_resolve_query>(MTLB_CMD_RESOLVE_QUERY);
+    cmd->heap = heap->handle();
+    cmd->dst = dst->buffer();
+    cmd->dst_offset = offset;
+    cmd->type = type;
+    cmd->start = start;
+    cmd->count = count;
+}
+
+void CommandList::marker(UINT kind, const std::string &text)
+{
+    auto *cmd = append<mtlb_cmd_marker>(MTLB_CMD_MARKER, text.size() + 1);
+    cmd->kind = kind;
+    cmd->length = static_cast<uint32_t>(text.size() + 1);
+    std::memcpy(cmd->text, text.c_str(), text.size() + 1);
+}
+
+void CommandList::SetMarker(UINT metadata, const void *data, UINT size)
+{
+    marker(2, marker_text(metadata, data, size));
+}
+
+void CommandList::BeginEvent(UINT metadata, const void *data, UINT size)
+{
+    marker(0, marker_text(metadata, data, size));
+}
+
+void CommandList::EndEvent()
+{
+    marker(1, std::string());
+}
+
+void CommandList::WriteBufferImmediate(UINT count, const D3D12_WRITEBUFFERIMMEDIATE_PARAMETER *params,
+                                       const D3D12_WRITEBUFFERIMMEDIATE_MODE *)
+{
+    // Every write happens in order with the commands around it, which satisfies all the modes.
+    for (UINT i = 0; i < count && params; ++i) {
+        auto *cmd = append<mtlb_cmd_write_immediate>(MTLB_CMD_WRITE_IMMEDIATE);
+        cmd->address = params[i].Dest;
+        cmd->value = params[i].Value;
+        cmd->size = 4;
+    }
+}
+
+// A bundle's commands are replayed as part of the list that executes it: its stream is appended (without the
+// state reset at its start) and the pipeline, root signatures and arguments it set are the list's afterwards,
+// as in D3D12.
+void CommandList::ExecuteBundle(ID3D12GraphicsCommandList *bundle_ptr)
+{
+    auto *bundle = ours<CommandList>(bundle_ptr);
+    if (closed_ || !bundle || bundle->type_ != D3D12_COMMAND_LIST_TYPE_BUNDLE || !bundle->closed_ || type_ == D3D12_COMMAND_LIST_TYPE_BUNDLE) {
+        D3D12M_LOG("ExecuteBundle needs a closed bundle of this layer on a direct or compute list");
+        return;
+    }
+    // The stream starts with a RESET_STATE record, which would wipe the state the bundle inherits.
+    const size_t skip = mtlb_cmd_align(sizeof(mtlb_cmd_reset_state));
+    const std::vector<uint8_t> &source = bundle->stream_;
+    stream_.insert(stream_.end(), source.begin() + skip, source.end());
+    for (RootState *state : {&bundle->graphics_, &bundle->compute_}) {
+        if (!state->signature)
+            continue;
+        RootState &mine = state == &bundle->graphics_ ? graphics_ : compute_;
+        if (state->signature != mine.signature) {
+            state->signature->AddRef();
+            safe_release(mine.signature);
+            mine.signature = state->signature;
+        }
+        mine.args = state->args;
+        mine.dirty = false;  // the bundle's stream carries the snapshots it needed
+    }
+    has_graphics_pipeline_ = has_graphics_pipeline_ || bundle->has_graphics_pipeline_;
+    has_compute_pipeline_ = has_compute_pipeline_ || bundle->has_compute_pipeline_;
+}
+
 // UAV clears. The descriptor only holds Metal object ids, so the view comes from the heap's shadow table.
 void CommandList::ClearUnorderedAccessViewUint(D3D12_GPU_DESCRIPTOR_HANDLE, D3D12_CPU_DESCRIPTOR_HANDLE cpu_handle,
                                                ID3D12Resource *resource, const UINT values[4], UINT num_rects,
@@ -720,7 +836,7 @@ void CommandList::ExecuteIndirect(ID3D12CommandSignature *signature_ptr, UINT ma
 
 void CommandList::Dispatch(UINT x, UINT y, UINT z)
 {
-    if (closed_ || !has_compute_pipeline_ || !compute_.signature) {
+    if (closed_ || (type_ != D3D12_COMMAND_LIST_TYPE_BUNDLE && (!has_compute_pipeline_ || !compute_.signature))) {
         D3D12M_LOG("dispatch skipped: needs an open list, a compute pipeline and a compute root signature");
         return;
     }

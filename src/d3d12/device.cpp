@@ -16,6 +16,7 @@
 #include "d3d12/formats.h"
 #include "d3d12/heap.h"
 #include "d3d12/pipeline_state.h"
+#include "d3d12/query_heap.h"
 #include "d3d12/resource.h"
 #include "dxgi/dxgi_interfaces.h"
 #include "d3d12/root_signature.h"
@@ -255,6 +256,11 @@ HRESULT Device::CreateRootSignature(UINT, const void *blob, SIZE_T size, REFIID 
 HRESULT Device::CreateFence(UINT64 initial_value, D3D12_FENCE_FLAGS flags, REFIID riid, void **out)
 {
     return Fence::create(this, initial_value, flags, riid, out);
+}
+
+HRESULT Device::CreateQueryHeap(const D3D12_QUERY_HEAP_DESC *desc, REFIID riid, void **out)
+{
+    return desc ? QueryHeap::create(this, *desc, riid, out) : E_INVALIDARG;
 }
 
 HRESULT Device::CreateCommandSignature(const D3D12_COMMAND_SIGNATURE_DESC *desc, ID3D12RootSignature *root_signature,
@@ -864,7 +870,7 @@ HRESULT Device::CheckFeatureSupport(D3D12_FEATURE feature, void *data, UINT size
         auto *f = feature_data<D3D12_FEATURE_DATA_COMMAND_QUEUE_PRIORITY>(data, size);
         if (!f)
             return E_INVALIDARG;
-        f->PriorityForTypeIsSupported = supported_list_type(f->CommandListType)
+        f->PriorityForTypeIsSupported = supported_queue_type(f->CommandListType)
                                         && (f->Priority == D3D12_COMMAND_QUEUE_PRIORITY_NORMAL
                                             || f->Priority == D3D12_COMMAND_QUEUE_PRIORITY_HIGH);
         return S_OK;

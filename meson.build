@@ -39,6 +39,9 @@ portable_tests = [
   ['large_buffers', [], ['probe']],
   ['indirect', ['color'], ['fill']],
   ['msaa', ['color'], ['msaa_read']],
+  ['queries', ['color'], ['fill']],
+  ['draw', ['instanced'], []],
+  ['sdk', [], []],
 ]
 
 bridge_sources = []
