@@ -129,8 +129,11 @@ HRESULT PipelineState::create_compute(Device *device, const D3D12_COMPUTE_PIPELI
     if (!out)
         return E_POINTER;
     auto *root_signature = ours<RootSignature>(desc.pRootSignature);
-    if (!root_signature || !desc.CS.pShaderBytecode || !desc.CS.BytecodeLength)
+    if (!root_signature || !desc.CS.pShaderBytecode || !desc.CS.BytecodeLength) {
+        D3D12M_LOG("compute pipeline: root signature %p (ours: %d), CS %p size %zu", static_cast<void *>(desc.pRootSignature),
+                   root_signature != nullptr, desc.CS.pShaderBytecode, desc.CS.BytecodeLength);
         return E_INVALIDARG;
+    }
 
     mtlb_compute_pipeline_desc pd{};
     pd.cs_dxil = desc.CS.pShaderBytecode;

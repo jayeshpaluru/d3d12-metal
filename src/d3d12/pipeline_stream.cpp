@@ -122,12 +122,12 @@ HRESULT parse(const D3D12_PIPELINE_STATE_STREAM_DESC &stream, Parsed &out)
         case kSerializedRootSignature:
             ok = read(data, size, offset, out.serialized);
             break;
-        case kVS: ok = read(data, size, offset, g.VS); out.has_graphics_stage = true; break;
-        case kPS: ok = read(data, size, offset, g.PS); out.has_graphics_stage = true; break;
-        case kDS: ok = read(data, size, offset, g.DS); out.has_graphics_stage = true; break;
-        case kHS: ok = read(data, size, offset, g.HS); out.has_graphics_stage = true; break;
-        case kGS: ok = read(data, size, offset, g.GS); out.has_graphics_stage = true; break;
-        case kCS: ok = read(data, size, offset, out.compute.CS); out.has_compute_stage = true; break;
+        case kVS: ok = read(data, size, offset, g.VS); out.has_graphics_stage |= g.VS.BytecodeLength != 0; break;
+        case kPS: ok = read(data, size, offset, g.PS); out.has_graphics_stage |= g.PS.BytecodeLength != 0; break;
+        case kDS: ok = read(data, size, offset, g.DS); out.has_graphics_stage |= g.DS.BytecodeLength != 0; break;
+        case kHS: ok = read(data, size, offset, g.HS); out.has_graphics_stage |= g.HS.BytecodeLength != 0; break;
+        case kGS: ok = read(data, size, offset, g.GS); out.has_graphics_stage |= g.GS.BytecodeLength != 0; break;
+        case kCS: ok = read(data, size, offset, out.compute.CS); out.has_compute_stage |= out.compute.CS.BytecodeLength != 0; break;
         case kAS:
         case kMS: {
             D3D12_SHADER_BYTECODE ignored;
@@ -217,8 +217,10 @@ HRESULT parse(const D3D12_PIPELINE_STATE_STREAM_DESC &stream, Parsed &out)
             D3D12M_LOG("CreatePipelineState: unknown subobject type %u", type);
             return E_INVALIDARG;
         }
-        if (!ok)
+        if (!ok) {
+            D3D12M_LOG("CreatePipelineState: subobject type %u overruns the stream", type);
             return E_INVALIDARG;
+        }
     }
     out.compute.NodeMask = g.NodeMask;
     return S_OK;
@@ -239,8 +241,11 @@ HRESULT PipelineState::create_from_stream(Device *device, const D3D12_PIPELINE_S
         D3D12M_LOG("mesh and amplification shaders are not supported");
         return E_NOTIMPL;
     }
-    if (parsed.has_compute_stage == parsed.has_graphics_stage)
+    if (parsed.has_compute_stage == parsed.has_graphics_stage) {
+        D3D12M_LOG("CreatePipelineState: need exactly one of compute and graphics stages (compute %d, graphics %d)",
+                   parsed.has_compute_stage, parsed.has_graphics_stage);
         return E_INVALIDARG;
+    }
 
     // A serialized root signature stands in for a root signature object.
     RootSignature *temporary = nullptr;
