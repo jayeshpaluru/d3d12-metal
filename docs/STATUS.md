@@ -87,6 +87,24 @@ variable rate shading, enhanced barriers (`Barrier`), `ClearState`, `SetEventOnM
 - The native `d3d12.dll` override is per prefix or per directory; the layer does not install
   itself into the prefix.
 
+## Milestone 4
+
+Descriptor writes without bridge calls, the shader disk cache, thread-safe PSO creation, hardening and the
+`D3D12METAL_STATS` counters (ARCHITECTURE.md), and the first real engine: Godot 4.7.2's D3D12 renderer.
+
+- **Godot 4.7.2, Forward+** renders `tests/godot/project` correctly under Wine through these DLLs (`tools/run-godot-test.sh`:
+  lit red box and textured sphere with a shadow on a floor, procedural sky, a 2D label; the screenshot is checked for
+  colours, sky and floor). 120 frames per second at 640x360 (the panel's refresh rate), 9 unix calls and 26 descriptor
+  writes per frame. Mobile: see the open gap above (`SV_ViewID`).
+- What Godot asks and what the layer answers: the device is created at feature level 12_0 (Godot accepts 12_0 and
+  names it in its log), shader model 6.6, resource binding tier 3, no tiled resources, no ray tracing, mesh
+  shaders, variable rate shading or enhanced barriers (Godot then uses legacy barriers), root signature 1.1 and
+  no placed-resource or tight-alignment support (the Agility SDK queries 50 to 54 answer "not supported").
+  Godot's own DXIL is produced by Mesa's NIR path (no `dxil.dll`, unsigned), which the layer accepts.
+- Fixed on the way: pipeline state streams that carry empty graphics subobjects next to a compute shader were refused.
+- The Godot console launcher exe does not exit under Wine; the runner uses the GUI exe, which writes stdout as well.
+- Run `tools/run-godot-test.sh` after `tools/build-wine.sh`; Godot is not part of the repository (see README).
+
 ## Known limitations
 
 - Swap chains: windowed only, no HDR (`R16G16B16A16_FLOAT` is presented as sRGB content),
@@ -131,22 +149,23 @@ variable rate shading, enhanced barriers (`Barrier`), `ClearState`, `SetEventOnM
 Deferred on purpose:
 
 - Embedded DXIL root signatures (a PSO with a null `pRootSignature`) are rejected.
-- A thread-safety audit of the `MTLResidencySet` handling (the dirty flag and commit are not synchronised with allocation on other threads).
 - Chunked command-allocator storage, a root-argument upload ring.
 - Metal 4 argument tables (GPU-address binding).
-- An on-disk shader cache / `MTLBinaryArchive`.
+- `MTLBinaryArchive` for pipeline state objects (the shader cache is done).
 - Real resource state tracking and the enhanced barrier API.
 - Render pass API (`BeginRenderPass`), tiled resources, predication, depth bounds, DXR, mesh shaders, VRS.
 - Device-removed detection (a failed command buffer is logged, `GetDeviceRemovedReason` stays `S_OK`).
 
-Known hardening gaps (found by review, not yet fixed; the layer trusts a well-behaved D3D12 application):
+Hardening gaps still open (the milestone 4 work closed the rest, see ARCHITECTURE.md "Milestone 4 design"):
 
-- Copy, resolve and clear records are bounds-checked by the front-end only partly; the backend does not re-check buffer and texture ranges of `copy_buffer`, `copy_texture`, resolves and UAV clears.
-- CPU descriptor handles are dereferenced as pointers (RTV/DSV, descriptor copies) without a heap lookup.
-- RTV/DSV mip and slice are not validated against the resource.
 - Occlusion queries keep 8 result slots per query: a query spanning more render passes undercounts.
-- Command lists hold bare handles to pipeline states and query heaps (no reference), so releasing one between `Close` and execution is undefined.
-- Samplers are not range-checked; the sampler cache is unbounded.
+- Resources referenced only through descriptors (SRV/UAV/CBV tables, vertex and index buffer addresses) are not pinned by
+  command lists: the application must keep them alive until the GPU is done, as D3D12 requires. A released buffer
+  leaves its address unknown to the backend (the draw or copy is skipped), a released texture behind a descriptor
+  is a use after free on the GPU, as on any driver.
+- The sampler cache holds at most 4096 distinct samplers (Metal supports about a thousand per device).
+- Godot's Mobile renderer does not render: its post-processing shaders use `SV_ViewID` (view instancing), which
+  Metal Shader Converter rejects as an unsupported instruction (`dx.op.viewID.i32`), so those pipelines fail.
 
 Wine notes:
 

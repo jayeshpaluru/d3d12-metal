@@ -146,6 +146,49 @@
   checks, which it inherits) and `ExecuteBundle` appends its stream to the executing list,
   minus the initial `RESET_STATE`, copying the root state it left behind.
 
+## Milestone 4 design
+
+- **Descriptor writes are memory writes.** A `CreateXxxView`/`CreateSampler`/`CopyDescriptors*` call does no bridge
+  call once its object has been seen: the DXGI format table is cached in the front-end (`formats.cpp`), raw and
+  structured buffer views are an address plus a size computed in the front-end (the metadata word is the byte
+  size; `tests/test_descriptors.cpp` compares it with the backend's `mtlb_buffer_view`), typed buffer views and
+  texture views are memoized per resource and view description (the bridge creates the Metal view object once),
+  and samplers are memoized per description in the device. The front-end does no locking on the common path: the
+  destination handle is checked by a thread-local last-heap cache (`Device::validate_cpu_range`, generation
+  counters shared by all devices so a recycled address never matches). Measured with `p_descbench` (ns per
+  descriptor, Wine / Rosetta; before to after): texture SRV 753 to 36, structured buffer SRV 395 to 17, typed buffer
+  SRV 1526 to 37, UAV buffer 430 to 55, UAV texture 824 to 83, sampler 422 to 43, RTV 758 to 16, CBV 6, copies 2.
+- **Shader cache.** Converted shaders and their reflection, and stage-in functions, are stored on disk
+  (`src/bridge/metal/disk_cache.mm`) under `~/Library/Caches/d3d12metal/<exe name>/` (`D3D12METAL_CACHE_DIR`
+  replaces the path, `D3D12METAL_CACHE=0` disables it, `D3D12METAL_CACHE_MAX_MB` sets the limit, 1024 by default).
+  The key is the SHA-256 of the DXIL, the root signature blob, the stage and entry point, the converter settings,
+  the converter library (path, size and modification time) and a cache revision; stage-in entries add the vertex
+  stage's key and the input layout. Entries carry a header, the key and a payload checksum, are written to a
+  temporary file and renamed into place, and a damaged entry is deleted and rebuilt. When the directory exceeds its
+  limit the oldest files (a hit refreshes the modification time) are deleted down to 80% of it. `mtlb_cache_get_stats`
+  reports hits, misses, writes, corrupt entries and evictions. Godot's 210 pipelines: 1169 ms cold, 82 ms warm.
+  PSO creation is thread-safe: one converter per thread, locks only around the maps; `p_psothreads` creates 288
+  pipelines from 8 threads. `MTLBinaryArchive` was not added: Metal's own pipeline cache already makes repeated
+  identical libraries cheap (the warm number above includes `newRenderPipelineState`).
+- **Hardening.** The backend range-checks copies, resolves and render target views against the textures and buffers
+  they name (`range_fits`, `box_fits`, `copy_region_bytes` in `queue.mm`; a bad record is skipped and reported).
+  CPU descriptor handles are validated against the registered heaps (type, bounds, alignment) before any read or
+  write. RTV/DSV descriptors hold an id, not a pointer: `Device::acquire_attachment` turns it into a resource with a
+  new reference (or none when the resource is gone, which makes the view null), and creation refuses subresources
+  that do not exist. Command lists hold references to the pipelines, resources, query heaps, descriptor heaps,
+  signatures and render targets their stream names (`ObjectRefs`, released at `Reset` or destruction), so a
+  released object cannot be freed under a recorded list. Samplers are clamped to legal ranges before they reach Metal.
+- **Statistics.** `D3D12METAL_STATS=1` prints, every 120 presents, the per-frame averages of submits, command lists,
+  command buffers, render passes, compute and blit encoders, barriers, fence syncs, descriptor writes, PSO creations,
+  stream bytes and unix calls, and the total PSO creation time (`src/common/stats.cpp`; the backend side is
+  `mtlb_stats_get`). With the variable unset each counter is one predictable branch.
+- **Bridge crossings per frame** (Godot scene under Wine, each about 0.35 us): `mtlb_queue_submit` (one per
+  `ExecuteCommandLists`), `mtlb_queue_signal` and `mtlb_queue_wait` (fences), `mtlb_queue_present`,
+  `mtlb_event_completed_value` (`GetCompletedValue`, about 0.5 per frame; a shared-memory mirror was not built:
+  a listener per value would be needed and the cost is below 1 us per frame), and the object destroys of resources the
+  application churns. `Map`/`Unmap`/`GetGPUVirtualAddress` never cross. `QueryVideoMemoryInfo` (polled every frame)
+  used to cross every time and is answered from a 250 ms cache. The Godot scene makes 9 unix calls per frame.
+
 ## Wine build
 
 Under Wine the layer is two halves in one process (one address space):

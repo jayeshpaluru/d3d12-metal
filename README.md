@@ -62,6 +62,31 @@ export WINEPREFIX=<prefix> WINEDLLPATH=$PWD WINEDLLOVERRIDES="d3d12,d3d12core,dx
 
 To use the layer with another program put `d3d12.dll` and `dxgi.dll` next to its exe (or in the prefix's `system32`), and keep `x86_64-unix/d3d12metal.so` next to `d3d12.dll` or in a directory listed in `WINEDLLPATH`. `D3D12METAL_LOG=1` traces every bridge call on both sides of the transport on stderr.
 
+#### Godot 4 (D3D12 renderer) under Wine
+
+`tests/godot/project` is a small 3D scene (box, textured sphere, shadowed directional light, sky, a label); its script renders
+N frames, prints the frame rate, saves a screenshot and quits. Download the official Windows build (untrusted: only run it under Wine):
+
+```sh
+mkdir -p /Users/jsp/code/deps/godot && cd /Users/jsp/code/deps/godot
+gh release download 4.7.2-stable -R godotengine/godot -p 'Godot_v4.7.2-stable_win64.exe.zip' -D . && unzip Godot_v4.7.2-stable_win64.exe.zip
+cd - && tools/build-wine.sh --dxc <dxc> && tools/run-godot-test.sh [--method forward_plus|mobile] [--frames N] [--stats]
+```
+
+The runner copies the DLLs next to Godot, runs `--rendering-driver d3d12`, validates the screenshot
+(`tools/check_godot_screenshot.py`) and writes `build-wine/screens/godot-<method>.png` and `build-wine/logs/godot-<method>.log`.
+Forward+ passes; Mobile does not render yet (see docs/STATUS.md).
+
+#### Environment variables
+
+| Variable | Effect |
+|---|---|
+| `D3D12METAL_LOG=1` | trace every bridge call (both sides) |
+| `D3D12METAL_STATS=1` | per-frame counters every 120 presents (submits, encoders, barriers, syncs, descriptor writes, PSO time, unix calls) |
+| `D3D12METAL_CACHE_DIR`, `D3D12METAL_CACHE=0`, `D3D12METAL_CACHE_MAX_MB` | shader disk cache location, off switch, size limit (default `~/Library/Caches/d3d12metal/<exe>`, 1024 MB) |
+| `D3D12METAL_DUMP_FAILED=<dir>` | keep DXIL the shader converter rejects (inspect with `dxc -dumpbin`) |
+| `D3D12METAL_DUMP_PRESENT=<png>` | write the Nth presented frame |
+
 If DirectX-Headers is not installed under `/opt/homebrew` and `pkg-config` is unavailable, pass `-Ddirectx_headers_prefix=<prefix>` to `meson setup`.
 
 The tests are headless: they render offscreen on the default Metal device and read the pixels back.
