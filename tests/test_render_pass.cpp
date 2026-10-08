@@ -126,6 +126,39 @@ int main()
     }
 
     {
+        // Clearing a view that is not bound ends the open pass and runs at once:
+        // draw, clear the other texture, draw again takes three passes.
+        Scene scene;
+        const CD3DX12_HEAP_PROPERTIES heap(D3D12_HEAP_TYPE_DEFAULT);
+        const CD3DX12_RESOURCE_DESC desc = CD3DX12_RESOURCE_DESC::Tex2D(
+            DXGI_FORMAT_R8G8B8A8_UNORM, 8, 8, 1, 1, 1, 0, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
+        ComPtr<ID3D12Resource> other;
+        CHECK_HR(scene.ctx.device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc,
+                                                           D3D12_RESOURCE_STATE_RENDER_TARGET, nullptr,
+                                                           IID_PPV_ARGS(other.ReleaseAndGetAddressOf())));
+        D3D12_DESCRIPTOR_HEAP_DESC heap_desc = {};
+        heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+        heap_desc.NumDescriptors = 1;
+        ComPtr<ID3D12DescriptorHeap> other_heap;
+        CHECK_HR(scene.ctx.device->CreateDescriptorHeap(&heap_desc, IID_PPV_ARGS(other_heap.ReleaseAndGetAddressOf())));
+        const D3D12_CPU_DESCRIPTOR_HANDLE other_rtv = other_heap->GetCPUDescriptorHandleForHeapStart();
+        scene.ctx.device->CreateRenderTargetView(other.Get(), nullptr, other_rtv);
+
+        D3D12_CPU_DESCRIPTOR_HANDLE rtv = scene.ctx.rtv();
+        scene.list->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
+        scene.list->ClearRenderTargetView(rtv, blue, 0, nullptr);
+        scene.draw(0, red);
+        scene.list->ClearRenderTargetView(other_rtv, green, 0, nullptr);
+        scene.draw(3, green);
+
+        ComPtr<ID3D12Resource> readback;
+        UINT row_pitch = 0;
+        CHECK(scene.run(&readback, &row_pitch) == 3);
+        check_pixel("before the clear", read_pixel(readback.Get(), row_pitch, 16, 32), {255, 0, 0, 255});
+        check_pixel("after the clear", read_pixel(readback.Get(), row_pitch, 48, 32), {0, 255, 0, 255});
+    }
+
+    {
         // A view with DXGI_FORMAT_UNKNOWN still selects its mip: clear mip 1.
         RenderContext ctx;
         const CD3DX12_HEAP_PROPERTIES heap(D3D12_HEAP_TYPE_DEFAULT);

@@ -258,9 +258,19 @@ mtlb_result Replay::clear_rtv(const mtlb_cmd_clear_rtv &cmd)
         return result;
     if (!target.texture)
         return fail(MTLB_ERROR_INVALID_ARGUMENT, "CLEAR_RTV without a texture");
-    // Draws may already have landed in the open pass; the clear must come after them.
-    if (render_ && is_bound(target))
+    if (render_) {
+        // Draws may already have landed in the open pass. A clear of one of its
+        // targets must come after them; a clear of any other view must not stay
+        // pending while later draws in this list might read it. Either way the
+        // pass ends, and a view outside it is cleared at once.
+        const bool bound = is_bound(target);
         end_render();
+        if (!bound) {
+            PendingClear clear{target, {}};
+            std::copy_n(cmd.color, 4, clear.color);
+            return clear_only_pass(clear);
+        }
+    }
     // A newer clear of the same view supersedes a pending one.
     clears_.erase(std::remove_if(clears_.begin(), clears_.end(),
                                  [&](const PendingClear &c) { return c.target == target; }),
