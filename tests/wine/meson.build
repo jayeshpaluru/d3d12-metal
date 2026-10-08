@@ -36,6 +36,7 @@ else
                     ['const_buffers', '../shaders/const_buffers.hlsl'],
                     ['instanced', '../shaders/instanced.hlsl'],
                     ['rt_mismatch', '../shaders/rt_mismatch.hlsl'],
+                    ['embedded_rs_gfx', '../shaders/embedded_rs_gfx.hlsl'],
                     ['geometry', '../shaders/geometry.hlsl'], ['tessellation', '../shaders/tessellation.hlsl']]
     headers = []
     foreach stage : stages_of.get(shader[0], [['vs', 'vs_6_0', 'VSMain'], ['ps', 'ps_6_0', 'PSMain']])
