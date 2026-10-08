@@ -563,10 +563,32 @@ private:
     DrawState state_;
     std::vector<PendingClear> clears_;  // waiting for a pass that binds their view
     bool warned_no_targets_ = false;
+    // True for a texture the open render pass renders to.
+    bool is_attachment(const Texture *texture) const
+    {
+        if (state_.depth.texture == texture)
+            return true;
+        for (uint32_t i = 0; i < state_.num_targets; ++i) {
+            if (state_.targets[i].texture == texture)
+                return true;
+        }
+        return false;
+    }
+    // D3D12METAL_NO_PASS_MERGE=1 turns the continuation of render passes across barriers off (to compare, or to bisect).
+    static bool getenv_no_pass_merge()
+    {
+        static const bool off = [] {
+            const char *v = std::getenv("D3D12METAL_NO_PASS_MERGE");
+            return v && *v && *v != '0';
+        }();
+        return off;
+    }
+
     // The targets of the render pass that ended last, for counting passes that only continue it.
     Target last_targets_[MTLB_MAX_RENDER_TARGETS];
     Target last_depth_;
     bool last_valid_ = false, last_ended_by_barrier_ = false, ending_for_barrier_ = false;
+    bool render_synced_ = false;   // the open render pass started after everything before it had completed
     bool bound_emulated_ = false;  // the render encoder's bindings are those of an emulated (mesh) pipeline
     uint32_t dirty_ = kAll;  // state_ pieces the current render encoder has not seen
     uint32_t dirty_compute_ = kAll;  // the same for the compute encoder
@@ -705,6 +727,8 @@ id<MTLRenderCommandEncoder> Replay::new_render_encoder(MTLRenderPassDescriptor *
     }
     id<MTLRenderCommandEncoder> encoder = [cb_ renderCommandEncoderWithDescriptor:pass];
     stat_add(kStatRenderEncoders);
+    // Everything before the pass is complete when it starts: it waits, or there is nothing it could wait for.
+    render_synced_ = (sync_needed_ && queue_->fence_pending) || !queue_->fence_pending;
     if (sync_needed_ && queue_->fence_pending) {
         stat_add(kStatSyncs);
         [encoder waitForFence:queue_->fence beforeStages:MTLRenderStageVertex];
@@ -1848,6 +1872,29 @@ mtlb_result Replay::barrier(const mtlb_cmd_barrier &cmd)
     if (sync_disabled_)
         return MTLB_OK;
     sync_needed_ = true;
+    if (render_ && render_synced_ && !getenv_no_pass_merge()) {
+        // The open pass continues across the barrier when it names nothing the pass renders to: what it orders is
+        // work of earlier encoders (done when this pass began), except for writes the pass itself may have made
+        // through unordered access, which a memory barrier inside the pass orders.
+        bool keep = true, memory_barrier = false;
+        for (uint32_t i = 0; i < cmd.count && keep; ++i) {
+            const mtlb_barrier &b = cmd.barriers[i];
+            if (b.type == MTLB_BARRIER_ALIASING || (!b.texture && !b.buffer)) {
+                keep = false;
+            } else if (b.texture) {
+                Texture *texture = from_handle<Texture>(b.texture);
+                keep = texture && !is_attachment(texture);
+            }
+            memory_barrier |= b.type == MTLB_BARRIER_UAV || (b.flags & MTLB_BARRIER_AFTER_WRITES);
+        }
+        if (keep) {
+            if (memory_barrier)
+                [render_ memoryBarrierWithScope:MTLBarrierScopeBuffers | MTLBarrierScopeTextures
+                                    afterStages:MTLRenderStageFragment
+                                   beforeStages:MTLRenderStageVertex | MTLRenderStageFragment];
+            return MTLB_OK;
+        }
+    }
     end_blit();
     ending_for_barrier_ = true;
     end_render();

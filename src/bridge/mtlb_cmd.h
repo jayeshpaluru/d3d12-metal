@@ -330,17 +330,26 @@ typedef struct mtlb_cmd_clear_texture_uav {
 
 /* Resource barriers. Resources are not hazard tracked: work on the queue is ordered by explicit
  * synchronisation, which a barrier asks for. Between two encoders nothing waits unless a barrier (or a
- * command list boundary) came in between; a barrier ends the open render pass and blit encoder and
- * orders the dispatches of the open compute encoder around it. */
+ * command list boundary came in between); a barrier ends the open blit encoder and orders the dispatches of the
+ * open compute encoder around it. It ends the open render pass too, unless the pass already waited for everything
+ * before it and the barrier names nothing the pass renders to (draws that follow then continue in the same pass; a
+ * barrier after unordered access becomes a memory barrier inside it). */
 enum {
     MTLB_BARRIER_TRANSITION = 1,
     MTLB_BARRIER_UAV = 2,
     MTLB_BARRIER_ALIASING = 3,
 };
 
+/* mtlb_barrier::flags */
+enum {
+    /* The resource was last used for unordered access (or its state was not known): writes of the open render pass
+     * may still have to become visible to its later draws. */
+    MTLB_BARRIER_AFTER_WRITES = 1,
+};
+
 typedef struct mtlb_barrier {
     uint32_t type;             /* MTLB_BARRIER_* */
-    uint32_t reserved;
+    uint32_t flags;            /* MTLB_BARRIER_* flags */
     mtlb_texture texture;      /* the resource the barrier names, a texture or a buffer; both 0: all resources */
     mtlb_buffer buffer;
 } mtlb_barrier;
