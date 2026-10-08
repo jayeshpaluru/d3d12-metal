@@ -113,8 +113,8 @@ private:
     mtlb_result draw(const mtlb_cmd_draw &cmd);
     mtlb_result draw_indexed(const mtlb_cmd_draw_indexed &cmd);
     mtlb_result copy_buffer(const mtlb_cmd_copy_buffer &cmd);
-    mtlb_result copy_texture_to_buffer(const mtlb_cmd_copy_texture_to_buffer &cmd);
-    mtlb_result copy_buffer_to_texture(const mtlb_cmd_copy_buffer_to_texture &cmd);
+    mtlb_result copy_texture_to_buffer(const mtlb_cmd_copy_texture &cmd);
+    mtlb_result copy_buffer_to_texture(const mtlb_cmd_copy_texture &cmd);
 
     mtlb_result resolve_target(const mtlb_render_target &t, Target *out);
     bool is_bound(const Target &t) const;
@@ -581,12 +581,12 @@ mtlb_result Replay::copy_buffer(const mtlb_cmd_copy_buffer &cmd)
     return MTLB_OK;
 }
 
-mtlb_result Replay::copy_texture_to_buffer(const mtlb_cmd_copy_texture_to_buffer &cmd)
+mtlb_result Replay::copy_texture_to_buffer(const mtlb_cmd_copy_texture &cmd)
 {
     return copy_texture(cmd.region, true);
 }
 
-mtlb_result Replay::copy_buffer_to_texture(const mtlb_cmd_copy_buffer_to_texture &cmd)
+mtlb_result Replay::copy_buffer_to_texture(const mtlb_cmd_copy_texture &cmd)
 {
     return copy_texture(cmd.region, false);
 }

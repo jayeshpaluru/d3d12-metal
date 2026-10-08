@@ -225,15 +225,12 @@ typedef struct mtlb_texture_copy_region {
     uint32_t reserved;
 } mtlb_texture_copy_region;
 
-typedef struct mtlb_cmd_copy_texture_to_buffer {
+/* Used by both MTLB_CMD_COPY_TEXTURE_TO_BUFFER and MTLB_CMD_COPY_BUFFER_TO_TEXTURE;
+ * the record type gives the direction. */
+typedef struct mtlb_cmd_copy_texture {
     mtlb_cmd_header header;
     mtlb_texture_copy_region region;
-} mtlb_cmd_copy_texture_to_buffer;
-
-typedef struct mtlb_cmd_copy_buffer_to_texture {
-    mtlb_cmd_header header;
-    mtlb_texture_copy_region region;
-} mtlb_cmd_copy_buffer_to_texture;
+} mtlb_cmd_copy_texture;
 
 MTLB_ASSERT_SIZE(mtlb_cmd_header, 8);
 MTLB_ASSERT_SIZE(mtlb_render_target, 24);
@@ -263,8 +260,7 @@ MTLB_ASSERT_SIZE(mtlb_cmd_draw_indexed, 32);
 MTLB_ASSERT_SIZE(mtlb_cmd_copy_buffer, 48);
 MTLB_ASSERT_SIZE(mtlb_texture_copy_region, 72);
 MTLB_ASSERT_OFFSET(mtlb_texture_copy_region, buffer_offset, 16);
-MTLB_ASSERT_SIZE(mtlb_cmd_copy_texture_to_buffer, 80);
-MTLB_ASSERT_SIZE(mtlb_cmd_copy_buffer_to_texture, 80);
+MTLB_ASSERT_SIZE(mtlb_cmd_copy_texture, 80);
 
 #ifdef __cplusplus
 }

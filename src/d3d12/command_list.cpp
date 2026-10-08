@@ -443,10 +443,7 @@ void CommandList::CopyTextureRegion(const D3D12_TEXTURE_COPY_LOCATION *dst, UINT
     r.height = size[1];
     r.depth = size[2];
 
-    if (to_buffer)
-        append<mtlb_cmd_copy_texture_to_buffer>(MTLB_CMD_COPY_TEXTURE_TO_BUFFER)->region = r;
-    else
-        append<mtlb_cmd_copy_buffer_to_texture>(MTLB_CMD_COPY_BUFFER_TO_TEXTURE)->region = r;
+    append<mtlb_cmd_copy_texture>(to_buffer ? MTLB_CMD_COPY_TEXTURE_TO_BUFFER : MTLB_CMD_COPY_BUFFER_TO_TEXTURE)->region = r;
 }
 
 } // namespace d3d12m
