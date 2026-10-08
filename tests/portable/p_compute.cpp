@@ -250,6 +250,18 @@ int main()
         expect_pixel("outside the rectangle (right)", image.pixel(8, 5), {64, 128, 191, 255}, 1);
         expect_pixel("outside the rectangle (below)", image.pixel(4, 11), {64, 128, 191, 255}, 1);
         expect_pixel("outside the rectangle (left)", image.pixel(1, 5), {64, 128, 191, 255}, 1);
+
+        // A rectangle reaching far outside the view is clamped to it.
+        list = f.begin();
+        const FLOAT blue[4] = {0.0f, 0.0f, 1.0f, 1.0f};
+        const D3D12_RECT huge = {LONG(kSize) - 4, LONG(kSize) - 6, 100000, 100000};
+        list->ClearUnorderedAccessViewFloat(gpu.gpu_handle(f.heap.Get(), 0), gpu.cpu_handle(cpu_heap.Get(), 0),
+                                            f.texture.Get(), blue, 1, &huge);
+        gpu.run(list.Get());
+        image = gpu.read_texture(f.texture.Get(), 0, 4);
+        expect_pixel("clamped rectangle, last pixel", image.pixel(kSize - 1, kSize - 1), {0, 0, 255, 255}, 1);
+        expect_pixel("clamped rectangle, first pixel", image.pixel(kSize - 4, kSize - 6), {0, 0, 255, 255}, 1);
+        expect_pixel("clamped rectangle, outside", image.pixel(kSize - 5, kSize - 1), {64, 128, 191, 255}, 1);
     }
 
     // ---- ClearUnorderedAccessViewUint on float and normalized formats copies the low bits of each value ----------------

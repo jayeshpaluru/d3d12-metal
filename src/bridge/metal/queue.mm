@@ -1427,9 +1427,12 @@ mtlb_result Replay::clear_texture_uav(const mtlb_cmd_clear_texture_uav &cmd)
         internal_kernel(queue_->device, [NSString stringWithFormat:@"clear%s_%s", dimension, suffix]);
     if (!kernel)
         return MTLB_ERROR_COMPILE_FAILED;
-    const uint32_t width = cmd.width ? cmd.width : static_cast<uint32_t>(view.width) - std::min<uint32_t>(cmd.x, static_cast<uint32_t>(view.width));
-    const uint32_t height = cmd.height ? cmd.height : static_cast<uint32_t>(view.height) - std::min<uint32_t>(cmd.y, static_cast<uint32_t>(view.height));
-    const uint32_t region[4] = {cmd.x, cmd.y, width, height};
+    // The rectangle is clamped to the view; no rectangle (width 0) is all of it.
+    const uint32_t view_width = static_cast<uint32_t>(view.width), view_height = static_cast<uint32_t>(view.height);
+    const uint32_t x0 = std::min(cmd.x, view_width), y0 = std::min(cmd.y, view_height);
+    const uint32_t width = cmd.width ? std::min<uint32_t>(cmd.width, view_width - x0) : view_width - x0;
+    const uint32_t height = cmd.height ? std::min<uint32_t>(cmd.height, view_height - y0) : view_height - y0;
+    const uint32_t region[4] = {x0, y0, width, height};
     const NSUInteger depth = view.textureType == MTLTextureType3D ? view.depth
                              : view.textureType == MTLTextureType2DArray ? view.arrayLength : 1;
     if (!width || !height)
