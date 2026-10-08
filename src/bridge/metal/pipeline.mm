@@ -621,6 +621,62 @@ mtlb_result fill_attachments(const mtlb_pipeline_desc &desc, const ShaderStage *
     return MTLB_OK;
 }
 
+// True when the DXIL container's runtime info (PSV0 part) lists a UAV binding. A container that cannot be parsed counts
+// as using one: the answer only decides how conservatively passes are merged.
+bool dxil_binds_uav(const void *dxil, uint64_t size)
+{
+    if (!dxil || size < 32)
+        return size != 0;
+    const auto *bytes = static_cast<const uint8_t *>(dxil);
+    auto u32 = [&](uint64_t offset) {
+        uint32_t v;
+        std::memcpy(&v, bytes + offset, 4);
+        return v;
+    };
+    if (u32(0) != 0x43425844u)  // 'DXBC'
+        return true;
+    const uint32_t parts = u32(28);
+    if (32 + uint64_t(parts) * 4 > size)
+        return true;
+    for (uint32_t i = 0; i < parts; ++i) {
+        const uint64_t at = u32(32 + i * 4);
+        if (at + 8 > size)
+            return true;
+        if (u32(at) != 0x30565350u)  // 'PSV0'
+            continue;
+        const uint64_t end = std::min<uint64_t>(at + 8 + u32(at + 4), size);
+        uint64_t cursor = at + 8;
+        if (cursor + 4 > end)
+            return true;
+        cursor += 4 + uint64_t(u32(cursor));  // the runtime info
+        if (cursor + 4 > end)
+            return true;
+        const uint32_t resources = u32(cursor);
+        cursor += 4;
+        if (!resources)
+            return false;
+        if (cursor + 4 > end)
+            return true;
+        const uint32_t stride = u32(cursor);
+        cursor += 4;
+        if (stride < 16 || cursor + uint64_t(resources) * stride > end)
+            return true;
+        for (uint32_t r = 0; r < resources; ++r) {
+            if (u32(cursor + uint64_t(r) * stride) >= 6)  // PSVResourceType: UAVTyped and above
+                return true;
+        }
+        return false;
+    }
+    return true;
+}
+
+// True when any stage of the description binds a UAV.
+bool desc_binds_uav(const mtlb_pipeline_desc &d)
+{
+    return dxil_binds_uav(d.vs_dxil, d.vs_size) || dxil_binds_uav(d.ps_dxil, d.ps_size) || dxil_binds_uav(d.gs_dxil, d.gs_size)
+           || dxil_binds_uav(d.hs_dxil, d.hs_size) || dxil_binds_uav(d.ds_dxil, d.ds_size);
+}
+
 IRInputTopology to_input_topology(uint32_t type)
 {
     switch (type) {
@@ -734,6 +790,7 @@ mtlb_result create_emulated_pipeline(Device *device, RootSignature *root_signatu
     pipeline->state = state;
     pipeline->emulated = std::move(emulated);
     pipeline->mesh_descriptor = md;
+    pipeline->writes_uav = desc_binds_uav(desc);
     pipeline->depth_format = attachments.depth_format;
     pipeline->stencil_format = attachments.stencil_format;
     pipeline->color_view_formats = attachments.color_view_formats;
@@ -856,6 +913,7 @@ extern "C" mtlb_result mtlb_pipeline_create(mtlb_device handle, const mtlb_pipel
     pipeline->device = device;
     pipeline->state = state;
     pipeline->descriptor = pd;
+    pipeline->writes_uav = desc_binds_uav(*desc);
     pipeline->depth_format = depth_format;
     pipeline->stencil_format = stencil_format;
     pipeline->color_view_formats = attachments.color_view_formats;

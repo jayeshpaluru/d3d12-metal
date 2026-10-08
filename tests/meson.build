@@ -12,7 +12,7 @@ endif
 
 # Shader name -> [vs header, ps header], from shaders/<name>.hlsl.
 shader_headers = {}
-foreach shader : ['color', 'vertex_input', 'hello_texture', 'const_buffers', 'instanced', 'rt_mismatch', 'geometry', 'tessellation']
+foreach shader : ['color', 'vertex_input', 'hello_texture', 'const_buffers', 'instanced', 'rt_mismatch', 'uav_pass', 'geometry', 'tessellation']
   headers = []
   foreach stage : stages_of.get(shader, [['vs', 'vs_6_0', 'VSMain'], ['ps', 'ps_6_0', 'PSMain']])
     headers += custom_target(
@@ -55,6 +55,7 @@ tests = [
   ['test_cbv_table', ['color']],
   ['test_render_pass', ['color']],
   ['test_vertex_input', ['vertex_input']],
+  ['test_pass_merge', ['color', 'uav_pass']],
 ]
 foreach t : tests
   sources = [t[0] + '.cpp']

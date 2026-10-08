@@ -579,10 +579,6 @@ void CommandList::ResourceBarrier(UINT count, const D3D12_RESOURCE_BARRIER *barr
             if (b.Transition.StateBefore == b.Transition.StateAfter || (b.Flags & D3D12_RESOURCE_BARRIER_FLAG_BEGIN_ONLY))
                 continue;
             entry.type = MTLB_BARRIER_TRANSITION;
-            // COMMON may mean anything was done to the resource before.
-            if (b.Transition.StateBefore == D3D12_RESOURCE_STATE_COMMON
-                || (b.Transition.StateBefore & D3D12_RESOURCE_STATE_UNORDERED_ACCESS))
-                entry.flags = MTLB_BARRIER_AFTER_WRITES;
             resource = b.Transition.pResource;
             break;
         case D3D12_RESOURCE_BARRIER_TYPE_UAV:

@@ -589,6 +589,7 @@ private:
     Target last_depth_;
     bool last_valid_ = false, last_ended_by_barrier_ = false, ending_for_barrier_ = false;
     bool render_synced_ = false;   // the open render pass started after everything before it had completed
+    bool pass_writes_uav_ = false;  // a draw of the open pass uses a pipeline that binds a UAV
     bool bound_emulated_ = false;  // the render encoder's bindings are those of an emulated (mesh) pipeline
     uint32_t dirty_ = kAll;  // state_ pieces the current render encoder has not seen
     uint32_t dirty_compute_ = kAll;  // the same for the compute encoder
@@ -729,6 +730,7 @@ id<MTLRenderCommandEncoder> Replay::new_render_encoder(MTLRenderPassDescriptor *
     stat_add(kStatRenderEncoders);
     // Everything before the pass is complete when it starts: it waits, or there is nothing it could wait for.
     render_synced_ = (sync_needed_ && queue_->fence_pending) || !queue_->fence_pending;
+    pass_writes_uav_ = false;
     if (sync_needed_ && queue_->fence_pending) {
         stat_add(kStatSyncs);
         [encoder waitForFence:queue_->fence beforeStages:MTLRenderStageVertex];
@@ -1145,7 +1147,10 @@ mtlb_result Replay::begin_draw(bool *ready)
         return MTLB_OK;
     }
     *ready = true;
-    return apply_state();
+    mtlb_result result = apply_state();
+    if (result == MTLB_OK && state_.pipeline->writes_uav)
+        pass_writes_uav_ = true;
+    return result;
 }
 
 // True when the topology can be drawn with the bound emulated pipeline (geometry shader input, or a patch list
@@ -1872,11 +1877,12 @@ mtlb_result Replay::barrier(const mtlb_cmd_barrier &cmd)
     if (sync_disabled_)
         return MTLB_OK;
     sync_needed_ = true;
-    if (render_ && render_synced_ && !getenv_no_pass_merge()) {
-        // The open pass continues across the barrier when it names nothing the pass renders to: what it orders is
-        // work of earlier encoders (done when this pass began), except for writes the pass itself may have made
-        // through unordered access, which a memory barrier inside the pass orders.
-        bool keep = true, memory_barrier = false;
+    if (render_ && render_synced_ && !pass_writes_uav_ && !getenv_no_pass_merge()) {
+        // The open pass continues across the barrier when nothing in it can have written what the barrier orders: the
+        // pass began after everything before it completed, none of its draws binds a UAV in any stage (a memory
+        // barrier inside a pass is not reliable between fragment and vertex work), and the barrier names nothing it
+        // renders to.
+        bool keep = true;
         for (uint32_t i = 0; i < cmd.count && keep; ++i) {
             const mtlb_barrier &b = cmd.barriers[i];
             if (b.type == MTLB_BARRIER_ALIASING || (!b.texture && !b.buffer)) {
@@ -1885,15 +1891,9 @@ mtlb_result Replay::barrier(const mtlb_cmd_barrier &cmd)
                 Texture *texture = from_handle<Texture>(b.texture);
                 keep = texture && !is_attachment(texture);
             }
-            memory_barrier |= b.type == MTLB_BARRIER_UAV || (b.flags & MTLB_BARRIER_AFTER_WRITES);
         }
-        if (keep) {
-            if (memory_barrier)
-                [render_ memoryBarrierWithScope:MTLBarrierScopeBuffers | MTLBarrierScopeTextures
-                                    afterStages:MTLRenderStageFragment
-                                   beforeStages:MTLRenderStageVertex | MTLRenderStageFragment];
+        if (keep)
             return MTLB_OK;
-        }
     }
     end_blit();
     ending_for_barrier_ = true;

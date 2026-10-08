@@ -236,6 +236,8 @@ struct Pipeline {
     // normalised target, or floats to an integer one): the pipeline writes the target through a view of this
     // same-size format of the other type, and passes bind that view (Invalid: the target as it is).
     std::array<MTLPixelFormat, MTLB_MAX_RENDER_TARGETS> color_view_formats{};
+    // A stage binds a UAV: a pass that draws with it may have written resources a barrier orders (queue.mm).
+    bool writes_uav = false;
     std::mutex variants_mutex;
     std::map<uint64_t, id<MTLRenderPipelineState>> variants;
     Device *device = nullptr;
