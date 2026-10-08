@@ -152,6 +152,65 @@ void check_block_copy(TestContext &ctx)
     readback->Unmap(0, nullptr);
 }
 
+// The same copies at the small mips of a BC1 texture, where the 4x4 block is larger than the level (BC1 8x8: mip 3 is
+// 1x1): a single R16G16B16A16_UINT texel goes into mip 3 and comes back out of it. Metal needs the block boxes cut off
+// at the edge of the level.
+void check_small_mip_block_copy(TestContext &ctx)
+{
+    const CD3DX12_HEAP_PROPERTIES heap(D3D12_HEAP_TYPE_DEFAULT);
+    D3D12_RESOURCE_DESC texel_desc = texture_desc(1, DXGI_FORMAT_R16G16B16A16_UINT, 1);
+    D3D12_RESOURCE_DESC bc1_desc = texture_desc(8, DXGI_FORMAT_BC1_UNORM, 4);
+    ComPtr<ID3D12Resource> texel, texel_back, bc1;
+    CHECK_HR(ctx.device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &texel_desc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+                                                 IID_PPV_ARGS(texel.GetAddressOf())));
+    CHECK_HR(ctx.device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &texel_desc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+                                                 IID_PPV_ARGS(texel_back.GetAddressOf())));
+    CHECK_HR(ctx.device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &bc1_desc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+                                                 IID_PPV_ARGS(bc1.GetAddressOf())));
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT texel_layout = {};
+    UINT64 texel_total = 0;
+    ctx.device->GetCopyableFootprints(&texel_desc, 0, 1, 0, &texel_layout, nullptr, nullptr, &texel_total);
+    std::vector<uint8_t> data(texel_total, 0);
+    for (UINT b = 0; b < 8; ++b)
+        data[b] = static_cast<uint8_t>(0x30 + b * 3);
+    ComPtr<ID3D12Resource> upload = ctx.create_upload_buffer(data.data(), texel_total);
+    ComPtr<ID3D12Resource> readback = ctx.create_buffer(D3D12_HEAP_TYPE_READBACK, texel_total);
+
+    ComPtr<ID3D12GraphicsCommandList> list = ctx.create_list();
+    {
+        const CD3DX12_TEXTURE_COPY_LOCATION dst(texel.Get(), 0), src(upload.Get(), texel_layout);
+        list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+    }
+    const D3D12_RESOURCE_BARRIER to_source = CD3DX12_RESOURCE_BARRIER::Transition(texel.Get(), D3D12_RESOURCE_STATE_COPY_DEST,
+                                                                                 D3D12_RESOURCE_STATE_COPY_SOURCE);
+    list->ResourceBarrier(1, &to_source);
+    {
+        const CD3DX12_TEXTURE_COPY_LOCATION dst(bc1.Get(), 3), src(texel.Get(), 0);  // into the 1x1 level
+        list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+    }
+    const D3D12_RESOURCE_BARRIER bc1_to_source = CD3DX12_RESOURCE_BARRIER::Transition(
+        bc1.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_COPY_SOURCE);
+    list->ResourceBarrier(1, &bc1_to_source);
+    {
+        const CD3DX12_TEXTURE_COPY_LOCATION dst(texel_back.Get(), 0), src(bc1.Get(), 3);  // and out of it again
+        list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+    }
+    const D3D12_RESOURCE_BARRIER back_to_source = CD3DX12_RESOURCE_BARRIER::Transition(
+        texel_back.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_COPY_SOURCE);
+    list->ResourceBarrier(1, &back_to_source);
+    {
+        const CD3DX12_TEXTURE_COPY_LOCATION dst(readback.Get(), texel_layout), src(texel_back.Get(), 0);
+        list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+    }
+    CHECK_HR(list->Close());
+    ctx.execute_and_wait(list.Get());
+
+    void *mapped = nullptr;
+    CHECK_HR(readback->Map(0, nullptr, &mapped));
+    CHECK(std::memcmp(mapped, data.data(), 8) == 0);
+    readback->Unmap(0, nullptr);
+}
+
 } // namespace
 
 int main()
@@ -160,6 +219,7 @@ int main()
     check_footprints(ctx);
     check_bc1_small_mips(ctx);
     check_block_copy(ctx);
+    check_small_mip_block_copy(ctx);
 
     const CD3DX12_HEAP_PROPERTIES default_heap(D3D12_HEAP_TYPE_DEFAULT);
     D3D12_RESOURCE_DESC desc = texture_desc(kSize, DXGI_FORMAT_R8G8B8A8_UNORM, 1);

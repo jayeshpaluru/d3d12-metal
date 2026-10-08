@@ -1999,6 +1999,15 @@ mtlb_result Replay::copy_texture_texture(const mtlb_cmd_copy_texture_texture &cm
         if (!subresource_exists(src->texture, cmd.src_mip, cmd.src_slice) || !subresource_exists(dst->texture, cmd.dst_mip, cmd.dst_slice)
             || cmd.src_x % sbw || cmd.src_y % sbh || cmd.dst_x % dbw || cmd.dst_y % dbh)
             return fail(MTLB_ERROR_INVALID_ARGUMENT, "texture copy between block sizes outside its textures or misaligned");
+        // The boxes cover whole blocks of their own texture; Metal wants them cut off at the edge of the mip level (a
+        // 4x4 block of a BC texture whose level is 1x1 is copied as 1x1).
+        uint32_t src_w = blocks_w * sbw, src_h = blocks_h * sbh, src_d = cmd.depth;
+        uint32_t dst_w = blocks_w * dbw, dst_h = blocks_h * dbh, dst_d = cmd.depth;
+        if (!fit_box(src, cmd.src_mip, cmd.src_x, cmd.src_y, cmd.src_z, &src_w, &src_h, &src_d)
+            || !fit_box(dst, cmd.dst_mip, cmd.dst_x, cmd.dst_y, cmd.dst_z, &dst_w, &dst_h, &dst_d))
+            return fail(MTLB_ERROR_INVALID_ARGUMENT, "texture copy between block sizes outside its textures");
+        if (!src_w || !src_h || !src_d || !dst_w || !dst_h || !dst_d)
+            return MTLB_OK;
         const uint64_t row = uint64_t(blocks_w) * src_info.bytes_per_block, image = row * blocks_h;
         id<MTLBuffer> temp = [queue_->device->device newBufferWithLength:image * cmd.depth
                                                                  options:MTLResourceStorageModePrivate | MTLResourceHazardTrackingModeUntracked];
@@ -2006,10 +2015,10 @@ mtlb_result Replay::copy_texture_texture(const mtlb_cmd_copy_texture_texture &cm
             return fail(MTLB_ERROR_OUT_OF_MEMORY, "no memory for a texture copy between block sizes");
         id<MTLBlitCommandEncoder> enc = blit();
         [enc copyFromTexture:src->texture sourceSlice:cmd.src_slice sourceLevel:cmd.src_mip
-                sourceOrigin:MTLOriginMake(cmd.src_x, cmd.src_y, cmd.src_z) sourceSize:MTLSizeMake(blocks_w * sbw, blocks_h * sbh, cmd.depth)
+                sourceOrigin:MTLOriginMake(cmd.src_x, cmd.src_y, cmd.src_z) sourceSize:MTLSizeMake(src_w, src_h, src_d)
                     toBuffer:temp destinationOffset:0 destinationBytesPerRow:row destinationBytesPerImage:image];
         [enc copyFromBuffer:temp sourceOffset:0 sourceBytesPerRow:row sourceBytesPerImage:image
-                 sourceSize:MTLSizeMake(blocks_w * dbw, blocks_h * dbh, cmd.depth) toTexture:dst->texture
+                 sourceSize:MTLSizeMake(dst_w, dst_h, dst_d) toTexture:dst->texture
            destinationSlice:cmd.dst_slice destinationLevel:cmd.dst_mip
           destinationOrigin:MTLOriginMake(cmd.dst_x, cmd.dst_y, cmd.dst_z)];
         return MTLB_OK;
