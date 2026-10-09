@@ -1,0 +1,31 @@
+{
+  "id": "spider-man-2",
+  "name": "Marvel's Spider-Man 2",
+  "match": { "steamAppId": 2651280, "exe": ["Spider-Man2.exe"] },
+  "exe": "Spider-Man2.exe",
+  "installDir": "Marvel's Spider-Man 2",
+  "status": "boots",
+  "launch": {
+    "mode": "steam",
+    "args": ["-nolauncher"],
+    "env": { "ROSETTA_ADVERTISE_AVX": "1" },
+    "windowTitle": "Spider"
+  },
+  "conf": {
+    "quirk_force_compute_barrier": "0x324071d329f05ccc"
+  },
+  "requirements": [
+    {
+      "id": "pspc-sdk-runtime",
+      "title": "PlayStation PC SDK runtime (installed by Steam's installscript on Windows)",
+      "doneKey": "HKCU\\SOFTWARE\\Insomniac Games\\Marvel's Spider-Man 2",
+      "run": ["install_pspc_sdk_runtime.bat", "quiet"]
+    }
+  ],
+  "notes": [
+    "Needs AVX2 and F16C: Rosetta hides them unless ROSETTA_ADVERTISE_AVX=1 (set for you).",
+    "Steam does not run its installscript under Wine; the PlayStation PC SDK runtime MSIs are installed on the first launch.",
+    "Uses DirectStorage with GPU GDeflate decompression, provided by the layer (gdeflate=1, the default).",
+    "Status: boots and renders the first splash; progress past it is still being worked on."
+  ]
+}

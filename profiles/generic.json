@@ -1,0 +1,11 @@
+{
+  "id": "generic",
+  "name": "Generic D3D12 game",
+  "status": "untested",
+  "launch": { "mode": "direct" },
+  "notes": [
+    "No game-specific settings: the layer's defaults (Apple GPU identity, feature level 12_0, shader model 6.6).",
+    "If the game refuses to start because of the GPU, try the 'AMD' or 'NVIDIA' GPU identity in the game's settings.",
+    "If the game needs AVX2 (most modern 64-bit titles do), launch it through the CLI or app: they set ROSETTA_ADVERTISE_AVX=1."
+  ]
+}

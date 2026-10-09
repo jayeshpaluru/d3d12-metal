@@ -125,7 +125,8 @@ void configure_layer(CAMetalLayer *layer, MTLPixelFormat pixel_format, uint32_t 
 
 // Draws `source` over all of `target` with the present pipeline.
 void draw_present_pass(id<MTLCommandBuffer> command_buffer, id<MTLTexture> target,
-                       id<MTLRenderPipelineState> pipeline, id<MTLTexture> source, Queue *queue)
+                       id<MTLRenderPipelineState> pipeline, id<MTLTexture> source, Queue *queue,
+                       Swapchain *swapchain = nullptr, id<MTLRenderPipelineState> hud_pipeline = nil)
 {
     MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
     pass.colorAttachments[0].texture = target;
@@ -140,6 +141,8 @@ void draw_present_pass(id<MTLCommandBuffer> command_buffer, id<MTLTexture> targe
     [encoder setRenderPipelineState:pipeline];
     [encoder setFragmentTexture:source atIndex:0];
     [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+    if (hud_pipeline)
+        hud_encode(swapchain->hud_state, encoder, hud_pipeline, target.width, target.height);
     [encoder updateFence:queue->fence afterStages:MTLRenderStageFragment];
     queue->fence_pending = true;
     [encoder endEncoding];
@@ -190,6 +193,8 @@ Drawable acquire_drawable(Swapchain *swapchain, uint32_t sync_interval)
         std::lock_guard<std::mutex> lock(swapchain->mutex);
         if (result.drawable && result.drawable.texture.pixelFormat == swapchain->pixel_format)
             result.pipeline = swapchain->pipeline;
+        if (result.drawable)
+            result.hud_pipeline = swapchain->hud_pipeline;
         else if (result.drawable)
             result.drawable = nil;
     }
@@ -204,7 +209,10 @@ Drawable acquire_drawable(Swapchain *swapchain, uint32_t sync_interval)
 void encode_present(Queue *queue, id<MTLCommandBuffer> command_buffer, Swapchain *swapchain, Texture *texture,
                     const Drawable &drawable)
 {
-    draw_present_pass(command_buffer, drawable.drawable.texture, drawable.pipeline, texture->texture, queue);
+    if (swapchain->hud)
+        hud_update(swapchain->hud_state, swapchain->presents.load() + 1);
+    draw_present_pass(command_buffer, drawable.drawable.texture, drawable.pipeline, texture->texture, queue, swapchain,
+                      drawable.hud_pipeline);
 
     const uint64_t present = ++swapchain->presents;
     if (!swapchain->dump_path.empty() && present == swapchain->dump_frame) {
@@ -217,7 +225,7 @@ void encode_present(Queue *queue, id<MTLCommandBuffer> command_buffer, Swapchain
         td.usage = MTLTextureUsageRenderTarget;
         td.storageMode = MTLStorageModeShared;
         id<MTLTexture> capture = [swapchain->device->device newTextureWithDescriptor:td];
-        draw_present_pass(command_buffer, capture, drawable.pipeline, texture->texture, queue);
+        draw_present_pass(command_buffer, capture, drawable.pipeline, texture->texture, queue, swapchain, drawable.hud_pipeline);
         const std::string path = swapchain->dump_path;
         [command_buffer addCompletedHandler:^(id<MTLCommandBuffer>) { write_png(capture, path); }];
     }
@@ -263,6 +271,10 @@ mtlb_result mtlb_swapchain_create(mtlb_device handle, const mtlb_swapchain_desc 
     swapchain->pipeline = make_pipeline(swapchain.get(), pixel_format);
     if (!swapchain->pipeline)
         return MTLB_ERROR_COMPILE_FAILED;
+    if (hud_wanted() && hud_init(swapchain->hud_state, device->device)) {
+        swapchain->hud = true;
+        swapchain->hud_pipeline = hud_make_pipeline(swapchain->hud_state, device->device, pixel_format);
+    }
     const uint32_t drawables = desc->buffer_count >= 3 ? 3 : 2;
     // Bounded wait: if the main thread is busy the configuration still happens, just later.
     id<MTLDevice> mtl_device = device->device;
@@ -293,13 +305,15 @@ mtlb_result mtlb_swapchain_resize(mtlb_swapchain handle, uint32_t width, uint32_
         return fail(MTLB_ERROR_UNSUPPORTED, "unsupported swap chain format " + std::to_string(format));
 
     // Build the new pipeline first so that a failure changes nothing.
-    id<MTLRenderPipelineState> pipeline = nil;
+    id<MTLRenderPipelineState> pipeline = nil, hud_pipeline = nil;
     {
         std::lock_guard<std::mutex> lock(swapchain->mutex);
         if (pixel_format != swapchain->pixel_format) {
             pipeline = make_pipeline(swapchain, pixel_format);
             if (!pipeline)
                 return MTLB_ERROR_COMPILE_FAILED;
+            if (swapchain->hud)
+                hud_pipeline = hud_make_pipeline(swapchain->hud_state, swapchain->device->device, pixel_format);
         }
     }
     CAMetalLayer *layer = swapchain->layer;
@@ -307,6 +321,7 @@ mtlb_result mtlb_swapchain_resize(mtlb_swapchain handle, uint32_t width, uint32_
     if (pipeline) {
         std::lock_guard<std::mutex> lock(swapchain->mutex);
         swapchain->pipeline = pipeline;
+        swapchain->hud_pipeline = hud_pipeline;
         swapchain->pixel_format = pixel_format;
     }
     return MTLB_OK;
