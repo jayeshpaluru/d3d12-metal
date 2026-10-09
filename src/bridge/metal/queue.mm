@@ -550,6 +550,7 @@ private:
     mtlb_result marker(const mtlb_cmd_marker &cmd);
     mtlb_result write_immediate(const mtlb_cmd_write_immediate &cmd);
     mtlb_result gdeflate(const mtlb_cmd_gdeflate &cmd);
+    void dump_gdeflate(uint64_t input_size, uint64_t output_size, uint64_t control_size, Buffer *const *buffers, const uint64_t *offsets);
     mtlb_result timestamp(QueryHeap *heap, uint32_t index);
     mtlb_result execute_indirect(const mtlb_cmd_execute_indirect &cmd);
     mtlb_result clear_buffer(const mtlb_cmd_clear_buffer &cmd);
@@ -1916,7 +1917,43 @@ mtlb_result Replay::gdeflate(const mtlb_cmd_gdeflate &cmd)
     dirty_compute_ = kAll;
     end_compute();
     sync_needed_ = !sync_disabled_;
+    dump_gdeflate(params.input_size, params.output_size, params.control_size, buffers, offsets);
     return MTLB_OK;
+}
+
+// Debugging (D3D12METAL_GDEFLATE_DUMP=<dir>): copies the control, input and output buffers of a GDeflate call as they
+// are after it into <dir>/call-N.bin ({u64 control, input, output sizes}, then the three), for checking the decoder
+// against the reference one offline (tools/gdeflate_verify.cpp). The first D3D12METAL_GDEFLATE_DUMP_MAX calls (300).
+void Replay::dump_gdeflate(uint64_t input_size, uint64_t output_size, uint64_t control_size, Buffer *const *buffers,
+                           const uint64_t *offsets)
+{
+    static const char *dir = getenv("D3D12METAL_GDEFLATE_DUMP");
+    if (!dir)
+        return;
+    static std::atomic<uint32_t> calls{0};
+    static const uint32_t max_calls = getenv("D3D12METAL_GDEFLATE_DUMP_MAX") ? atoi(getenv("D3D12METAL_GDEFLATE_DUMP_MAX")) : 300;
+    const uint32_t index = calls.fetch_add(1);
+    if (index >= max_calls)
+        return;
+    const uint64_t sizes[3] = {control_size, input_size, output_size};
+    NSMutableArray<id<MTLBuffer>> *staging = [NSMutableArray array];
+    id<MTLBlitCommandEncoder> enc = blit();
+    for (int i = 0; i < 3; ++i) {
+        id<MTLBuffer> copy = [queue_->device->device newBufferWithLength:std::max<uint64_t>(sizes[i], 4) options:MTLResourceStorageModeShared];
+        [staging addObject:copy];
+        const int which[3] = {2, 0, 1};
+        [enc copyFromBuffer:buffers[which[i]]->buffer sourceOffset:offsets[which[i]] toBuffer:copy destinationOffset:0 size:sizes[i]];
+    }
+    end_blit();
+    NSString *path = [NSString stringWithFormat:@"%s/call-%u.bin", dir, index];
+    const std::array<uint64_t, 3> sizes_copy = {sizes[0], sizes[1], sizes[2]};
+    [cb_ addCompletedHandler:^(id<MTLCommandBuffer>) {
+        NSMutableData *data = [NSMutableData data];
+        [data appendBytes:sizes_copy.data() length:sizeof(uint64_t) * 3];
+        for (int i = 0; i < 3; ++i)
+            [data appendBytes:staging[i].contents length:sizes_copy[i]];
+        [data writeToFile:path atomically:NO];
+    }];
 }
 
 // A resolve is a render pass with no draws: the multisampled texture is loaded and stored with a resolve.
@@ -2475,9 +2512,13 @@ void commit_open(Queue *queue)
     for (; queue->debug_depth > 0; --queue->debug_depth)
         [queue->open popDebugGroup];
     commit_residency(queue->device);
-    [queue->open commit];
+    id<MTLCommandBuffer> committed = queue->open;
+    [committed commit];
     stat_add(kStatCommandBuffers);
     queue->open = nil;
+    static const bool serialize = getenv("D3D12METAL_SERIALIZE") != nullptr;  // debugging: every submission completes before the next
+    if (serialize)
+        [committed waitUntilCompleted];
     if (submit_profile_enabled())
         report_submit_profile();
 }

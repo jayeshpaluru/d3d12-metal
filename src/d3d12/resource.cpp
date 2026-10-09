@@ -171,7 +171,9 @@ HRESULT Resource::buffer_view(const mtlb_buffer_view_desc &desc, mtlb_descriptor
     }
     const mtlb_result result = mtlb_buffer_view(&desc, out);
     if (result != MTLB_OK) {
-        D3D12M_LOG("buffer view creation failed: %s", mtlb_last_error());
+        D3D12M_LOG("buffer view creation failed: %s (buffer %llu bytes, view offset %llu size %llu elements %u, counter %d)", mtlb_last_error(),
+                   static_cast<unsigned long long>(desc_.Width), static_cast<unsigned long long>(desc.offset),
+                   static_cast<unsigned long long>(desc.size), desc.num_elements, desc.counter_buffer != 0);
         return to_hresult(result);
     }
     if (cacheable) {
