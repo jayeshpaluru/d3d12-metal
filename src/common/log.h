@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Logging helpers shared by the D3D12 and DXGI front-ends.
 //
 // Messages go to stderr and, when D3D12METAL_LOG_FILE is set (environment or d3d12metal.conf, see

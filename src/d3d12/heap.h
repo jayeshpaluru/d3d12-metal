@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // ID3D12Heap: a placement heap (MTLHeap) that resources are created in.
 #pragma once
 

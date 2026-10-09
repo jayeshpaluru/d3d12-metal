@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
 extends Node3D
 # Renders a fixed number of frames, prints the frame rate, saves a screenshot and quits.
 # User args (after "--"): --frames=N  --out=<png path>

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Lists the windows of Wine and Steam processes (all of them, on screen or not), one per line:
 //   <CGWindowID> | <owner> | <title> | <width> x <height> | onscreen: <bool> | layer: <n>
 // tools/run-game.sh picks the game's window from this list and captures it with `screencapture -x -o -l <id>`.

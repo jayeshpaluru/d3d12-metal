@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
 # Win32 test programs, run under Wine by tools/run-wine-tests.sh.
 wine_test_args = ['-DWIN32_LEAN_AND_MEAN', '-DNOMINMAX']
 wine_test_link_args = ['-ld3d12', '-ldxgi', '-luser32', '-lgdi32']

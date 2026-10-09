@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Option and log plumbing of the backend (see mtlb_configure and mtlb_log_write in bridge/mtlb.h).
 #include "bridge/metal/log.h"
 

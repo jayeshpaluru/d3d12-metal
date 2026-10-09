@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // PE side of the Wine unix-call transport: every mtlb_* function packs its
 // arguments into a parameter struct and calls the unix module d3d12metal.so
 // through ntdll's __wine_unix_call_dispatcher.

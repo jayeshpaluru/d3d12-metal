@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: LGPL-2.1-or-later
 """Prints pixels of a PNG (8-bit, non-interlaced, as written by macOS) as R,G,B.
 
 usage: png_pixel.py <file.png> <x> <y> [<x> <y> ...]

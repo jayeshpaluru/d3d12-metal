@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Hull and domain shader emulation: one triangle patch, tessellated 4x; the domain shader passes the
 // barycentric coordinates on as the colour, which proves it ran per generated vertex.
 struct VSOutput

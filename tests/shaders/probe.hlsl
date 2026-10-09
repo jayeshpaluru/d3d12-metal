@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Reads resources at coordinates given by the test and writes what it saw to a UAV buffer: the tests
 // check descriptors (texture and buffer views, samplers, swizzles) by looking at what a shader gets.
 Texture2D<float4> t2d : register(t0);

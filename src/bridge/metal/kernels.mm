@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Compute kernels the backend runs itself (UAV clears, query resolves, indirect argument translation).
 // They are written in MSL, compiled when first needed and cached per device.
 #include "internal.h"

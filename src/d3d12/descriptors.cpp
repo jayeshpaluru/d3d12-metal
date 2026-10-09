@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Shader resource views, unordered access views and samplers: what each CreateXxx call writes into a
 // descriptor slot. Slots are mtlb_descriptor entries, the layout the shader converter reads (see
 // docs/ARCHITECTURE.md), written straight into the heap's CPU memory; the bridge is asked for the

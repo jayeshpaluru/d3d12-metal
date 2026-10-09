@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Finds a window of the Wine process by title and says whether it can be captured.
 //
 //   find_window "<title>"      prints one line:

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 /*
  * mtlb: the bridge between the D3D12/DXGI front-end and the Metal backend.
  *

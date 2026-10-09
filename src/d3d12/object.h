@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Base classes shared by the ID3D12Object-derived COM objects.
 #pragma once
 

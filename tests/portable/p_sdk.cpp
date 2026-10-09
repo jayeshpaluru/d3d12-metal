@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // D3D12GetInterface (SDK configuration, DRED settings, unknown classes), D3D12EnableExperimentalFeatures and the
 // DXGI video memory budget.
 #include <chrono>

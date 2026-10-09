@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
 d3d12_sources += files(
   '../common/blob.cpp',
   '../common/config.cpp',

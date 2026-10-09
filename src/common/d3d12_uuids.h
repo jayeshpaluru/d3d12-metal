@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Makes __uuidof() work for the D3D12 interfaces.
 //
 // DirectX-Headers declares the interface IDs as IID_* constants (defined in

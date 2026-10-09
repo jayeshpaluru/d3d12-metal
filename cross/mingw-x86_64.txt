@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
 # Windows x86-64 (PE) build with Homebrew's mingw-w64: d3d12.dll, dxgi.dll and the
 # Win32 test programs.
 #   meson setup build-wine/mingw --cross-file cross/mingw-x86_64.txt -Ddxc=<path to dxc>

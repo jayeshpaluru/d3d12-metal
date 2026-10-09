@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Front-end counters for D3D12METAL_STATS=1: when the variable is set, every 120th Present prints the
 // per-frame averages of what happened since the last report (submits, encoders, descriptor writes, ...)
 // on stderr. When it is not set, the counters cost one predictable branch.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // The format table: for each mtlb_format (DXGI_FORMAT numbering) its block
 // geometry, capability flags and Metal pixel and vertex formats. Everything
 // else (mtlb_format_get_info, to_pixel_format, to_vertex_format) reads this one

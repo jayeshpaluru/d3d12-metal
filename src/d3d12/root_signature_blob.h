@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Root signature serialization: the DXBC container with an "RTS0" part that
 // D3D12SerializeRootSignature produces (versions 1.0 and 1.1).
 #pragma once

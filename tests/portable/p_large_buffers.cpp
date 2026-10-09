@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Typed buffer views above the texture buffer limit. Metal texture buffers hold at most 2^28 texels (measured
 // on Apple GPUs); the game this layer targets makes 419,430,400-element R16_UINT views of an 800 MB buffer.
 // Such a view is clamped to the limit: elements up to the limit read as stored, the rest read as zero.

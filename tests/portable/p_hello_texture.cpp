@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // D3D12HelloTexture and D3D12HelloConstBuffers (Microsoft's samples) rendered offscreen: the same root
 // signatures (a descriptor table with a static sampler; a descriptor table with a constant buffer),
 // resources, uploads and draws, with the output read back and compared to what the samples draw.

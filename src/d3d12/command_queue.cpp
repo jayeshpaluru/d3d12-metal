@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 #include "d3d12/command_queue.h"
 #include "common/stats.h"
 

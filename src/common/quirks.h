@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Workarounds for individual shaders (and games), applied when a pipeline is created.
 //
 // Some games have shaders that are only correct with the order of execution one GPU gives them; other

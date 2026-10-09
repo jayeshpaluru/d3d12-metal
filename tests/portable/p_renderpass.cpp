@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Render passes (ID3D12GraphicsCommandList4): clears by beginning access, depth, resolves at the end, and a pass
 // split into a suspending and a resuming one across two lists.
 #include "color_ps.h"

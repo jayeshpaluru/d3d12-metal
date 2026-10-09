@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
 # Shared by install-game.sh, uninstall-game.sh and run-game.sh (sourced).
 #
 # Environment (defaults in brackets):
@@ -13,7 +14,7 @@
 #   GAME_OUT           the build to install [build-wine/out] (install-game.sh; an older build for comparisons)
 
 game_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-WINE_ROOT="${WINE_ROOT:-/Users/jsp/code/deps/wine/Wine Devel.app/Contents/Resources/wine}"
+WINE_ROOT="${WINE_ROOT:-${DEPS_DIR:-$HOME/code/deps}/wine/Wine Devel.app/Contents/Resources/wine}"
 
 # Game profiles. Each defines the exe, Steam app id, install folder name (under steamapps/common), default game
 # arguments and the window title to capture. GAME_EXE, GAME_APPID, GAME_INSTALL_DIR and GAME_ARGS from the
@@ -52,7 +53,7 @@ run() {
 # The prefix the scripts act on: GAME_WINEPREFIX if set (run-game.sh --direct sets it), else the Steam prefix. The
 # ambient WINEPREFIX is ignored on purpose, so a shell left pointing at the test prefix cannot redirect a Steam install.
 game_prefix() {
-    echo "${GAME_WINEPREFIX:-${STEAM_WINEPREFIX:-/Users/jsp/code/deps/wineprefix-steam}}"
+    echo "${GAME_WINEPREFIX:-${STEAM_WINEPREFIX:-${DEPS_DIR:-$HOME/code/deps}/wineprefix-steam}}"
 }
 
 # Sets game_dir: GAME_DIR if given, else the first steamapps/common/*/<exe> of the prefix's Steam. Returns 1 if none.

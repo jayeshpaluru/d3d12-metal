@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // The on-disk shader cache: a second device (a fresh in-memory cache, as a second run of the application) is
 // served from disk, damaged entries are rebuilt, D3D12METAL_CACHE=0 turns it off, and the size limit evicts.
 //

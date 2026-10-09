@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Compiles HLSL to DXBC with the d3dcompiler_47 of the Wine it runs under and writes the bytes as a C array.
 // Used by tools/gen-dxbc-test-shaders.sh to make tests/shaders/dxbc_*.h; not part of the test run.
 //   dxbc_compile.exe <input.hlsl> <entry> <target, e.g. vs_5_0> <output.h> <array name>

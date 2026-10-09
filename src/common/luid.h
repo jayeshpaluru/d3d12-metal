@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Conversion between Metal registry ids and the LUIDs DXGI and D3D12 report.
 #pragma once
 

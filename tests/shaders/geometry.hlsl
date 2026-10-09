@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Geometry shader emulation: each point becomes a square of half-size 0.1 (a triangle strip of four vertices).
 struct VSOutput
 {

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: LGPL-2.1-or-later
 """Validates the Godot test project's screenshot (tests/godot/project/main.tscn).
 
 usage: check_godot_screenshot.py <file.png>

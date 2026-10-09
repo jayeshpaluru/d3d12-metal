@@ -32,13 +32,13 @@ The layer ships replacement `d3d12.dll` / `dxgi.dll` that implement the D3D12/DX
 - macOS on Apple Silicon (arm64) with the Xcode Command Line Tools
 - [Metal Shader Converter](https://developer.apple.com/metal/shader-converter/) (headers in `/usr/local/include`, `libmetalirconverter.dylib` in `/usr/local/lib`)
 - `brew install meson ninja directx-headers` (DirectX-Headers provides `d3d12.h`)
-- A DXC build (HLSL to DXIL) for the test shaders; found on `PATH`, or pass it explicitly, e.g. `meson setup build -Ddxc=/Users/jsp/code/deps/dxc-build/bin/dxc`
+- A DXC build (HLSL to DXIL) for the test shaders; found on `PATH`, or pass it explicitly, e.g. `meson setup build -Ddxc=$DEPS_DIR/dxc-build/bin/dxc`
 - For the Wine build: `brew install mingw-w64` (the PE DLLs and Win32 test programs), a Wine 11 for macOS (x86-64, runs under Rosetta 2; developed against the Gcenx build 11.18), Rosetta 2, and a Metal Shader Converter dylib that includes the x86-64 slice (the shipped one is universal)
 
 ## Building and testing
 
 ```sh
-meson setup build -Ddxc=/Users/jsp/code/deps/dxc-build/bin/dxc   # omit if dxc is on PATH
+meson setup build -Ddxc=$DEPS_DIR/dxc-build/bin/dxc   # omit if dxc is on PATH
 meson compile -C build
 meson test -C build
 ```
@@ -48,7 +48,7 @@ meson test -C build
 The Wine flavour is two cross builds, `d3d12.dll` + `dxgi.dll` (x86-64 PE, MinGW) and `x86_64-unix/d3d12metal.so` (x86-64 macOS, loaded by Wine's unix loader), plus the Win32 test programs:
 
 ```sh
-tools/build-wine.sh --dxc /Users/jsp/code/deps/dxc-build/bin/dxc    # -> build-wine/out/
+tools/build-wine.sh --dxc $DEPS_DIR/dxc-build/bin/dxc    # -> build-wine/out/
 tools/run-wine-tests.sh                                             # wine_basic, swapchain_test, hello_triangle
 ```
 
@@ -68,7 +68,7 @@ To use the layer with another program put `d3d12.dll` and `dxgi.dll` next to its
 N frames, prints the frame rate, saves a screenshot and quits. Download the official Windows build (untrusted: only run it under Wine):
 
 ```sh
-mkdir -p /Users/jsp/code/deps/godot && cd /Users/jsp/code/deps/godot
+mkdir -p $DEPS_DIR/godot && cd $DEPS_DIR/godot
 gh release download 4.7.2-stable -R godotengine/godot -p 'Godot_v4.7.2-stable_win64.exe.zip' -D . && unzip Godot_v4.7.2-stable_win64.exe.zip
 cd - && tools/build-wine.sh --dxc <dxc> && tools/run-godot-test.sh [--method forward_plus|mobile] [--frames N] [--stats]
 ```
@@ -100,7 +100,7 @@ The tests are headless: they render offscreen on the default Metal device and re
 
 ## Running the game
 
-Marvel's Spider-Man Remastered (Steam app 1817070) runs in the Steam prefix (`/Users/jsp/code/deps/wineprefix-steam`, Steam started with
+Marvel's Spider-Man Remastered (Steam app 1817070) runs in the Steam prefix (`$DEPS_DIR/wineprefix-steam`, Steam started with
 `tools/start-steam.sh`). After `tools/build-wine.sh`:
 
 ```sh

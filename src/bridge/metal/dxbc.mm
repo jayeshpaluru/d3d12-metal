@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // DXBC (Shader Model 4 and 5) support: such shaders are converted to DXIL by Microsoft's dxilconv
 // (third_party/dxilconv, libdxilconv.dylib) before Metal Shader Converter sees them.
 //

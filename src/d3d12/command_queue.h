@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // ID3D12CommandQueue backed by an mtlb queue.
 #pragma once
 

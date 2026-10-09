@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Textures, shader resource views and samplers, checked by what a compute shader reads
 // (tests/shaders/probe.hlsl): texture and buffer views of every kind, mip and slice ranges, component
 // mappings, address modes, filters, null descriptors, descriptor copies, format reinterpretation,

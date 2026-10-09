@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // A timestamp heap whose counter sample buffer cannot be made: the failure is remembered, creation is not tried again
 // for every timestamp, and the queue keeps working.
 #include "bridge/mtlb.h"

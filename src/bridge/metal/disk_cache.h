@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // The on-disk cache of Metal Shader Converter output (see docs/ARCHITECTURE.md, "Shader cache").
 // Entries are files named after a SHA-256 key under a cache directory; every file carries a header
 // and a checksum, so a damaged or foreign file is detected, deleted and rebuilt.

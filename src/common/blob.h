@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // ID3DBlob implementation used for serialized root signatures and error text.
 #pragma once
 

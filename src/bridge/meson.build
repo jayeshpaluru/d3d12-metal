@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
 if host_system == 'darwin'
   bridge_sources += files(
     'metal/descriptors.mm',

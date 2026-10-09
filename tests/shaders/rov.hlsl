@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Rasterizer ordered views: instance i of a full-screen triangle does value = value * 31 + i + 1 on each pixel's element of a
 // buffer. Applied in submission order (what a ROV guarantees) the result is one fixed number per pixel; a plain UAV
 // gives that only when the hardware happens to keep overlapping fragments in order. Register b0 holds the width, u0 is

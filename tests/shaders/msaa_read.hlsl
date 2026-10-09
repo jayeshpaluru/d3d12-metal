@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Reads every sample of one pixel of a multisampled texture.
 Texture2DMS<float4> ms : register(t0);
 RWStructuredBuffer<float4> results : register(u0);

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Vertex input through the converter's stage-in function: two vertex buffer
 // slots, three attributes of different formats. Slot 0 interleaves a float3
 // position and a float2 offset (stride 20); slot 1 holds R8G8B8A8_UNORM colours

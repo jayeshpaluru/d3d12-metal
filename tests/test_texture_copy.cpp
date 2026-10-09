@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Texture copies with sub-rectangles in both directions, and the footprints
 // that describe the buffer side of them.
 #include <cstring>

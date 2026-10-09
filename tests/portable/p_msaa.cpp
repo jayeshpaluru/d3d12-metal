@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Multisampling: 4x render targets and depth buffers, sample count queries, ResolveSubresource, and reading
 // the samples of a multisampled texture in a shader.
 #include <cmath>

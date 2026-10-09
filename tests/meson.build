@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
 test_deps = [directx_headers]
 # Every test gets a shader cache directory of its own (never the user's, never shared between parallel tests).
 test_cache_root = meson.current_build_dir() / 'shader-cache'

@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
 # Launches the game directly. Steam must already be running in its prefix; this never touches wineserver or Steam.
 # usage: GAME=sm1|sm2 tools/game/launch.sh <WINEDEBUG> <logfile> [game args]   (game args default to the profile's: -nolauncher)
 # Stop the game with tools/run-game.sh --kill (kills only the game by exe name).

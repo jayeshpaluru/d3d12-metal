@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Backend-internal object definitions. Public handles are pointers to these
 // structs cast to uint64_t.
 #pragma once

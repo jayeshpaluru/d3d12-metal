@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Placement heaps: resources placed at offsets of an MTLHeap, aliasing each other where the application
 // places them over the same memory.
 #include "internal.h"

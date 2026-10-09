@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 #include "d3d12/command_stream.h"
 #include "d3d12/device.h"
 #include "d3d12/meta_command.h"

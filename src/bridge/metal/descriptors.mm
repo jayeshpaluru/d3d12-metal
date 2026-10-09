@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // What goes into descriptors: texture views, typed buffer views (texture buffers),
 // null descriptors and samplers, in the layout the Metal shader converter reads
 // (IRDescriptorTableEntry; see docs/ARCHITECTURE.md).

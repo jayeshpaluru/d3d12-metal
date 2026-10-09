@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // C entry points of dxgi.dll.
 #include "dxgi/factory.h"
 

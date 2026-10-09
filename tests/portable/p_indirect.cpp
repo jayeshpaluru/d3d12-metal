@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // ExecuteIndirect: draws, indexed draws and dispatches read from an argument buffer, with and without a
 // count buffer, and signatures whose commands also change root constants and vertex buffers.
 #include "color_ps.h"

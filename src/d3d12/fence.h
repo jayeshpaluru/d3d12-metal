@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // ID3D12Fence backed by a Metal shared event.
 #pragma once
 

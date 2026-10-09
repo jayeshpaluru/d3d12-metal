@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Descriptors written by the front-end without a bridge call must equal what the backend would build:
 // buffer views (compared with mtlb_buffer_view), sampler caching and sampler argument sanitising.
 #include <cmath>

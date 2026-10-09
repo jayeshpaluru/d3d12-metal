@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: LGPL-2.1-or-later
 """Generates the Wine unix-call transport of the mtlb bridge from mtlb.h.
 
 mtlb.h is the single description of the bridge API. Every `MTLB_EXPORT`

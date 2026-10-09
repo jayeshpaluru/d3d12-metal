@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // D3D12HelloTexture: a textured triangle (shaders.hlsl of the sample).
 struct PSInput
 {

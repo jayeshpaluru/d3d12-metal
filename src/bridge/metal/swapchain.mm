@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Swap chains: a CAMetalLayer per window and the pass that puts a back buffer on it.
 //
 // The application renders into ordinary textures (the DXGI back buffers); a

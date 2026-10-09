@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Storage behind the Set/GetPrivateData methods of ID3D12Object and IDXGIObject.
 #pragma once
 

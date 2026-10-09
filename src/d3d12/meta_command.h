@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // ID3D12MetaCommand and the one meta command the layer offers: the DirectStorage GDeflate decompressor.
 //
 // DirectStorage 1.2 looks for a meta command with a fixed id (the one Nvidia, AMD and Intel drivers expose) and,

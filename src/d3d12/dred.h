@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Device Removed Extended Data: accepted and empty. The layer never reports a
 // removed device, so there is nothing to record; applications that opt in
 // (D3D12GetDebugInterface) or query the device get objects that say so.

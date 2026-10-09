@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 /* Win32 input helper: run inside the game's Wine prefix, needs no macOS permissions.
  * usage: wine keys.exe [-w <title substring>] [-m sendinput|post] <step>...
  * steps: enter esc space tab up down left right f1..f12 a..z 0..9 (one key press), hold:<key>:<ms>,

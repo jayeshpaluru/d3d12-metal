@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
 # Launches the game through the running Steam client with the layer installed, and watches it: tails the layer's log
 # (build-wine/game-logs/d3d12metal.log) and any log or crash dump the game writes under the prefix's user profile or
 # its own folder, and takes window screenshots into build-wine/game-screens/ until the game exits or a timeout.
@@ -62,7 +63,7 @@ if [ "$kill_only" = 1 ]; then
 fi
 
 if [ "$direct" = 1 ]; then
-    export GAME_WINEPREFIX="${GAME_WINEPREFIX:-/Users/jsp/code/deps/wineprefix}"
+    export GAME_WINEPREFIX="${GAME_WINEPREFIX:-${DEPS_DIR:-$HOME/code/deps}/wineprefix}"
     # The point of --direct is to prove the registry overrides and the conf file work without a shell environment.
     unset WINEDLLOVERRIDES WINEDLLPATH
     : "${start_timeout:=60}"

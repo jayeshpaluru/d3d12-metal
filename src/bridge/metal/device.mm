@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Device, buffer, descriptor heap, texture and event objects.
 #include "internal.h"
 

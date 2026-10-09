@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Per-shader quirks (src/common/quirks.h): the hash, the built-in table, the configuration lists, and the effect of
 // kQuirkForceComputeBarrier on a real pipeline: a barrier record after each dispatch (Dispatch and ExecuteIndirect)
 // that the application did not record, seen through the backend's barrier counter.

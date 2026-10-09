@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // The feature level the layer reports: 12_0 by default; `feature_level=12_1` (D3D12METAL_FEATURE_LEVEL=12_1) raises it to
 // 12_1 and reports rasterizer ordered views, which the converter backs (tests/portable/p_rov.cpp), while conservative
 // rasterization stays unsupported. Run as `test_feature_level 12_0` and `test_feature_level 12_1` with the variable set.

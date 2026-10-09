@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // A compute shader that carries its root signature (the RTS0 part of the DXIL container): pipelines made from it
 // need no root signature of their own. Writes the thread index plus a root constant into a root UAV.
 RWStructuredBuffer<uint> out_buffer : register(u0);

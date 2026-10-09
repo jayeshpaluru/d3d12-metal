@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // ID3D12Device (implemented up to ID3D12Device2).
 #pragma once
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Command stream validation: the backend must reject malformed records
 // instead of reading past them.
 #include <cstring>

@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
 # Installs the layer next to a game: d3d12.dll and dxgi.dll beside the exe, d3d12metal.so in x86_64-unix/, a default
 # d3d12metal.conf (log file, API trace), and per-app DLL overrides in the Wine prefix's registry so they apply when
 # Steam launches the game (the environment of a shell does not reach it):

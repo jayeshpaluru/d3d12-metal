@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later AND Apache-2.0
 // GDeflate decompression kernels (MSL), included as a raw string by gdeflate.mm and by the standalone tools that
 // compile it. See THIRD_PARTY_NOTICES.md: the decoding algorithm (a SIMD group of 32 lanes decodes the 32
 // interleaved bitstreams of one 64 KiB tile, one Huffman symbol per lane and round) is a port of the reference

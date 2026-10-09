@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // D3D12GetInterface and the Agility SDK configuration objects. The layer is the only D3D12 runtime there is,
 // so an application's choice of SDK version and path is accepted and ignored, and the device factory creates
 // devices like D3D12CreateDevice does.

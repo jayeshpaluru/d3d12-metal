@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Minimal helpers for the headless tests: each test is a plain executable that
 // returns non-zero on the first failed check.
 #pragma once

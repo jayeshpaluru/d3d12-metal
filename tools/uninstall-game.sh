@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
 # Undoes tools/install-game.sh: restores the files it backed up (*.d3d12metal-orig), removes the ones it added and
 # the per-app DLL overrides from the Wine prefix's registry. Safe to run again.
 #

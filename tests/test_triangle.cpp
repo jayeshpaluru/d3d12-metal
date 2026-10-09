@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Renders a triangle whose colour comes from four root constants, then reads
 // the render target back.
 #include "render_context.h"

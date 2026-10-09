@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // A pixel shader output whose type differs from the render target format (an integer written to a normalised
 // target, as games do with masked outputs) must not make the pipeline fail; the other targets render normally.
 #include "rt_mismatch_ps.h"

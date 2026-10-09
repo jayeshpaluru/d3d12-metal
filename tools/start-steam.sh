@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
 # Launch the Windows Steam client in its own Wine prefix (kept separate from the
 # test prefix, whose wineserver the test scripts kill).
 #   WINE_ROOT             directory with bin/wine [the Gcenx Wine Devel app in deps]
@@ -15,8 +16,8 @@
 # built with mingw on first use and reinstalled whenever a Steam update
 # restores the real steamwebhelper.exe.
 set -euo pipefail
-WINE_ROOT="${WINE_ROOT:-/Users/jsp/code/deps/wine/Wine Devel.app/Contents/Resources/wine}"
-export WINEPREFIX="${STEAM_WINEPREFIX:-/Users/jsp/code/deps/wineprefix-steam}"
+WINE_ROOT="${WINE_ROOT:-${DEPS_DIR:-$HOME/code/deps}/wine/Wine Devel.app/Contents/Resources/wine}"
+export WINEPREFIX="${STEAM_WINEPREFIX:-${DEPS_DIR:-$HOME/code/deps}/wineprefix-steam}"
 export WINEDEBUG="${WINEDEBUG:--all}"
 # Rosetta hides AVX/AVX2/FMA/F16C from x86 code unless asked; Spider-Man 2
 # requires AVX2 and F16C. Games launched by Steam inherit this.

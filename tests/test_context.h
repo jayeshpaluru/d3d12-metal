@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Shared setup for the rendering and copy tests: a device, a direct queue and a
 // fence for waiting on the queue, plus small resource-creation helpers.
 #pragma once

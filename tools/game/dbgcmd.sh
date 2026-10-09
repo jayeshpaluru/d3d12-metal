@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
 # Runs winedbg commands against the running game: tools/game/dbgcmd.sh "info thread" "x/4gx 0x1000"
 source "$(dirname "${BASH_SOURCE[0]}")/env.sh"
 pid="$(game_winedbg_pid)"; [ -n "$pid" ] || { echo "$GAME_EXE not running" >&2; exit 1; }

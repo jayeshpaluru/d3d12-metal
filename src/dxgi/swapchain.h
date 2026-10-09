@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // DXGI swap chains (IDXGISwapChain .. IDXGISwapChain4) for D3D12 command queues.
 #pragma once
 

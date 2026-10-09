@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Exported root signature entry points of d3d12.dll.
 #include <cstring>
 #include <string>

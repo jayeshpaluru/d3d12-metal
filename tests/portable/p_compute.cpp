@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Unordered access views and compute: a compute shader (tests/shaders/fill.hlsl) writes patterns into a UAV
 // texture and buffers, uses a UAV counter, typed UAV loads and stores and raw byte address stores, with
 // root constants and UAV barriers between dispatches; ClearUnorderedAccessView{Uint,Float} fills views.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Finds the CAMetalLayer of a Wine window.
 //
 // Wine's macOS driver (winemac.so) keeps each top-level window in a WineWindow

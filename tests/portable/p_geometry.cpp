@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Geometry shader emulation: a shader that expands each point into a quad, drawn with DrawInstanced and
 // DrawIndexedInstanced, and stream output (refused).
 #include "geometry_gs.h"

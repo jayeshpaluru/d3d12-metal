@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // DXGI format helpers: mapping to bridge formats and subresource layout maths.
 #pragma once
 

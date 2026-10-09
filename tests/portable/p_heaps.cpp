@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Heaps and placed resources: creation, placement and aliasing of buffers and textures, allocation info,
 // the forced initial clear of placed render targets and depth-stencils, residency calls, and the calls that
 // are deliberately unsupported (reserved resources).

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Declarations of the DXGI interfaces and types the layer implements.
 //
 // DirectX-Headers ships d3d12.h and dxgiformat.h/dxgicommon.h but not dxgi.h

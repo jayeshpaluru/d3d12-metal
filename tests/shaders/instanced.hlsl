@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Draws a small square at a position from the vertex buffer, moved by a per-instance offset and coloured by a
 // per-instance colour. Vertex slot 0 is per-vertex, slot 1 per-instance.
 struct VSInput

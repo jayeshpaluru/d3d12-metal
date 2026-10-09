@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
 # Drives a freshly launched game from the profile menu into the open world (tools/game/keys.sh, no macOS permissions needed).
 # It looks at the screen (tools/game/state.sh) before every key: picks the profile row, confirms CONTINUE, waits while loading and
 # returns once the open world has been seen twice in a row. Never confirms anything it does not recognise: a screen that is not the

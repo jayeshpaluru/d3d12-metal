@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
 # Runs the Win32 tests under Wine (build them first with tools/build-wine.sh):
 #   wine_basic.exe                  device, copies, offscreen triangle, fence events
 #   p_*.exe                         the portable tests (tests/portable), also run natively
@@ -20,8 +21,8 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 out="$root/build-wine/out"
 screens="$root/build-wine/screens"
 logs="$root/build-wine/logs"
-WINE_ROOT="${WINE_ROOT:-/Users/jsp/code/deps/wine/Wine Devel.app/Contents/Resources/wine}"
-export WINEPREFIX="${WINEPREFIX:-/Users/jsp/code/deps/wineprefix}"
+WINE_ROOT="${WINE_ROOT:-${DEPS_DIR:-$HOME/code/deps}/wine/Wine Devel.app/Contents/Resources/wine}"
+export WINEPREFIX="${WINEPREFIX:-${DEPS_DIR:-$HOME/code/deps}/wineprefix}"
 
 for path in "$out/d3d12.dll" "$out/dxgi.dll" "$out/x86_64-unix/d3d12metal.so" "$out/wine_basic.exe" \
             "$out/swapchain_test.exe" "$out/exports_test.exe" "$out/hello_triangle.exe" "$out/hello_samples.exe" "$WINE_ROOT/bin/wine"; do

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Rasterizer ordered views (tests/shaders/rov.hlsl). Many instances of a full-screen triangle update the same buffer
 // elements and texels with an update that depends on the order (value = value * 31 + instance + 1). With a ROV the
 // result must be the in-order one at every pixel; the same draw with a plain UAV shows what the hardware does without

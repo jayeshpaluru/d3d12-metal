@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Two draws whose colour comes from a constant buffer: the first through a
 // descriptor table in a shader-visible heap, the second through a root CBV.
 #include "render_context.h"

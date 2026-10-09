@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
 # Builds the Wine flavour of d3d12-metal into build-wine/out:
 #   d3d12.dll, dxgi.dll              PE front-end (MinGW cross build)
 #   x86_64-unix/d3d12metal.so        Metal backend + unix-call table (x86-64 macOS)

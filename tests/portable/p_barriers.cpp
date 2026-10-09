@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Synchronisation between the passes of one command list. Resources are not hazard tracked and shaders reach
 // them through addresses and descriptor tables, so a missing barrier, fence or memory barrier shows up as
 // stale data. Each sequence runs many times in one list; every result is checked.

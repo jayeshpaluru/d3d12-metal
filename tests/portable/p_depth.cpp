@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Depth and stencil: DSVs, ClearDepthStencilView, depth testing and writing, stencil operations, depth-only
 // passes, depth planes copied to buffers (planar footprints), a depth texture read through an SRV, D24S8, and
 // descriptor increment sizes per heap type.

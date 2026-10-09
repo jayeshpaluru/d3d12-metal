@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 /*
  * Pieces of the Wine unix-call transport shared by the PE client and the unix
  * module. The per-function parts (indices, parameter structs, thunks) are
