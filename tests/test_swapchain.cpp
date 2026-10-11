@@ -5,6 +5,7 @@
 // backend's present dump: an RGBA back buffer must reach the BGRA layer with
 // its channels in the right place.
 #include <cstdlib>
+#include <unistd.h>
 #include <string>
 
 #include "foreign_queue.h"
@@ -54,7 +55,8 @@ struct Frame {
 int main()
 {
     test_install_layer_provider();
-    const std::string dump = std::string(getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp") + "/d3d12metal_test_swapchain.png";
+    // One file per process: tests run in parallel, and a shared name had them remove and overwrite each other's dump.
+    const std::string dump = std::string(getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp") + "/d3d12metal_test_swapchain_" + std::to_string(getpid()) + ".png";
     std::remove(dump.c_str());
     setenv("D3D12METAL_DUMP_PRESENT", dump.c_str(), 1);
     setenv("D3D12METAL_DUMP_PRESENT_FRAME", "3", 1);
@@ -125,6 +127,7 @@ int main()
     CHECK(test_png_pixel(dump.c_str(), 8, 8, rgb));
     std::printf("presented pixel: (%u,%u,%u)\n", rgb[0], rgb[1], rgb[2]);
     CHECK(rgb[0] > 250 && rgb[1] < 5 && rgb[2] > 123 && rgb[2] < 133);
+    std::remove(dump.c_str());
 
     // Resize, including format changes the layer has to follow.
     const DXGI_FORMAT formats[] = {DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R10G10B10A2_UNORM,
