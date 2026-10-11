@@ -609,18 +609,28 @@ void Device::remove_pending_init(Resource *resource)
     pending_init_.erase(std::remove(pending_init_.begin(), pending_init_.end(), resource), pending_init_.end());
 }
 
-std::vector<Resource *> Device::take_pending_init(std::vector<uint8_t> &stream)
+std::vector<Resource *> Device::take_pending_init(std::vector<uint8_t> &stream, const std::vector<CommandList *> &lists)
 {
     std::vector<Resource *> held;
     {
         std::lock_guard<std::mutex> lock(init_mutex_);
+        if (pending_init_.empty())
+            return held;
+        // Only what these lists use: a submit on another queue would clear it with no order against its first use
+        // (a copy queue taking the clear of a texture the direct queue draws into could wipe the drawing).
         // A resource whose last reference went away is being destroyed (its destructor waits for this lock):
         // nothing to initialise, and it must not be resurrected.
-        for (Resource *resource : pending_init_) {
+        auto used = [&](Resource *resource) {
+            return std::any_of(lists.begin(), lists.end(), [&](CommandList *list) { return list->references(resource); });
+        };
+        auto keep = std::remove_if(pending_init_.begin(), pending_init_.end(), [&](Resource *resource) {
+            if (!used(resource))
+                return false;
             if (resource->try_add_internal_ref())  // keeps it alive until the submission is done
                 held.push_back(resource);
-        }
-        pending_init_.clear();
+            return true;
+        });
+        pending_init_.erase(keep, pending_init_.end());
     }
     if (held.empty())
         return held;

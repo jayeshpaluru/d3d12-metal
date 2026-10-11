@@ -330,7 +330,9 @@ void profile_report(unsigned frames)
     }
     std::sort(rows.begin(), rows.end(), [](const Row &a, const Row &b) { return a.nanos > b.nanos; });
     log_printf("d3d12-metal api profile (per frame): %.2f ms in %zu methods (nested calls counted in each)", total / 1e6, rows.size());
-    for (size_t i = 0; i < std::min<size_t>(rows.size(), 14); ++i)
+    // D3D12METAL_PROFILE_ROWS (default 14) methods, the costliest first.
+    static const size_t shown = getenv("D3D12METAL_PROFILE_ROWS") ? strtoul(getenv("D3D12METAL_PROFILE_ROWS"), nullptr, 10) : 14;
+    for (size_t i = 0; i < std::min(rows.size(), shown); ++i)
         log_printf("d3d12-metal   %7.3f ms  %9.1f calls  %6.0f ns each  %s", rows[i].nanos / 1e6, rows[i].calls,
                    rows[i].calls > 0 ? rows[i].nanos / rows[i].calls : 0.0, rows[i].name.c_str());
 }

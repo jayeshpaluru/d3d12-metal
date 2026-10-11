@@ -18,6 +18,8 @@
 
 namespace d3d12m {
 
+class CommandList;
+
 class Resource;
 class RootSignature;
 
@@ -47,7 +49,9 @@ public:
     // command stream that clears them.
     void add_pending_init(Resource *resource);
     void remove_pending_init(Resource *resource);
-    std::vector<Resource *> take_pending_init(std::vector<uint8_t> &stream);
+    // Records the first-use clears of the pending placed render targets and depth-stencils that `lists` reference,
+    // so the clear runs on the queue that first uses the resource, ahead of that use; the others stay pending.
+    std::vector<Resource *> take_pending_init(std::vector<uint8_t> &stream, const std::vector<CommandList *> &lists);
 
     // Descriptor heaps by CPU memory, to find the heap behind a CPU descriptor handle.
     void register_heap(DescriptorHeap *heap);

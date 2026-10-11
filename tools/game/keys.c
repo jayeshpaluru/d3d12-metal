@@ -3,7 +3,7 @@
  * usage: wine keys.exe [-w <title substring>] [-m sendinput|post] <step>...
  * steps: enter esc space tab up down left right f1..f12 a..z 0..9 (one key press), hold:<key>:<ms>,
  *        press:<key> / release:<key> (a key stays down across later steps), click:<x>:<y> (client coordinates),
- *        move:<dx>:<dy>:<ms> (relative mouse motion spread over ms, what a camera reads), mouse:<left|right>:<down|up>,
+ *        cursor:<x>:<y> (pointer only, no click), move:<dx>:<dy>:<ms> (relative mouse motion spread over ms, what a camera reads), mouse:<left|right>:<down|up>,
  *        wait:<ms>, focus (bring the window to the foreground), list (print windows)
  * Default is SendInput with scan codes (what DirectInput/raw input readers see); -m post sends WM_KEYDOWN/UP to the window. */
 #include <windows.h>
@@ -123,6 +123,13 @@ int main(int argc, char **argv)
         } else if (!strncmp(s, "mouse:", 6)) {
             const int right = !strncmp(s + 6, "right", 5), down = strstr(s + 6, ":down") != NULL;
             mouse(right ? (down ? MOUSEEVENTF_RIGHTDOWN : MOUSEEVENTF_RIGHTUP) : (down ? MOUSEEVENTF_LEFTDOWN : MOUSEEVENTF_LEFTUP), 0, 0);
+        } else if (!strncmp(s, "cursor:", 7)) {
+            /* moves the pointer only (out of the way of menus that follow it): no click */
+            int x, y;
+            if (sscanf(s + 7, "%d:%d", &x, &y) != 2) return 2;
+            POINT p = {x, y};
+            ClientToScreen(found, &p);
+            SetCursorPos(p.x, p.y);
         } else if (!strncmp(s, "click:", 6)) {
             int x, y;
             if (sscanf(s + 6, "%d:%d", &x, &y) != 2) return 2;

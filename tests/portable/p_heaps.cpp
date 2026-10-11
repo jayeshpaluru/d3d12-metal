@@ -212,6 +212,43 @@ int main()
         expect_pixel("clear survives a rejected submission", image.pixel(10, 10), {0, 0, 0, 0}, 0);
     }
 
+    // ---- The clear goes with the first submission that uses the target, not one on another queue ---------------------------
+    // A copy queue that submits between the creation and the first use must not take the clear: it would run in no order
+    // with the direct queue's drawing and could wipe it. The copy queue is held back by a fence so that a clear taken by it
+    // would run last.
+    {
+        ComPtr<ID3D12Heap> scratch = create_heap(gpu, D3D12_HEAP_TYPE_DEFAULT, 2 * kMiB);
+        D3D12_COMMAND_QUEUE_DESC copy_desc = {};
+        copy_desc.Type = D3D12_COMMAND_LIST_TYPE_COPY;
+        ComPtr<ID3D12CommandQueue> copy_queue;
+        CHECK_HR(gpu.device->CreateCommandQueue(&copy_desc, IID_PPV_ARGS(copy_queue.GetAddressOf())));
+        ComPtr<ID3D12Fence> gate, copy_done;
+        CHECK_HR(gpu.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(gate.GetAddressOf())));
+        CHECK_HR(gpu.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(copy_done.GetAddressOf())));
+        CHECK_HR(copy_queue->Wait(gate.Get(), 1));
+
+        ComPtr<ID3D12Resource> target = place(gpu, scratch.Get(), 0,
+                                              tex2d_desc(DXGI_FORMAT_R8G8B8A8_UNORM, 16, 16, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET),
+                                              D3D12_RESOURCE_STATE_RENDER_TARGET);
+        ComPtr<ID3D12GraphicsCommandList> copy_list = gpu.list(D3D12_COMMAND_LIST_TYPE_COPY);
+        CHECK_HR(copy_list->Close());
+        gpu.execute(copy_list.Get(), copy_queue.Get());
+        CHECK_HR(copy_queue->Signal(copy_done.Get(), 1));
+
+        ComPtr<ID3D12DescriptorHeap> rtvs = gpu.descriptor_heap(D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 1, false);
+        const D3D12_CPU_DESCRIPTOR_HANDLE rtv = rtvs->GetCPUDescriptorHandleForHeapStart();
+        gpu.device->CreateRenderTargetView(target.Get(), nullptr, rtv);
+        gpu.run([&](ID3D12GraphicsCommandList *list) {
+            list->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
+            const float red[4] = {1, 0, 0, 1};
+            list->ClearRenderTargetView(rtv, red, 0, nullptr);
+        });
+        CHECK_HR(gate->Signal(1));
+        CHECK_HR(copy_done->SetEventOnCompletion(1, nullptr));  // (no event: blocks until the value is reached)
+        const Image image = gpu.read_texture(target.Get(), 0, 4);
+        expect_pixel("drawing survives another queue's submission", image.pixel(8, 8), {255, 0, 0, 255}, 0);
+    }
+
     // ---- Placed targets created and released while another thread submits ------------------------------------------------
     {
         ComPtr<ID3D12Heap> scratch = create_heap(gpu, D3D12_HEAP_TYPE_DEFAULT, 2 * kMiB);

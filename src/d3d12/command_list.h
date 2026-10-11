@@ -6,6 +6,7 @@
 // the backend decides how they map onto Metal render passes.
 #pragma once
 
+#include <algorithm>
 #include <atomic>
 #include <mutex>
 #include <string>
@@ -74,6 +75,10 @@ public:
             slot = nullptr;
     }
     size_t size() const { return all_.size(); }
+    bool contains(const InternalRefCounted *object) const
+    {
+        return std::find(all_.begin(), all_.end(), object) != all_.end();
+    }
 
 private:
     // A small direct-mapped table of the objects added lately keeps a draw-heavy list from taking a reference
@@ -98,6 +103,8 @@ public:
                           ID3D12PipelineState *initial_state, REFIID riid, void **out);
 
     bool closed() const { return closed_; }
+    // The recording names `object` (a barrier, a render target, a copy, ...).
+    bool references(const InternalRefCounted *object) const { return refs_.contains(object); }
     const std::vector<uint8_t> &stream() const { return stream_; }
     // A queue replays the stream after ExecuteCommandLists returned, from the span captured then. A Reset meanwhile
     // retires the stream and references (reset_state) instead of waiting; the last end_submit frees them.
@@ -163,7 +170,10 @@ public:
     void STDMETHODCALLTYPE ClearRenderTargetView(D3D12_CPU_DESCRIPTOR_HANDLE RenderTargetView, const FLOAT ColorRGBA[ 4 ], UINT NumRects, const D3D12_RECT *pRects) override;
     void STDMETHODCALLTYPE ClearUnorderedAccessViewUint(D3D12_GPU_DESCRIPTOR_HANDLE ViewGPUHandleInCurrentHeap, D3D12_CPU_DESCRIPTOR_HANDLE ViewCPUHandle, ID3D12Resource *pResource, const UINT Values[ 4 ], UINT NumRects, const D3D12_RECT *pRects) override;
     void STDMETHODCALLTYPE ClearUnorderedAccessViewFloat(D3D12_GPU_DESCRIPTOR_HANDLE ViewGPUHandleInCurrentHeap, D3D12_CPU_DESCRIPTOR_HANDLE ViewCPUHandle, ID3D12Resource *pResource, const FLOAT Values[ 4 ], UINT NumRects, const D3D12_RECT *pRects) override;
-    void STDMETHODCALLTYPE DiscardResource(ID3D12Resource *, const D3D12_DISCARD_REGION *) override {}  // contents may be dropped: nothing to do
+    void STDMETHODCALLTYPE DiscardResource(ID3D12Resource *resource, const D3D12_DISCARD_REGION *region) override
+    {
+        D3D12M_TRACE(resource, region);  // contents may be dropped: nothing to do
+    }
     void STDMETHODCALLTYPE BeginQuery(ID3D12QueryHeap *pQueryHeap, D3D12_QUERY_TYPE Type, UINT Index) override;
     void STDMETHODCALLTYPE EndQuery(ID3D12QueryHeap *pQueryHeap, D3D12_QUERY_TYPE Type, UINT Index) override;
     void STDMETHODCALLTYPE ResolveQueryData(ID3D12QueryHeap *pQueryHeap, D3D12_QUERY_TYPE Type, UINT StartIndex, UINT NumQueries, ID3D12Resource *pDestinationBuffer, UINT64 AlignedDestinationBufferOffset) override;

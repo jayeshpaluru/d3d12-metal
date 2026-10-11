@@ -250,7 +250,7 @@ void CommandQueue::ExecuteCommandLists(UINT count, ID3D12CommandList *const *lis
         op->lists.push_back(list);
     }
     // Placed render targets and depth-stencils created since the last submission are cleared first.
-    op->initialized = device()->take_pending_init(op->init_stream);
+    op->initialized = device()->take_pending_init(op->init_stream, op->lists);
     if (g_stats_enabled) {
         stat_add(Stat::Submits);
         stat_add(Stat::CommandLists, count);
