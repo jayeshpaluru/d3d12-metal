@@ -436,10 +436,12 @@ public:
             [cb_ popDebugGroup];
         // Pooled buffers go back once the command buffer has run.
         if (!scratch_used_.empty() || !staging_used_.empty()) {
+            // The handler runs after this Replay is gone: it owns the lists.
             auto scratch_pool = queue_->scratch_pool, staging_pool = queue_->staging_pool;
+            auto scratch = std::move(scratch_used_), staging = std::move(staging_used_);
             [cb_ addCompletedHandler:^(id<MTLCommandBuffer>) {
-                scratch_pool->give(scratch_used_);
-                staging_pool->give(staging_used_);
+                scratch_pool->give(scratch);
+                staging_pool->give(staging);
             }];
         }
     }
@@ -1110,6 +1112,9 @@ mtlb_result Replay::clear_only_pass(const PendingClear &clear)
     }
     render_ = new_render_encoder(pass);
     end_render("clear_only_pass");
+    // The pass consumed sync_needed_ (it waited for what came before). Whatever encoder opens next reads or overwrites
+    // the cleared texture and must wait for this pass: without it, a copy right after the clear can run first on the GPU.
+    sync_needed_ = !sync_disabled_;
     return MTLB_OK;
 }
 
