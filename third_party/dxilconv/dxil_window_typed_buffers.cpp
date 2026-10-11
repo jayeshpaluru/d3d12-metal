@@ -361,10 +361,10 @@ int window(const void *dxil, uint32_t size, uint32_t space_offset, void **out, u
     for (uint32_t i = 0; i < header->PartCount; ++i) {
         const DxilPartHeader *part = GetDxilContainerPart(header, i);
         parts.push_back(part);
-        if (part->PartFourCC == DFCC_DXIL)
+        if (part->PartFourCC == DFCC_DXIL) {
             program = reinterpret_cast<const DxilProgramHeader *>(part + 1);
             program_size = part->PartSize;
-
+        }
     }
     if (!program || !IsValidDxilProgramHeader(program, program_size)) {
         diag = "no DXIL part";

@@ -8,6 +8,7 @@
 
 #include "t12.h"
 #include "typed_windows_cs.h"
+#include "typed_windows_srv_cs.h"
 
 namespace {
 
@@ -44,7 +45,7 @@ uint32_t word_at(const std::vector<uint8_t> &bytes, size_t i)
 struct Test {
     Gpu gpu;
     ComPtr<ID3D12RootSignature> signature;
-    ComPtr<ID3D12PipelineState> pso;
+    ComPtr<ID3D12PipelineState> pso, srv_only_pso;
     ComPtr<ID3D12DescriptorHeap> heap, cpu_heap;
     ComPtr<ID3D12Resource> results, lists;
     uint32_t *mapped_lists = nullptr;
@@ -61,6 +62,7 @@ struct Test {
         };
         signature = gpu.root_signature(parameters, 4, nullptr, 0, D3D12_ROOT_SIGNATURE_FLAG_NONE);
         pso = gpu.compute_pso(signature.Get(), T12_SHADER(g_typed_windows_cs));
+        srv_only_pso = gpu.compute_pso(signature.Get(), T12_SHADER(g_typed_windows_srv_cs));
         heap = gpu.descriptor_heap(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 32, true);
         cpu_heap = gpu.descriptor_heap(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 16, false);
         results = gpu.buffer(D3D12_HEAP_TYPE_DEFAULT, kThreads * 16, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
@@ -107,7 +109,7 @@ struct Test {
 
     // One dispatch of 64 x 256 threads; returns `words` words of the results buffer.
     std::vector<uint8_t> dispatch(UINT mode, UINT slot, const std::vector<UINT> &indices, const std::vector<UINT> &values,
-                                  size_t words)
+                                  size_t words, ID3D12PipelineState *state = nullptr)
     {
         CHECK(indices.size() <= 64 && values.size() <= 64);
         std::memset(mapped_lists, 0, 512);
@@ -118,7 +120,7 @@ struct Test {
             ID3D12DescriptorHeap *heaps[] = {heap.Get()};
             list->SetDescriptorHeaps(1, heaps);
             list->SetComputeRootSignature(signature.Get());
-            list->SetPipelineState(pso.Get());
+            list->SetPipelineState(state ? state : pso.Get());
             list->SetComputeRoot32BitConstants(0, 4, constants, 0);
             list->SetComputeRootDescriptorTable(1, gpu.gpu_handle(heap.Get(), slot));
             list->SetComputeRootConstantBufferView(2, lists->GetGPUVirtualAddress());
@@ -187,6 +189,11 @@ void r32_cases(Test &t)
     t.dispatch(0, 0, indices, values, 1);
 
     t.check_srv("R32 SRV load", 0, read_indices, expected);
+    {
+        const std::vector<uint8_t> got = t.dispatch(1, 0, read_indices, {}, read_indices.size(), t.srv_only_pso.Get());
+        for (size_t i = 0; i < read_indices.size(); ++i)
+            expect("R32 SRV load (a shader whose only typed buffers are SRVs)", read_indices[i], word_at(got, i), expected[i]);
+    }
     t.check_uav("R32 UAV load", 0, read_indices, expected);
     for (int i = 0; i < 6; ++i)
         expect("R32 CPU readback", stored[i], t.cpu_word(buffer.Get(), stored[i]), expected[i]);
@@ -250,6 +257,17 @@ void r32_cases(Test &t)
         t.gpu.device->CopyDescriptors(2, dst, dst_sizes, 3, src, src_sizes, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
         t.check_srv("CopyDescriptors SRV", 16, probe_indices, want);
         t.check_uav("CopyDescriptors UAV", 16, probe_indices, want);
+
+        // An overlapping copy within one heap, one slot down: a windowed view whose old slot receives a view without
+        // windows keeps its windows in its new slot.
+        t.srv(t.cpu_slot(11), buffer.Get(), f, 0, static_cast<UINT>(n));
+        t.srv(t.cpu_slot(12), nullptr, DXGI_FORMAT_R8G8B8A8_UNORM, 0, 0);
+        t.uav(t.cpu_slot(13), buffer.Get(), f, 0, static_cast<UINT>(n));
+        t.srv(t.cpu_slot(14), nullptr, DXGI_FORMAT_R8G8B8A8_UNORM, 0, 0);
+        t.gpu.device->CopyDescriptorsSimple(4, t.cpu_slot(10), t.cpu_slot(11), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        t.gpu.device->CopyDescriptorsSimple(3, t.gpu_slot(24), t.cpu_slot(10), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        t.check_srv("overlapping copy SRV", 24, probe_indices, want);
+        t.check_uav("overlapping copy UAV", 24, probe_indices, want);
 
         // Overwrite the windowed views in slots 16 and 18 with small views of another buffer.
         constexpr UINT kSmall = 1000;

@@ -334,6 +334,10 @@ Performance findings (Spider-Man, gameplay scene, `tools/game/measure.sh`):
   (NaN drops the primitive); only those stages' cache keys changed (`p_inf_position`).
 - **R32G32B32 typed buffer SRVs** read through a 16-byte-stride shadow the backend refills ahead of every submit (`p_rgb32_views`); they were
   null descriptors (Metal has no 96-bit formats). UAVs of these formats stay null.
+- Known limits: a shader-visible CBV/SRV/UAV heap carries a window table three times its size (72 MB for a million descriptors); a bundle
+  whose descriptor table is in no known heap, or a heap whose window table could not be made, points the windows at the descriptor table
+  itself (indices past 2^28 then read other descriptors); R32G32B32 shadows live as long as their source buffer and are refilled on every
+  submit of every queue (a ring of such views at moving offsets would keep adding shadows).
 - Debugging switches: `D3D12METAL_DUMP_SHADERS=<dir>` (every pipeline shader as DXIL, for `dxc -dumpbin`), `D3D12METAL_DUMP_PRESENT_EVERY=K`
   (every Kth present after `D3D12METAL_DUMP_PRESENT_FRAME`), `D3D12METAL_SERIALIZE=1` (each submission completes before the next),
   `D3D12METAL_GDEFLATE_DUMP`.

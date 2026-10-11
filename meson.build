@@ -63,7 +63,7 @@ portable_tests = [
   ['gdeflate', [], []],
   ['rov', ['rov'], []],
   ['atomics', [], ['atomics']],
-  ['typed_windows', [], ['typed_windows']],
+  ['typed_windows', [], ['typed_windows', 'typed_windows_srv']],
   ['rgb32_views', [], ['rgb32_views']],
 ]
 

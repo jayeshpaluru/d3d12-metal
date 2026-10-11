@@ -32,6 +32,7 @@ struct Converter {
     FreeFn free = nullptr;
     WindowFn window = nullptr;
     std::string error;
+    std::string identity = "none";
 };
 
 bool try_load(const std::string &path, Converter &out)
@@ -42,8 +43,19 @@ bool try_load(const std::string &path, Converter &out)
     out.convert = reinterpret_cast<ConvertFn>(dlsym(lib, "dxilconv_convert"));
     out.free = reinterpret_cast<FreeFn>(dlsym(lib, "dxilconv_free"));
     out.window = reinterpret_cast<WindowFn>(dlsym(lib, "dxilconv_window_typed_buffers"));
-    if (out.convert && out.free)
+    if (out.convert && out.free) {
+        // Its contents, not its modification time: an install copies the same library again.
+        if (FILE *f = std::fopen(path.c_str(), "rb")) {
+            uint64_t hash = 14695981039346656037ull;
+            unsigned char chunk[65536];
+            for (size_t n; (n = std::fread(chunk, 1, sizeof(chunk), f)) > 0;)
+                for (size_t i = 0; i < n; ++i)
+                    hash = (hash ^ chunk[i]) * 1099511628211ull;
+            std::fclose(f);
+            out.identity = "dxilconv:" + std::to_string(hash);
+        }
         return true;
+    }
     dlclose(lib);
     out.convert = nullptr;
     return false;
@@ -126,6 +138,11 @@ bool dxbc_to_dxil(const void *dxbc, uint64_t size, std::vector<uint8_t> &dxil, s
     dxil.assign(static_cast<uint8_t *>(blob), static_cast<uint8_t *>(blob) + blob_size);
     c.free(blob);
     return true;
+}
+
+std::string dxilconv_identity()
+{
+    return converter().identity;
 }
 
 int window_typed_buffers(const void *dxil, uint64_t size, uint32_t window_space_offset, std::vector<uint8_t> &out,

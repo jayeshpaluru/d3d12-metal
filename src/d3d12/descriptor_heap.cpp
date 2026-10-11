@@ -1,5 +1,6 @@
 #include "d3d12/descriptor_heap.h"
 
+#include <algorithm>
 #include <cstring>
 #include <new>
 
@@ -59,7 +60,12 @@ HRESULT DescriptorHeap::create(Device *device, const D3D12_DESCRIPTOR_HEAP_DESC 
             mtlb_buffer_info info;
             if (mtlb_descriptor_heap_create(device->handle(), desc.NumDescriptors * MTLB_TYPED_WINDOWS, &heap->windows_buffer_, &info)
                 == MTLB_OK) {
-                heap->windows_.store(static_cast<mtlb_descriptor *>(info.cpu_ptr));
+                // Null views until windowed views are written: a rewritten shader that indexes an ordinary typed buffer
+                // past 2^28 elements reads zero there (and its writes are dropped), as with any out-of-range index.
+                auto *windows = static_cast<mtlb_descriptor *>(info.cpu_ptr);
+                std::fill(windows, windows + size_t(desc.NumDescriptors) * MTLB_TYPED_WINDOWS,
+                          device->null_descriptor(MTLB_NULL_UAV_TYPED_BUFFER));
+                heap->windows_.store(windows);
                 heap->windows_gpu_address_ = info.gpu_address;
             } else {
                 D3D12M_LOG("descriptor heap: no window table (%s)", mtlb_last_error());

@@ -563,28 +563,26 @@ void Device::copy_view_info(DescriptorHeap *to_heap, size_t to_index, Descriptor
     ViewInfo *from = from_heap->shadow(static_cast<uint32_t>(from_index));
     if (!to || !from)
         return;
-    if (to_heap->has_windowed_views()) {
-        // Windowed views replaced by views without windows: past their first 2^28 elements they read zero, as before.
-        for (UINT k = 0; k < count; ++k)
-            if (to[k].windowed && !from[k].windowed)
+    if (from_heap->has_windowed_views() || to_heap->has_windowed_views()) {
+        // The windows of windowed views go along; windowed views replaced by views without windows get null ones (past
+        // their first 2^28 elements they read zero, as before). In the order a memmove takes when the ranges overlap
+        // in one heap, and before the view info moves, so that each source entry is still the source's.
+        const bool backwards = to_heap == from_heap && to_index > from_index;
+        for (UINT n = 0; n < count; ++n) {
+            const UINT k = backwards ? count - 1 - n : n;
+            if (from[k].windowed) {
+                const mtlb_descriptor *src = from_heap->windows(static_cast<uint32_t>(from_index + k), false);
+                mtlb_descriptor *dst = to_heap->windows(static_cast<uint32_t>(to_index + k), true);
+                if (src && dst) {
+                    std::memmove(dst, src, sizeof(mtlb_descriptor) * MTLB_TYPED_WINDOWS);
+                    to_heap->note_windowed_view();
+                }
+            } else if (to[k].windowed) {
                 clear_windows(to_heap, to_index + k);
-    }
-    std::memmove(static_cast<void *>(to), static_cast<const void *>(from), size_t(count) * sizeof(ViewInfo));
-    if (!from_heap->has_windowed_views())
-        return;
-    // The windows of windowed views go along (in the order a memmove takes when the ranges overlap in one heap).
-    const bool backwards = to_heap == from_heap && to_index > from_index;
-    for (UINT n = 0; n < count; ++n) {
-        const UINT k = backwards ? count - 1 - n : n;
-        if (!to[k].windowed)
-            continue;
-        const mtlb_descriptor *src = from_heap->windows(static_cast<uint32_t>(from_index + k), false);
-        mtlb_descriptor *dst = to_heap->windows(static_cast<uint32_t>(to_index + k), true);
-        if (src && dst) {
-            std::memcpy(dst, src, sizeof(mtlb_descriptor) * MTLB_TYPED_WINDOWS);
-            to_heap->note_windowed_view();
+            }
         }
     }
+    std::memmove(static_cast<void *>(to), static_cast<const void *>(from), size_t(count) * sizeof(ViewInfo));
 }
 
 void Device::clear_windows(DescriptorHeap *heap, size_t index)

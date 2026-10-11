@@ -54,16 +54,17 @@ std::string error_text(IRError *error, const char *what)
 // D3D12 semantics the converter leaves off by default: out-of-bounds buffer and texture reads return zero (and writes
 // are dropped), the descriptors' min LOD clamp and the samplers' LOD bias are applied, NaN coordinates sample as zero,
 // and equal vertex shaders give equal positions. Stages that output positions also turn infinite position components
-// into NaN, which drops the primitive as D3D12 clipping does, where Metal rasterizes it (Spider-Man 2 culls hair strand
+// into NaN (the last of them before rasterization: a vertex shader feeding geometry or tessellation stages keeps its
+// values), which drops the primitive as D3D12 clipping does, where Metal rasterizes it (Spider-Man 2 culls hair strand
 // vertices with x = +inf, w = 0: they drew streaks across the screen). D3D12METAL_COMPAT_FLAGS replaces them all.
-IRCompatibilityFlags compatibility_flags(IRShaderStage stage)
+IRCompatibilityFlags compatibility_flags(IRShaderStage stage, bool emulation)
 {
     static const char *override_flags = std::getenv("D3D12METAL_COMPAT_FLAGS");
     if (override_flags && *override_flags)
         return static_cast<IRCompatibilityFlags>(std::strtoul(override_flags, nullptr, 0));
     uint32_t flags = IRCompatibilityFlagBoundsCheck | IRCompatibilityFlagTextureMinLODClamp | IRCompatibilityFlagSamplerLODBias
                      | IRCompatibilityFlagSampleNanToZero | IRCompatibilityFlagPositionInvariance;
-    if (stage == IRShaderStageVertex || stage == IRShaderStageGeometry || stage == IRShaderStageDomain)
+    if ((stage == IRShaderStageVertex && !emulation) || stage == IRShaderStageGeometry || stage == IRShaderStageDomain)
         flags |= IRCompatibilityFlagVertexPositionInfToNan;
     return static_cast<IRCompatibilityFlags>(flags);
 }
@@ -192,11 +193,13 @@ CacheKey stage_key(RootSignature *root_signature, const void *dxil, uint64_t siz
 {
     Hasher h;
     h.update(std::string("stage"));
-    if (windowed)  // (the keys of shaders without typed buffers stay as they were)
+    if (windowed) {  // (the keys of shaders without typed buffers stay as they were)
         h.update(std::string("typed-buffer-windows-1"));
+        h.update(dxilconv_identity());
+    }
     h.update(DiskCache::converter_identity());
     h.update_value(kCacheRevision);
-    h.update_value(static_cast<uint32_t>(compatibility_flags(ir_stage)));
+    h.update_value(static_cast<uint32_t>(compatibility_flags(ir_stage, options.emulation)));
     if (minimum_gpu_family())  // (the keys without it stay as they were)
         h.update_value(minimum_gpu_family());
     h.update_value(static_cast<uint32_t>(ir_stage));
@@ -245,7 +248,7 @@ bool dxil_may_access_typed_buffers(const void *dxil, uint64_t size)
         cursor += 8;
         if (!resources || stride < 16 || cursor + uint64_t(resources) * stride > end)
             return false;
-        constexpr uint32_t kSrvTyped = 2, kUavTyped = 6, kTypedBuffer = 10;  // PSVResourceType, DXIL::ResourceKind
+        constexpr uint32_t kSrvTyped = 3, kUavTyped = 6, kTypedBuffer = 10;  // PSVResourceType, DXIL::ResourceKind
         for (uint32_t r = 0; r < resources; ++r) {
             const uint64_t entry = cursor + uint64_t(r) * stride;
             const uint32_t type = u32(entry);
@@ -352,6 +355,7 @@ mtlb_result convert_stage(Device *device, RootSignature *root_signature, const v
     }
     std::vector<uint8_t> rewritten;
     RootSignature *target = root_signature;
+    bool cacheable = true;
     if (windowed) {
         std::string window_error;
         const int result = window_typed_buffers(source, source_size, MTLB_WINDOW_SPACE_OFFSET, rewritten, window_error);
@@ -360,6 +364,7 @@ mtlb_result convert_stage(Device *device, RootSignature *root_signature, const v
             source_size = rewritten.size();
             target = windowed;
         } else if (result < 0) {
+            cacheable = false;  // (stored under the windowed key it would hide a working rewrite later)
             static std::atomic<bool> logged{false};
             if (!logged.exchange(true))
                 backend_log("%s (typed buffer views stay limited to their first 2^%d elements)", window_error.c_str(),
@@ -371,11 +376,25 @@ mtlb_result convert_stage(Device *device, RootSignature *root_signature, const v
     if (options.emulation)
         IRCompilerSetInputTopology(compiler, options.topology);
     IRCompilerSetGlobalRootSignature(compiler, target->ir);
-    IRCompilerSetCompatibilityFlags(compiler, compatibility_flags(ir_stage));
+    IRCompilerSetCompatibilityFlags(compiler, compatibility_flags(ir_stage, options.emulation));
 
     OwnedObject input(IRObjectCreateFromDXIL(static_cast<const uint8_t *>(source), source_size, IRBytecodeOwnershipNone));
     IRError *error = nullptr;
     OwnedObject output(IRCompilerAllocCompileAndLink(compiler, entry, input.ptr, &error));
+    if (!output.ptr && target != root_signature) {
+        // A window the windowed root signature does not declare (a range it could not scale): the original shader,
+        // limited to the first 2^28 elements of its typed buffers, against the application's root signature.
+        if (error)
+            IRErrorDestroy(error);
+        error = nullptr;
+        source = dxbc ? converted.data() : dxil;
+        source_size = dxbc ? converted.size() : size;
+        target = root_signature;
+        IRCompilerSetGlobalRootSignature(compiler, target->ir);
+        IRObjectDestroy(input.ptr);
+        input.ptr = IRObjectCreateFromDXIL(static_cast<const uint8_t *>(source), source_size, IRBytecodeOwnershipNone);
+        output.ptr = IRCompilerAllocCompileAndLink(compiler, entry, input.ptr, &error);
+    }
     // The compiler outlives root signatures; do not leave it pointing at this one.
     IRCompilerSetGlobalRootSignature(compiler, nullptr);
     if (!output.ptr) {
@@ -399,7 +418,7 @@ mtlb_result convert_stage(Device *device, RootSignature *root_signature, const v
         return fail(MTLB_ERROR_COMPILE_FAILED, "shader reflection unavailable");
     out.cache_key = key;
     mtlb_result result = finish_stage(device, IRMetalLibGetBytecodeData(metallib.ptr), reflection, ir_stage, options.emulation, out);
-    if (result == MTLB_OK && use_cache) {
+    if (result == MTLB_OK && use_cache && cacheable) {
         std::vector<uint8_t> bytes(IRMetalLibGetBytecodeSize(metallib.ptr));
         IRMetalLibGetBytecode(metallib.ptr, bytes.data());
         const char *json = IRShaderReflectionCopyJSONString(reflection.get());

@@ -142,7 +142,10 @@ bool write_windows(DescriptorHeap &heap, size_t index, Resource &resource, const
                    const mtlb_descriptor &null_window)
 {
     constexpr UINT64 kWindowElements = 1ull << MTLB_TYPED_WINDOW_BITS;
-    if (b.raw || b.stride || b.format == DXGI_FORMAT_UNKNOWN || b.num_elements <= kWindowElements || !typed_windows_enabled())
+    const bool rgb32 = b.format == DXGI_FORMAT_R32G32B32_FLOAT || b.format == DXGI_FORMAT_R32G32B32_UINT
+                       || b.format == DXGI_FORMAT_R32G32B32_SINT;  // (shadow copies: their first window only)
+    if (b.raw || b.stride || b.format == DXGI_FORMAT_UNKNOWN || rgb32 || b.num_elements <= kWindowElements
+        || !typed_windows_enabled())
         return false;
     mtlb_descriptor *windows = heap.windows(static_cast<uint32_t>(index), true);
     if (!windows)
