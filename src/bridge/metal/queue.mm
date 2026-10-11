@@ -404,6 +404,7 @@ public:
     // malformed stream (bad size, truncation, unknown type) ends this stream only.
     // The first error is kept for error().
     void run(const uint8_t *stream, size_t length);
+    void expand_shadow_views();
     void note_span_error() { note_error(fail(MTLB_ERROR_INVALID_ARGUMENT, "span without data")); }
     mtlb_result error() const { return error_; }
     const std::string &error_message() const { return error_message_; }
@@ -2310,6 +2311,37 @@ mtlb_result Replay::clear_buffer(const mtlb_cmd_clear_buffer &cmd)
     return MTLB_OK;
 }
 
+// Refills the shadows of the R32G32B32 SRVs (ShadowView) from their sources, in one compute encoder ahead of the
+// submit's own work: its first encoder waits on the fence this one updates. A write to a source made later in the
+// same submit is not seen until the next submit (acceptable for vertex data uploaded beforehand). Every view is
+// expanded on every submit: the copies, shader writes and CPU writes that can change a source are too many to track.
+void Replay::expand_shadow_views()
+{
+    Device *device = queue_->device;
+    if (!device->shadow_count)
+        return;
+    id<MTLComputePipelineState> kernel = internal_kernel(device, @"expand_rgb32");
+    if (!kernel)
+        return note_error(MTLB_ERROR_COMPILE_FAILED);
+    std::lock_guard<std::mutex> lock(device->shadow_mutex);
+    if (device->shadow_views.empty())
+        return;
+    id<MTLComputeCommandEncoder> enc = compute();
+    [enc setComputePipelineState:kernel];
+    for (const auto &entry : device->shadow_views) {
+        const ShadowView &view = entry.second;
+        const uint64_t params[2] = {view.source_offset, view.elements};
+        [enc setBuffer:std::get<0>(entry.first)->buffer offset:0 atIndex:0];
+        [enc setBuffer:view.shadow offset:0 atIndex:1];
+        [enc setBytes:params length:sizeof(params) atIndex:2];
+        [enc setBytes:&view.alpha length:sizeof(view.alpha) atIndex:3];
+        [enc dispatchThreads:MTLSizeMake(view.elements, 1, 1) threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+    }
+    dirty_compute_ = kAll;
+    end_compute();
+    sync_needed_ = !sync_disabled_;
+}
+
 mtlb_result Replay::clear_texture_uav(const mtlb_cmd_clear_texture_uav &cmd)
 {
     Texture *texture = from_handle<Texture>(cmd.texture);
@@ -2624,6 +2656,7 @@ mtlb_result mtlb_queue_submit(mtlb_queue handle, const mtlb_span *spans, uint32_
     std::lock_guard<std::mutex> lock(queue->mutex);
     SubmitTimer timer(kPartSubmit);
     Replay replay(queue, open_command_buffer(queue));
+    replay.expand_shadow_views();
     // Every span runs, whatever happened to the ones before it.
     for (uint32_t i = 0; i < count; ++i) {
         if (!spans[i].data && spans[i].size)

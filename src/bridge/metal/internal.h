@@ -68,6 +68,19 @@ using ShaderKey = std::tuple<uint64_t, uint64_t, uint64_t, uint32_t, std::string
 // Depth/stencil description fields that matter to an MTLDepthStencilState.
 using DepthStencilKey = std::array<uint32_t, 13>;
 
+// A typed SRV of an R32G32B32 format. Metal has no 3-channel 32-bit texture formats, so the view is an RGBA32 texture
+// buffer over a private shadow of the source's elements widened to 16 bytes, refilled at the start of every submit
+// (Replay::expand_shadow_views). `alpha` is the bit pattern of the fourth component: 1.0f or 1.
+struct ShadowView {
+    uint64_t source_offset;  // bytes
+    uint64_t elements;
+    uint32_t alpha;
+    id<MTLBuffer> shadow = nil;
+    id<MTLTexture> texture = nil;
+};
+// (source buffer, byte offset, element count, mtlb_format)
+using ShadowKey = std::tuple<Buffer *, uint64_t, uint64_t, uint32_t>;
+
 struct Device {
     id<MTLDevice> device;
     id<MTLResidencySet> residency;
@@ -89,6 +102,11 @@ struct Device {
     id<MTLLibrary> kernel_library = nil;
     id<MTLLibrary> gdeflate_library = nil;  // the DirectStorage decompressor (gdeflate.mm), built on first use
     std::map<std::string, id<MTLComputePipelineState>> kernels;
+
+    // The shadows of R32G32B32 SRVs (see ShadowView), by source; entries go when the source is destroyed.
+    std::mutex shadow_mutex;
+    std::map<ShadowKey, ShadowView> shadow_views;
+    std::atomic<size_t> shadow_count{0};  // shadow_views.size(), for the submit path to skip the lock
 
     // Samplers shared by equal descriptions.
     std::mutex sampler_mutex;
@@ -371,6 +389,9 @@ mtlb_result fail(mtlb_result code, const std::string &message);
 // Adds `buffer` to / removes it from the table that resolves GPU addresses.
 void register_buffer(Buffer *buffer);
 void unregister_buffer(Buffer *buffer);
+
+// Drops the shadow views of `buffer` (the source of R32G32B32 SRVs) that is being destroyed.
+void forget_shadow_views(Buffer *buffer);
 
 // The Metal descriptor for a texture of `desc`; nil (with `error` set) for formats Metal cannot do.
 MTLTextureDescriptor *make_texture_descriptor(const mtlb_texture_desc *desc, bool untracked, std::string *error);

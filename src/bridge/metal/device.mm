@@ -184,6 +184,7 @@ void mtlb_buffer_destroy(mtlb_buffer handle)
     if (!buffer)
         return;
     unregister_buffer(buffer);
+    forget_shadow_views(buffer);
     if (!buffer->placed)
         buffer->device->remove_resident(buffer->buffer);
     delete buffer;

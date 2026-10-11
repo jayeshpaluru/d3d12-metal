@@ -403,7 +403,10 @@ void Device::CreateUnorderedAccessView(ID3D12Resource *resource_ptr, ID3D12Resou
         b.format = b.stride ? DXGI_FORMAT_UNKNOWN : desc->Format;
         b.counter = ours<Resource>(counter_ptr);
         b.counter_offset = desc->Buffer.CounterOffsetInBytes;
-        if (FAILED(make_buffer_descriptor(*resource, b, slot))) {
+        // The bridge builds R32G32B32 buffer views as read-only shadows (SRVs only).
+        const bool rgb32 = b.format == DXGI_FORMAT_R32G32B32_FLOAT || b.format == DXGI_FORMAT_R32G32B32_UINT
+                           || b.format == DXGI_FORMAT_R32G32B32_SINT;
+        if (rgb32 || FAILED(make_buffer_descriptor(*resource, b, slot))) {
             *slot = null_descriptor(MTLB_NULL_BUFFER);
             return;
         }

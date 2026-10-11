@@ -20,6 +20,18 @@ kernel void clear_buffer(device uchar *dst [[buffer(0)]], constant uchar *patter
         element[b] = pattern[b];
 }
 
+// Widens `p.y` elements of three 32-bit components, starting `p.x` bytes into `src`, to four with `alpha` as the
+// fourth (typed SRVs of the R32G32B32 formats, which Metal cannot view directly).
+kernel void expand_rgb32(device const uint *src [[buffer(0)]], device uint4 *dst [[buffer(1)]],
+                         constant ulong2 &p [[buffer(2)]], constant uint &alpha [[buffer(3)]],
+                         uint i [[thread_position_in_grid]])
+{
+    if (i >= p.y)
+        return;
+    device const uint *e = src + p.x / 4 + ulong(i) * 3;
+    dst[i] = uint4(e[0], e[1], e[2], alpha);
+}
+
 // WriteBufferImmediate: stores a 32- or 64-bit value `size` bytes wide at `base` bytes into `dst`.
 kernel void write_immediate(device uchar *dst [[buffer(0)]], constant ulong &value [[buffer(1)]],
                             constant ulong2 &where [[buffer(2)]])

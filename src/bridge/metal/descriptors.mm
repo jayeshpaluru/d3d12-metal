@@ -216,6 +216,57 @@ static id<MTLTexture> texture_buffer_view(Buffer *buffer, uint64_t offset, MTLPi
     return texture;
 }
 
+void forget_shadow_views(Buffer *buffer)
+{
+    Device *device = buffer->device;
+    if (!device->shadow_count)
+        return;
+    std::lock_guard<std::mutex> lock(device->shadow_mutex);
+    auto &views = device->shadow_views;
+    for (auto it = views.lower_bound({buffer, 0, 0, 0}); it != views.end() && std::get<0>(it->first) == buffer;) {
+        device->remove_resident(it->second.shadow);
+        it = views.erase(it);
+    }
+    device->shadow_count = views.size();
+}
+
+// The typed SRV of `elements` R32G32B32 elements `offset` bytes into `buffer`: an RGBA32 texture buffer over a shadow of
+// them (see ShadowView), made on the first request for the view and reused after.
+static id<MTLTexture> shadow_view(Buffer *buffer, uint64_t offset, uint64_t elements, uint32_t format)
+{
+    Device *device = buffer->device;
+    const MTLPixelFormat pixel_format = format == MTLB_FORMAT_R32G32B32_FLOAT ? MTLPixelFormatRGBA32Float
+                                        : format == MTLB_FORMAT_R32G32B32_UINT ? MTLPixelFormatRGBA32Uint
+                                                                               : MTLPixelFormatRGBA32Sint;
+    const uint32_t alpha = format == MTLB_FORMAT_R32G32B32_FLOAT ? 0x3f800000u : 1u;
+    std::lock_guard<std::mutex> lock(device->shadow_mutex);
+    const ShadowKey key{buffer, offset, elements, format};
+    const auto found = device->shadow_views.find(key);
+    if (found != device->shadow_views.end())
+        return found->second.texture;
+
+    const NSUInteger alignment = [device->device minimumLinearTextureAlignmentForPixelFormat:pixel_format];
+    const uint64_t bytes_per_row = (elements * 16 + alignment - 1) / alignment * alignment;
+    id<MTLBuffer> shadow = [device->device newBufferWithLength:bytes_per_row
+                                                       options:MTLResourceStorageModePrivate | MTLResourceHazardTrackingModeUntracked];
+    if (!shadow)
+        return nil;
+    MTLTextureDescriptor *td = [MTLTextureDescriptor new];
+    td.textureType = MTLTextureTypeTextureBuffer;
+    td.pixelFormat = pixel_format;
+    td.width = elements;
+    td.height = 1;
+    td.storageMode = MTLStorageModePrivate;
+    td.usage = MTLTextureUsageShaderRead | MTLTextureUsagePixelFormatView;
+    id<MTLTexture> texture = [shadow newTextureWithDescriptor:td offset:0 bytesPerRow:bytes_per_row];
+    if (!texture)
+        return nil;
+    device->add_resident(shadow);
+    device->shadow_views[key] = {offset, elements, alpha, shadow, texture};
+    device->shadow_count = device->shadow_views.size();
+    return texture;
+}
+
 } // namespace mtlb
 
 extern "C" {
@@ -258,6 +309,20 @@ mtlb_result mtlb_buffer_view(const mtlb_buffer_view_desc *desc, mtlb_descriptor 
             out->texture_id = view.gpuResourceID._impl;
         }
         out->metadata = buffer_metadata(size_bytes, padding, false);
+        return MTLB_OK;
+    }
+
+    if (desc->format == MTLB_FORMAT_R32G32B32_FLOAT || desc->format == MTLB_FORMAT_R32G32B32_UINT
+        || desc->format == MTLB_FORMAT_R32G32B32_SINT) {
+        // Read-only: a UAV could not write the shadow back.
+        const uint64_t elements = std::min<uint64_t>({desc->num_elements, available / 12, 1ull << 28});
+        if (!elements || desc->offset % 4)
+            return fail(MTLB_ERROR_INVALID_ARGUMENT, "empty or unaligned R32G32B32 buffer view");
+        id<MTLTexture> view = shadow_view(buffer, desc->offset, elements, desc->format);
+        if (!view)
+            return fail(MTLB_ERROR_UNSUPPORTED, "R32G32B32 buffer view creation failed");
+        out->texture_id = view.gpuResourceID._impl;
+        out->metadata = buffer_metadata(elements * 16, 0, true);
         return MTLB_OK;
     }
 
