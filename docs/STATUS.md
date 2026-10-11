@@ -334,6 +334,14 @@ Performance findings (Spider-Man, gameplay scene, `tools/game/measure.sh`):
   (NaN drops the primitive); only those stages' cache keys changed (`p_inf_position`).
 - **R32G32B32 typed buffer SRVs** read through a 16-byte-stride shadow the backend refills ahead of every submit (`p_rgb32_views`); they were
   null descriptors (Metal has no 96-bit formats). UAVs of these formats stay null.
+- **Performance (SELECT PROFILE, sunset scene, M2 Max, the user's settings: VSync on, FSR, dynamic resolution target 30 fps).** About 29 fps
+  with 22 ms of GPU time per frame (busy), 87 render passes, 79 compute and 35 blit encoders, 17 submits; the dynamic resolution keeps the
+  internal resolution at 768x504 to 1000x650 for a 1512x982 window (upscaled: the aliasing users see). Not the cause: vsync quantization (a third
+  drawable, `drawables=3`, and vsync off change nothing), timestamps (now sampled at the next encoder's start), clear-only passes (now
+  batched), the R32G32B32 shadow refills (now once per frame). The GPU idles about a third of each frame while no game thread is saturated
+  (the busiest at 55%; the layer's submit work is about 10 ms per frame on the submitting thread): the next step is a timeline of submits,
+  fence waits and GPU work to find what the GPU waits for, then asynchronous submission if the submitting thread is on the critical path.
+  The night scene runs 47-50 fps (GPU about 15 ms).
 - Known limits: a shader-visible CBV/SRV/UAV heap carries a window table three times its size (72 MB for a million descriptors); a bundle
   whose descriptor table is in no known heap, or a heap whose window table could not be made, points the windows at the descriptor table
   itself (indices past 2^28 then read other descriptors); R32G32B32 shadows live as long as their source buffer and are refilled on every

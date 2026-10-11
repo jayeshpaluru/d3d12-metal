@@ -274,7 +274,10 @@ mtlb_result mtlb_swapchain_create(mtlb_device handle, const mtlb_swapchain_desc 
     swapchain->pipeline = make_pipeline(swapchain.get(), pixel_format);
     if (!swapchain->pipeline)
         return MTLB_ERROR_COMPILE_FAILED;
-    const uint32_t drawables = desc->buffer_count >= 3 ? 3 : 2;
+    // As many drawables as back buffers (2 or 3). D3D12METAL_DRAWABLES=3 (drawables=3) gives a two-buffer swap chain a
+    // third: with vsync a frame that misses a refresh then waits for the next one without holding back the one after.
+    static const char *forced = getenv("D3D12METAL_DRAWABLES");
+    const uint32_t drawables = forced && atoi(forced) == 3 ? 3 : desc->buffer_count >= 3 ? 3 : 2;
     // Bounded wait: if the main thread is busy the configuration still happens, just later.
     id<MTLDevice> mtl_device = device->device;
     const uint32_t width = desc->width, height = desc->height;  // `desc` is gone if the wait times out
