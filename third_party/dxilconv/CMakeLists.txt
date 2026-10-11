@@ -16,6 +16,7 @@ endif()
 set(CONV ${DXC_SRC}/projects/dxilconv)
 add_library(dxilconv SHARED
   dxilconv_c.cpp
+  dxil_window_typed_buffers.cpp
   ${CONV}/lib/DxbcConverter/DxbcConverter.cpp
   ${CONV}/lib/DxbcConverter/DxbcUtil.cpp
   ${CONV}/lib/ShaderBinary/ShaderBinary.cpp
