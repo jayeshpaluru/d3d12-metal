@@ -25,10 +25,10 @@ struct DirectStorageCreateArgs {
 
 // The execution parameters (EXECUTION stage), in the order of the structure DirectStorage fills.
 struct DirectStorageExecArgs {
-    D3D12_GPU_VIRTUAL_ADDRESS input_buffer;   // the compressed streams
-    UINT64 input_size;
-    D3D12_GPU_VIRTUAL_ADDRESS output_buffer;  // where they are decompressed to
-    UINT64 output_size;
+    D3D12_GPU_VIRTUAL_ADDRESS input_buffer;   // the compressed streams (the start of DirectStorage's staging buffer)
+    UINT64 input_size;                        // the sum of the streams' sizes, not a bound: offsets go past it
+    D3D12_GPU_VIRTUAL_ADDRESS output_buffer;  // where they are decompressed to (the start of the destination)
+    UINT64 output_size;                       // the sum of the decompressed sizes, as input_size
     D3D12_GPU_VIRTUAL_ADDRESS control_buffer; // dword stream count, then {input offset, output offset} per stream
     UINT64 control_size;
     D3D12_GPU_VIRTUAL_ADDRESS scratch_buffer;

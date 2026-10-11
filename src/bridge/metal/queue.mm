@@ -1859,12 +1859,14 @@ mtlb_result Replay::write_immediate(const mtlb_cmd_write_immediate &cmd)
 mtlb_result Replay::gdeflate(const mtlb_cmd_gdeflate &cmd)
 {
     Device *device = queue_->device;
-    // The bytes from `address` to the end of the buffer holding it, at most `size`; false if no buffer holds it.
+    // The bytes from `address` to the end of the buffer holding it; false if no buffer holds it. DirectStorage passes
+    // the base addresses of its buffers with the sums of the streams' sizes, and the control buffer's offsets go past
+    // those sums, so the input and output sizes of the call bound nothing.
     auto fit = [&](uint64_t address, uint64_t size, uint64_t *fitted, Buffer **buffer, uint64_t *offset) {
         *buffer = find_buffer(device, address, offset);
         if (!*buffer)
             return false;
-        *fitted = std::min(size, (*buffer)->size - *offset);
+        *fitted = size == UINT64_MAX ? (*buffer)->size - *offset : std::min(size, (*buffer)->size - *offset);
         return true;
     };
     struct Params {
@@ -1874,8 +1876,8 @@ mtlb_result Replay::gdeflate(const mtlb_cmd_gdeflate &cmd)
     } params = {};
     Buffer *buffers[4];
     uint64_t offsets[4];
-    if (!fit(cmd.input_address, cmd.input_size, &params.input_size, &buffers[0], &offsets[0])
-        || !fit(cmd.output_address, cmd.output_size, &params.output_size, &buffers[1], &offsets[1])
+    if (!fit(cmd.input_address, UINT64_MAX, &params.input_size, &buffers[0], &offsets[0])
+        || !fit(cmd.output_address, UINT64_MAX, &params.output_size, &buffers[1], &offsets[1])
         || !fit(cmd.control_address, cmd.control_size, &params.control_size, &buffers[2], &offsets[2])
         || !fit(cmd.scratch_address, cmd.scratch_size, &params.scratch_size, &buffers[3], &offsets[3]))
         return fail(MTLB_ERROR_INVALID_ARGUMENT, "GDeflate buffer outside any buffer");
@@ -1923,7 +1925,7 @@ mtlb_result Replay::gdeflate(const mtlb_cmd_gdeflate &cmd)
 
 // Debugging (D3D12METAL_GDEFLATE_DUMP=<dir>): copies the control, input and output buffers of a GDeflate call as they
 // are after it into <dir>/call-N.bin ({u64 control, input, output sizes}, then the three), for checking the decoder
-// against the reference one offline (tools/gdeflate_verify.cpp). The first D3D12METAL_GDEFLATE_DUMP_MAX calls (300).
+// against the reference one offline (tools/gdeflate_verify.cpp). The first D3D12METAL_GDEFLATE_DUMP_MAX calls (60).
 void Replay::dump_gdeflate(uint64_t input_size, uint64_t output_size, uint64_t control_size, Buffer *const *buffers,
                            const uint64_t *offsets)
 {
@@ -1931,11 +1933,14 @@ void Replay::dump_gdeflate(uint64_t input_size, uint64_t output_size, uint64_t c
     if (!dir)
         return;
     static std::atomic<uint32_t> calls{0};
-    static const uint32_t max_calls = getenv("D3D12METAL_GDEFLATE_DUMP_MAX") ? atoi(getenv("D3D12METAL_GDEFLATE_DUMP_MAX")) : 300;
+    static const uint32_t max_calls = getenv("D3D12METAL_GDEFLATE_DUMP_MAX") ? atoi(getenv("D3D12METAL_GDEFLATE_DUMP_MAX")) : 60;
     const uint32_t index = calls.fetch_add(1);
     if (index >= max_calls)
         return;
-    const uint64_t sizes[3] = {control_size, input_size, output_size};
+    // The input and output reach the ends of their buffers: at most D3D12METAL_GDEFLATE_DUMP_BYTES (128 MiB) of each.
+    static const uint64_t max_bytes = getenv("D3D12METAL_GDEFLATE_DUMP_BYTES") ? strtoull(getenv("D3D12METAL_GDEFLATE_DUMP_BYTES"), nullptr, 0)
+                                                                              : 128ull << 20;
+    const uint64_t sizes[3] = {control_size, std::min(input_size, max_bytes), std::min(output_size, max_bytes)};
     NSMutableArray<id<MTLBuffer>> *staging = [NSMutableArray array];
     id<MTLBlitCommandEncoder> enc = blit();
     for (int i = 0; i < 3; ++i) {

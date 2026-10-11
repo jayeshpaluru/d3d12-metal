@@ -175,6 +175,8 @@ struct Options {
     uint32_t seed = 1;
     bool break_header = false;    // the corrupted stream gets a bad id instead of damaged data
     bool bench = false;
+    size_t lead = 0;              // bytes before the first stream's input and output (offsets past the sizes of the call)
+    bool total_sizes = false;     // sizes of the call are the totals of the streams, as DirectStorage passes them
 };
 
 constexpr uint8_t kGuard = 0xA5;
@@ -209,8 +211,8 @@ Result run(Fixture &f, const std::vector<std::vector<uint8_t>> &originals, int l
     constexpr size_t kGuardBytes = 64;
     std::vector<uint32_t> control(1 + 2 * n);
     control[0] = o.declared >= 0 ? o.declared : static_cast<uint32_t>(n);
-    size_t in_size = o.input_align > 1 ? 0 : 1;
-    size_t out_size = kGuardBytes;
+    size_t in_size = o.lead + (o.input_align > 1 ? 0 : 1);
+    size_t out_size = kGuardBytes + o.lead;
     std::vector<size_t> in_at(n), out_at(n);
     for (size_t i = 0; i < n; ++i) {
         in_size = (in_size + o.input_align - 1) / o.input_align * o.input_align;
@@ -250,6 +252,14 @@ Result run(Fixture &f, const std::vector<std::vector<uint8_t>> &originals, int l
     args.input_size = input.size();
     args.output = output->GetGPUVirtualAddress();
     args.output_size = out_size;
+    if (o.total_sizes) {
+        // DirectStorage passes the buffers' base addresses and the sum of the streams' sizes: offsets go past them.
+        args.input_size = args.output_size = 0;
+        for (size_t i = 0; i < n; ++i) {
+            args.input_size += packed[i].size();
+            args.output_size += originals[i].size();
+        }
+    }
     args.control = control_buffer->GetGPUVirtualAddress();
     args.control_size = control.size() * 4;
     args.scratch = scratch->GetGPUVirtualAddress();
@@ -375,6 +385,14 @@ int main(int argc, char **argv)
         o = {};
         o.input_align = 1;  // streams at odd offsets
         run(f, streams, 6, o);
+    }
+
+    // ---- DirectStorage's call: sizes are the streams' totals, offsets are from the buffers' starts and go past them ----
+    {
+        Options o;
+        o.lead = 3u << 20;
+        o.total_sizes = true;
+        run(f, {make_data(3, 300000, 4), make_data(2, 70000, 5)}, 6, o);
     }
 
     // ---- The control buffer's count and the call's count: the smaller of the two decompresses ----
