@@ -126,7 +126,7 @@ public final class Workspace: @unchecked Sendable {
         let settings = self.settings(for: game)
         let session = try session(bottleName: game.bottle)
         var notes: [String] = []
-        if !Shell.pids(named: game.exe).isEmpty { throw CoreError("\(game.name) is already running", hint: "`\(AppInfo.cliName) stop \(game.id)`") }
+        if isRunning(game) { throw CoreError("\(game.name) is already running", hint: "`\(AppInfo.cliName) stop \(game.id)`") }
 
         if install {
             let st = layerStatus(for: game)

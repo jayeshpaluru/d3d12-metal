@@ -518,6 +518,36 @@ func requirementProfile(optional: Bool = false, run: String = "setup.bat", extra
     }
 }
 
+// MARK: - Running games
+
+@Suite struct RunningTests {
+    /// Starts a stand-in game process: a script named like the exe that keeps a file open in the bottle's wineserver directory,
+    /// as every Wine process of a prefix does.
+    func startStandIn(exe: String, bottle: Bottle) throws -> (process: Process, cleanup: () -> Void) {
+        let server = URL(fileURLWithPath: "/tmp/.wine-\(getuid())").appendingPathComponent(try #require(ProcessScan.serverDirectoryName(prefix: bottle.prefix)))
+        try FileManager.default.createDirectory(at: server, withIntermediateDirectories: true)
+        let dir = try makeTempDir("standin")
+        let script = dir.appendingPathComponent(exe)
+        try "#!/bin/sh\nexec 3>\"$1\"\nsleep 40\n".write(to: script, atomically: true, encoding: .utf8)
+        chmod(script.path, 0o755)
+        let p = try Shell.spawn("/bin/sh", [script.path, server.appendingPathComponent("tmpmap-test").path])
+        Thread.sleep(forTimeInterval: 0.6)
+        return (p, { p.terminate(); _ = Shell.run("/usr/bin/pkill", ["-f", "sleep 40"]); try? FileManager.default.removeItem(at: server) })
+    }
+
+    @Test func runningIsPerBottleAndWorksForLongExeNames() throws {
+        let exe = "fixture-very-long-game-name.exe"      // longer than the 15 characters of a process name
+        let a = try makeFixture(exe: exe)
+        let b = try makeFixture(exe: exe)                // the same exe in another bottle
+        let standIn = try startStandIn(exe: exe, bottle: a.bottle)
+        defer { standIn.cleanup() }
+        #expect(a.ws.isRunning(a.game))
+        #expect(!b.ws.isRunning(b.game))
+        // launch refuses a game that already runs, by the same check
+        #expect(throws: CoreError.self) { try a.ws.launch(a.game, install: false, runRequirements: false) }
+    }
+}
+
 // MARK: - Shell
 
 @Suite struct ShellTests {
