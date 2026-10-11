@@ -383,6 +383,37 @@ let sampleACF = """
     }
 }
 
+// MARK: - Shell
+
+@Suite struct ShellTests {
+    @Test func collectsOutputAndStatus() {
+        let r = Shell.run("/bin/sh", ["-c", "echo out; echo err >&2; exit 3"])
+        #expect(r.status == 3 && r.stdout == "out\n" && r.stderr == "err\n")
+    }
+
+    @Test func doesNotWaitForGrandchildrenHoldingThePipes() {
+        // `sleep` inherits stdout and stderr and outlives the shell (as wineserver does after `wine reg`).
+        let start = Date()
+        let r = Shell.run("/bin/sh", ["-c", "sleep 30 & echo hi"])
+        #expect(r.ok && r.stdout == "hi\n")
+        #expect(Date().timeIntervalSince(start) < 5)
+        _ = Shell.run("/usr/bin/pkill", ["-f", "^sleep 30$"])
+    }
+
+    @Test func timeoutReturnsEvenWithAGrandchild() {
+        let start = Date()
+        let r = Shell.run("/bin/sh", ["-c", "sleep 31 & sleep 31"], timeout: 0.5)
+        #expect(!r.ok)
+        #expect(Date().timeIntervalSince(start) < 5)
+        _ = Shell.run("/usr/bin/pkill", ["-f", "^sleep 31$"])
+    }
+
+    @Test func largeOutputIsComplete() {
+        let r = Shell.run("/bin/sh", ["-c", "yes abcdefghij | head -c 3000000"])
+        #expect(r.stdout.utf8.count == 3_000_000)
+    }
+}
+
 // MARK: - Misc
 
 @Suite struct MiscTests {

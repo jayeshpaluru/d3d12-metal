@@ -24,15 +24,28 @@ public enum Shell {
         p.standardInput = FileHandle.nullDevice
         var outData = Data(), errData = Data()
         let lock = NSLock()
-        out.fileHandleForReading.readabilityHandler = { h in
-            let d = h.availableData
-            lock.lock(); outData.append(d); lock.unlock()
+        // The pipes are read while the program runs and are never read to the end afterwards: a grandchild that inherited
+        // them (wineserver started by `wine reg`, helper processes) may hold them open for hours. EOF is awaited only briefly.
+        let eof = DispatchGroup()
+        func watch(_ pipe: Pipe, _ store: @escaping (Data) -> Void) {
+            eof.enter()
+            nonisolated(unsafe) var left = false
+            pipe.fileHandleForReading.readabilityHandler = { h in
+                let d = h.availableData
+                lock.lock(); defer { lock.unlock() }
+                if d.isEmpty {
+                    h.readabilityHandler = nil
+                    if !left { left = true; eof.leave() }
+                } else {
+                    store(d)
+                }
+            }
         }
-        err.fileHandleForReading.readabilityHandler = { h in
-            let d = h.availableData
-            lock.lock(); errData.append(d); lock.unlock()
-        }
+        watch(out) { outData.append($0) }
+        watch(err) { errData.append($0) }
         do { try p.run() } catch {
+            out.fileHandleForReading.readabilityHandler = nil
+            err.fileHandleForReading.readabilityHandler = nil
             return ShellResult(status: 127, stdout: "", stderr: "cannot run \(executable): \(error.localizedDescription)")
         }
         if let timeout {
@@ -42,11 +55,10 @@ public enum Shell {
         } else {
             p.waitUntilExit()
         }
+        _ = eof.wait(timeout: .now() + 0.5)
+        lock.lock()
         out.fileHandleForReading.readabilityHandler = nil
         err.fileHandleForReading.readabilityHandler = nil
-        lock.lock()
-        outData.append(out.fileHandleForReading.readDataToEndOfFile())
-        errData.append(err.fileHandleForReading.readDataToEndOfFile())
         let result = ShellResult(status: p.terminationStatus,
                                  stdout: String(decoding: outData, as: UTF8.self),
                                  stderr: String(decoding: errData, as: UTF8.self))
