@@ -16,7 +16,7 @@ struct uchar4_cell {
 struct HudState {
     id<MTLLibrary> library = nil;
     id<MTLTexture> atlas = nil;
-    // Measured over the last window of about half a second.
+    // Measured over the last window of about half a second; the GPU time is the union of busy intervals (kStatGpuBusyNanos), not the sum.
     uint64_t last_ns = 0, last_presents = 0, last_gpu_ns = 0;
     double fps = 0, frame_ms = 0, gpu_ms = 0;
 };

@@ -169,7 +169,7 @@ id<MTLRenderPipelineState> hud_make_pipeline(HudState &hud, id<MTLDevice> device
 void hud_update(HudState &hud, uint64_t presents)
 {
     const uint64_t now = now_ns();
-    const uint64_t gpu = g_stats[kStatGpuNanos].load(std::memory_order_relaxed);
+    const uint64_t gpu = g_stats[kStatGpuBusyNanos].load(std::memory_order_relaxed);
     if (hud.last_ns == 0) {
         hud.last_ns = now;
         hud.last_presents = presents;
