@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // PSO creation from many threads at once (games create thousands of pipelines on loader threads): eight
 // threads create graphics and compute pipelines from overlapping sets of root signatures and shaders, so the
 // same conversion is often requested concurrently. Every creation must succeed and the pipelines must work.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Draws that write a UAV from the pixel shader and draws that read the same buffer from the vertex shader. Register b0
 // is a colour, t0 the buffer as an SRV, u0 the buffer as a UAV.
 cbuffer Color : register(b0)

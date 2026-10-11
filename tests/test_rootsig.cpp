@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Root signature serialization and deserialization: round trips through the
 // exported D3D12 entry points, malformed input, and DXC interoperability.
 #include "test_util.h"

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // A compute shader (tests/shaders/probe.hlsl) that reads resources at coordinates given by the test and
 // writes what it saw to a UAV buffer: tests check descriptors by looking at what a shader gets.
 #pragma once

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // The DirectStorage GDeflate decompressor's kernels (see gdeflate_kernel.msl.inc): MSL compiled at the first use.
 #include "internal.h"
 

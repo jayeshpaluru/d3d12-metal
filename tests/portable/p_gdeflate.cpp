@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // The DirectStorage GDeflate meta command: EnumerateMetaCommands / EnumerateMetaCommandParameters /
 // CheckFeatureSupport(QUERY_META_COMMAND) / CreateMetaCommand / InitializeMetaCommand / ExecuteMetaCommand, the way
 // DirectStorage 1.2 uses them. Streams are made with the reference compressor (gdeflate_ref.h) and decompressed on the GPU;

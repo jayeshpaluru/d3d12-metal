@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // On-disk cache of converted shaders. Layout:
 //   <dir>/<first two hex digits of the key>/<key as hex>.d3mc
 // File: Header, then the first string, then the second string. The header repeats the key and holds the

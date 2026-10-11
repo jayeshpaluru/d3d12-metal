@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
 # Captures the game window into build-wine/game-screens/<name>.png.
 # usage: tools/game/screenshot.sh <name> [window-title-regex, default the profile's: Spider]
 source "$(dirname "${BASH_SOURCE[0]}")/env.sh"

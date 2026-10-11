@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Queue-side Signal and Wait, batched with submits: a signal needs no submit to
 // flush, a signal after ExecuteCommandLists covers the work before it, and a
 // queue wait holds back later signals until the fence is reached.

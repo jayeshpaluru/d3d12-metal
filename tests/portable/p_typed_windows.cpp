@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Typed buffer views with more than 2^28 elements (tests/shaders/typed_windows.hlsl). Metal texture buffers hold at
 // most 2^28 elements, so the layer gives such views extra "window" descriptors and routes loads, stores and atomics
 // with larger indices through them. Checked here with exact values on R32_UINT (UAV, SRV, atomics), R16_UINT,

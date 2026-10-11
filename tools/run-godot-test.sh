@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
 # Runs the Godot 4 test project (tests/godot/project) under Wine through our d3d12/dxgi DLLs and
 # validates the screenshot it saves (tools/check_godot_screenshot.py). Needs build-wine/out
 # (tools/build-wine.sh) and the official Windows build of Godot 4.7.2 (untrusted: run under Wine only):
@@ -17,9 +18,9 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 out="$root/build-wine/out"
 screens="$root/build-wine/screens"
 logs="$root/build-wine/logs"
-WINE_ROOT="${WINE_ROOT:-/Users/jsp/code/deps/wine/Wine Devel.app/Contents/Resources/wine}"
-export WINEPREFIX="${WINEPREFIX:-/Users/jsp/code/deps/wineprefix}"
-godot_dir="${GODOT_DIR:-/Users/jsp/code/deps/godot}"
+WINE_ROOT="${WINE_ROOT:-${DEPS_DIR:-$HOME/code/deps}/wine/Wine Devel.app/Contents/Resources/wine}"
+export WINEPREFIX="${WINEPREFIX:-${DEPS_DIR:-$HOME/code/deps}/wineprefix}"
+godot_dir="${GODOT_DIR:-${DEPS_DIR:-$HOME/code/deps}/godot}"
 exe="$godot_dir/Godot_v4.7.2-stable_win64.exe"
 method=forward_plus
 frames=240

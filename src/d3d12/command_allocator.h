@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // ID3D12CommandAllocator. Command lists record into their own streams, so the
 // allocator holds no state.
 #pragma once

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // DXGI adapters, one per Metal device.
 #pragma once
 

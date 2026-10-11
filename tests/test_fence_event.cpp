@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // ID3D12Fence::SetEventOnCompletion with a real event handle.
 #include <chrono>
 

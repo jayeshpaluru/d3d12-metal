@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Per-shader quirks (src/common/quirks.h): the hash, the built-in table, the configuration lists, and the effect of
 // kQuirkForceComputeBarrier on a real pipeline: a barrier record after each dispatch (Dispatch and ExecuteIndirect)
 // that the application did not record, seen through the backend's barrier counter.
@@ -24,11 +25,10 @@ void unit_tests()
     CHECK(d3d12m_shader_hash("a", 1) == 0xaf63bd4c8601b7beull);
     CHECK(d3d12m_shader_hash("foobar", 6) == 0x340d8765a4dda9c2ull);
 
-    // The built-in entry for Spider-Man 2 is found for its executable (any case) and for no other.
-    CHECK(d3d12m_lookup_quirks("Spider-Man2", 0x324071d329f05cccull, nullptr) == kForceBarrier);
-    CHECK(d3d12m_lookup_quirks("spider-man2", 0x324071d329f05cccull, nullptr) == kForceBarrier);
-    CHECK(d3d12m_lookup_quirks("Spider-Man", 0x324071d329f05cccull, nullptr) == 0);
-    CHECK(d3d12m_lookup_quirks("Spider-Man2", 0x2222ull, nullptr) == 0);
+    // No game is special-cased in the layer: Spider-Man 2's hash arrives from its profile through the configuration.
+    CHECK(d3d12m_lookup_quirks("Spider-Man2", 0x324071d329f05cccull, nullptr) == 0);
+    CHECK(d3d12m_lookup_quirks("Spider-Man2", 0x324071d329f05cccull, "0x324071d329f05ccc") == kForceBarrier);
+    CHECK(d3d12m_lookup_quirks("Spider-Man2", 0x2222ull, "0x324071d329f05ccc") == 0);
 
     // The configuration: hex hashes, with or without 0x, separated by commas and spaces; works for any executable.
     const char *list = "0xABCD, 1234  deadbeefdeadbeef,0x5";

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // D3D12 sampler descriptions in the bridge's form.
 #pragma once
 

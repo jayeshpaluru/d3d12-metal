@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
 # Launch the Windows Steam client in its own Wine prefix (kept separate from the
 # test prefix, whose wineserver the test scripts kill).
 #   WINE_ROOT             directory with bin/wine [the Gcenx Wine Devel app in deps]
@@ -15,8 +16,8 @@
 # built with mingw on first use and reinstalled whenever a Steam update
 # restores the real steamwebhelper.exe.
 set -euo pipefail
-WINE_ROOT="${WINE_ROOT:-/Users/jsp/code/deps/wine/Wine Devel.app/Contents/Resources/wine}"
-export WINEPREFIX="${STEAM_WINEPREFIX:-/Users/jsp/code/deps/wineprefix-steam}"
+WINE_ROOT="${WINE_ROOT:-${DEPS_DIR:-$HOME/code/deps}/wine/Wine Devel.app/Contents/Resources/wine}"
+export WINEPREFIX="${STEAM_WINEPREFIX:-${DEPS_DIR:-$HOME/code/deps}/wineprefix-steam}"
 export WINEDEBUG="${WINEDEBUG:--all}"
 # Rosetta hides AVX/AVX2/FMA/F16C from x86 code unless asked; Spider-Man 2
 # requires AVX2 and F16C. Games launched by Steam inherit this.
@@ -30,32 +31,7 @@ fi
 shim="$WINEPREFIX/steamwebhelper-shim.exe"
 cef="$WINEPREFIX/drive_c/Program Files (x86)/Steam/bin/cef/cef.win64"
 if [ ! -f "$shim" ]; then
-    x86_64-w64-mingw32-gcc -O2 -municode -mwindows -x c -o "$shim" - <<'EOF'
-#include <windows.h>
-#include <wchar.h>
-
-int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, LPWSTR unused, int show)
-{
-    static wchar_t exe[MAX_PATH], extra[1024], cmd[32768];
-    const wchar_t *args = GetCommandLineW();
-    STARTUPINFOW si = { sizeof(si) };
-    PROCESS_INFORMATION pi;
-    DWORD code = 1;
-
-    GetModuleFileNameW(NULL, exe, MAX_PATH);
-    wcscpy(wcsrchr(exe, L'\\') + 1, L"steamwebhelper_real.exe");
-    if (!GetEnvironmentVariableW(L"STEAMWEBHELPER_EXTRA", extra, 1024))
-        wcscpy(extra, L"--in-process-gpu");
-    if (*args == L'"') { args++; while (*args && *args != L'"') args++; if (*args) args++; }
-    else while (*args && *args != L' ' && *args != L'\t') args++;
-    _snwprintf(cmd, 32767, L"\"%ls\"%ls %ls", exe, args, extra);
-    GetStartupInfoW(&si);
-    if (!CreateProcessW(exe, cmd, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) return 1;
-    WaitForSingleObject(pi.hProcess, INFINITE);
-    GetExitCodeProcess(pi.hProcess, &code);
-    return code;
-}
-EOF
+    x86_64-w64-mingw32-gcc -O2 -municode -mwindows -o "$shim" "$(dirname "${BASH_SOURCE[0]}")/steamwebhelper-shim.c"
 fi
 if ! cmp -s "$shim" "$cef/steamwebhelper.exe"; then
     cp "$cef/steamwebhelper.exe" "$cef/steamwebhelper_real.exe"

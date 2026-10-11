@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // D3D12HelloConstBuffers: a triangle moved by a constant buffer (shaders.hlsl of the sample).
 cbuffer SceneConstantBuffer : register(b0)
 {

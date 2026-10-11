@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
 # Measures a fixed scene: loads a profile into the open world (tools/game/play.sh, which looks at the screen), checks that the world is
 # on screen, stands still for <seconds> (default 60) with the layer's statistics on, samples the CPU use of the game and stops the game.
 # Aborts (exit 1) when the game is not in gameplay before or after the sample, so a number never comes from a menu.

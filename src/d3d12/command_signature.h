@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // ID3D12CommandSignature: the layout of the commands ExecuteIndirect reads.
 #pragma once
 

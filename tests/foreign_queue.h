@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // A command queue that wraps a real one, like an overlay or capture tool does.
 // With `forward_qi` it hands unknown interfaces to the wrapped queue (so a
 // layer can see through it); without, it only answers the D3D12 interfaces.

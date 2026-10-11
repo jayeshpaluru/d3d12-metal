@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Shared pieces of the Win32 test programs (built with MinGW, run under Wine).
 // They use the MinGW D3D12/DXGI headers, so they exercise the layer through the
 // same binary interface a Windows game uses.

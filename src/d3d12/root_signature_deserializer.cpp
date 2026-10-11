@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 #include "d3d12/root_signature_deserializer.h"
 
 #include <new>

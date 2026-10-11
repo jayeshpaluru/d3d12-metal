@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Shader Model 5 shaders, compiled to DXBC (not DXIL) by tools/gen-dxbc-test-shaders.sh: the converter must accept
 // bytecode of the kind FXC and D3DCompile produce. Same job as color.hlsl and fill.hlsl.
 cbuffer Color : register(b0)

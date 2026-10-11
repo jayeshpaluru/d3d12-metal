@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // The one DXGI output (display) of every adapter.
 #pragma once
 

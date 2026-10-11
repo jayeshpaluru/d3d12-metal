@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // How the backend finds the CAMetalLayer of an application window.
 //
 // Window handles mean nothing to Metal: whoever hosts the backend supplies the

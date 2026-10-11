@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
 # Builds libdxilconv.dylib (Microsoft's DXBC -> DXIL converter, from DirectXShaderCompiler's projects/dxilconv,
 # University of Illinois/NCSA licence) for arm64 (the native tests) and x86_64 (the unix side under Rosetta):
 #   build-dxilconv/arm64/libdxilconv.dylib      build-dxilconv/x86_64/libdxilconv.dylib
@@ -10,13 +11,13 @@
 #
 # Usage: tools/build-dxilconv.sh [arm64] [x86_64]       (default: both)
 # Environment:
-#   DXC_SRC          DirectXShaderCompiler checkout [/Users/jsp/code/deps/dxc-src]
-#   DXC_BUILD_ARM64  its arm64 build tree [/Users/jsp/code/deps/dxc-build]
-#   DXC_BUILD_X86_64 its x86_64 build tree [/Users/jsp/code/deps/dxc-build-x86_64]
+#   DXC_SRC          DirectXShaderCompiler checkout [${DEPS_DIR:-$HOME/code/deps}/dxc-src]
+#   DXC_BUILD_ARM64  its arm64 build tree [${DEPS_DIR:-$HOME/code/deps}/dxc-build]
+#   DXC_BUILD_X86_64 its x86_64 build tree [${DEPS_DIR:-$HOME/code/deps}/dxc-build-x86_64]
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-dxc_src="${DXC_SRC:-/Users/jsp/code/deps/dxc-src}"
+dxc_src="${DXC_SRC:-${DEPS_DIR:-$HOME/code/deps}/dxc-src}"
 archs=("$@")
 [ ${#archs[@]} -eq 0 ] && archs=(arm64 x86_64)
 [ -d "$dxc_src/projects/dxilconv" ] || { echo "no DirectXShaderCompiler at $dxc_src (set DXC_SRC)" >&2; exit 2; }
@@ -28,8 +29,8 @@ llvm_targets=(LLVMDxilContainer LLVMDxilRootSignature LLVMDxilValidation LLVMDXI
 
 for arch in "${archs[@]}"; do
     case "$arch" in
-        arm64)  dxc_build="${DXC_BUILD_ARM64:-/Users/jsp/code/deps/dxc-build}" ;;
-        x86_64) dxc_build="${DXC_BUILD_X86_64:-/Users/jsp/code/deps/dxc-build-x86_64}" ;;
+        arm64)  dxc_build="${DXC_BUILD_ARM64:-${DEPS_DIR:-$HOME/code/deps}/dxc-build}" ;;
+        x86_64) dxc_build="${DXC_BUILD_X86_64:-${DEPS_DIR:-$HOME/code/deps}/dxc-build-x86_64}" ;;
         *) echo "unknown architecture $arch" >&2; exit 2 ;;
     esac
 
@@ -40,7 +41,7 @@ for arch in "${archs[@]}"; do
         if [ "$arch" = x86_64 ]; then
             # An x86_64 llvm-tblgen would have to run under Rosetta, which hangs on freshly built command-line tools
             # here; the arm64 one produces the same output.
-            arm_tblgen="${DXC_BUILD_ARM64:-/Users/jsp/code/deps/dxc-build}/bin/llvm-tblgen"
+            arm_tblgen="${DXC_BUILD_ARM64:-${DEPS_DIR:-$HOME/code/deps}/dxc-build}/bin/llvm-tblgen"
             [ -x "$arm_tblgen" ] || { echo "build the arm64 DXC first ($arm_tblgen is missing)" >&2; exit 2; }
             extra=(-DCMAKE_OSX_ARCHITECTURES=x86_64 "-DLLVM_TABLEGEN=$arm_tblgen")
         fi

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later AND Apache-2.0
 // Makes GDeflate tile streams with the reference compressor (NVIDIA's libdeflate fork in
 // third_party/libdeflate-gdeflate). The stream layout follows Microsoft's DirectStorage GDeflate reference
 // (github.com/microsoft/DirectStorage, GDeflate/GDeflate/GDeflateCompress.cpp, Apache License 2.0,

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // API trace (D3D12METAL_TRACE=1, or trace=1 in d3d12metal.conf): every D3D12 and DXGI method an application
 // calls is logged with its arguments and result, and the set of distinct methods used (with call counts) is
 // kept in <log file>.methods. This is how a game's needs are inventoried.

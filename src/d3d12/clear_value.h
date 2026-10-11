@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Clear values of UAV clears converted to the bytes of one element of a format.
 #pragma once
 

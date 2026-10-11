@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Completion notifications: MTLSharedEvent listener blocks feed a queue that a
 // front-end thread blocks on.
 //

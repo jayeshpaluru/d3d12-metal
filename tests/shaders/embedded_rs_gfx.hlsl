@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // A pixel shader that carries its root signature (the vertex shader does not): a graphics pipeline made without a root
 // signature takes it from whichever stage has one.
 cbuffer Color : register(b0)

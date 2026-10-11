@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Compute shaders for the UAV tests. Entry point per test mode, selected by CSMain's constant `mode`.
 cbuffer Params : register(b0)
 {

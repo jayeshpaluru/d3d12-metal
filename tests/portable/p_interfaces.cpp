@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Interface versions, pipeline state streams and capability reporting.
 #include "color_ps.h"
 #include "color_vs.h"

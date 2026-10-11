@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Swap chains without a window: a detached CAMetalLayer stands in for the window
 // (the Wine build looks the layer up in the Wine window instead). Covers the
 // DXGI object (back buffers, index cycling, resize, format changes, legacy

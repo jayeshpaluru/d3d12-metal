@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
 # Backtraces all threads of the running game into the file given (default build-wine/game-logs/bt.txt).
 source "$(dirname "${BASH_SOURCE[0]}")/env.sh"
 out="${1:-$game_logs/bt.txt}"; mkdir -p "$(dirname "$out")"

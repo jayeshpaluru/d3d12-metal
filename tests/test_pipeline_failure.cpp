@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // A pipeline whose creation fails is not created again for the same description (games retry every frame).
 #include <cstring>
 

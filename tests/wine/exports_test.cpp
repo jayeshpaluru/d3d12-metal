@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Reads the export tables of dxgi.dll and d3d12.dll the way the AMD GPU Services library and other hooking code
 // does (no GetProcAddress, so no forwarder resolution): every export must be real code in an executable section,
 // not a forwarder string in the export directory. Also calls CreateDXGIFactory2 through the raw table address.

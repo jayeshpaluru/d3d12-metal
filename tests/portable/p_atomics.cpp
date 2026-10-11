@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Interlocked operations on every kind of UAV (tests/shaders/atomics.hlsl): typed buffers (R32_SINT / R32_UINT, one
 // view with a non-zero FirstElement), R32_UINT / R32_SINT texture UAVs, raw and structured buffers, all heavily
 // contended (65536 threads on 61 slots), plus the return-value form, whose originals must be a permutation of 0..N-1.

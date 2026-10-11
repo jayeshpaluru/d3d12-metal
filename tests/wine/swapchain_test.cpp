@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Swap chain behaviour on a real Wine window: back buffer cycling, the frame
 // latency waitable object (real Win32 event), ResizeBuffers with new sizes and
 // formats (also with zero size = the client area), outputs and display modes.

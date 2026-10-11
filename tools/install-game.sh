@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
 # Installs the layer next to a game: d3d12.dll and dxgi.dll beside the exe, d3d12metal.so in x86_64-unix/, a default
 # d3d12metal.conf (log file, API trace), and per-app DLL overrides in the Wine prefix's registry so they apply when
 # Steam launches the game (the environment of a shell does not reach it):
@@ -126,6 +127,11 @@ if [ ${#identity[@]} -gt 0 ]; then
     fi
 else
     echo "spoof:        none (the adapter Wine registered)"
+fi
+
+# Game-specific quirks come from profiles/*.json (the d3d12metal CLI writes them); this dev script knows Spider-Man 2's.
+if [ "${GAME:-}" = sm2 ] && [ "$dry_run" = 0 ] && ! grep -q '^quirk_force_compute_barrier=' "$conf"; then
+    echo 'quirk_force_compute_barrier=0x324071d329f05ccc' >> "$conf"
 fi
 
 if [ "$dry_run" = 0 ]; then

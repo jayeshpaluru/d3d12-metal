@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Device creation, feature queries, and queue/fence synchronisation.
 #include "test_context.h"
 

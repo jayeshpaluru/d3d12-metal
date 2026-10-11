@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Pipeline creation: DXIL -> Metal IR via libmetalirconverter, then the Metal
 // render pipeline and depth-stencil state.
 #include "internal.h"

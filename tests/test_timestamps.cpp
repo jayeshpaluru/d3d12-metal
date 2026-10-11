@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Timestamps are sampled at the start of the next encoder, so they do not split render passes; consecutive ones
 // share a sample (equal values), and results stay ordered across sample buffers and command lists.
 #include "d3d12/command_queue.h"

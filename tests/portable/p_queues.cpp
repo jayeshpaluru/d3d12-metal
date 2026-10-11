@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Several queues: direct, compute and copy queues each have a Metal queue of their own and are ordered
 // against each other only by fences (shared events). Producers on one queue feed consumers on another; a wait
 // can be submitted before the work that signals it.

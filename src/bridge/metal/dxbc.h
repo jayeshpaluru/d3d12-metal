@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // DXBC (Shader Model 4/5) shaders: detection and conversion to DXIL (see dxbc.mm).
 #pragma once
 

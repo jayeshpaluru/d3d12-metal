@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
 if host_system == 'darwin'
   bridge_sources += files(
     'metal/descriptors.mm',
@@ -14,6 +15,7 @@ if host_system == 'darwin'
     'metal/queries.mm',
     'metal/queue.mm',
     'metal/swapchain.mm',
+    'metal/hud.mm',
   )
 endif
 

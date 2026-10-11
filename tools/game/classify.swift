@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Classifies a screenshot of the game by comparing a downscaled grayscale copy with reference captures.
 //   classify <png> <refdir>      prints "<label> <distance>" of the closest reference (distance 0..255, mean absolute
 //                                difference of 64x72 grayscale cells of the menu area), or "unknown <distance>" above the threshold

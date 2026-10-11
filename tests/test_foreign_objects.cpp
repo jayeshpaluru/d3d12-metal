@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Objects that are not this layer's (wrappers, proxies, MSVC-built objects)
 // reach the API: they must be refused or seen through, never downcast blindly.
 #include "foreign_queue.h"

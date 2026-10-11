@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Render passes are built by the backend from D3D12-shaped records: a clear
 // before a draw folds into the pass, rebinding the same targets keeps the pass
 // open, and a clear after a draw starts a new one.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // ID3D12RootSignature and its top-level argument buffer layout.
 #pragma once
 

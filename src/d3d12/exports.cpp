@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // d3d12.dll entry points other than root signature serialization.
 #include "common/export.h"
 #include "common/log.h"

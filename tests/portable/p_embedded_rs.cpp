@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // A pipeline state created without a root signature takes the one embedded in its shader: the compute shader
 // (tests/shaders/embedded_rs.hlsl) carries its signature, the pipeline is made with a null pRootSignature, the
 // application builds an equal signature from the same bytecode and binds it.

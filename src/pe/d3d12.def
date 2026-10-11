@@ -1,3 +1,4 @@
+; SPDX-License-Identifier: LGPL-2.1-or-later
 LIBRARY d3d12
 EXPORTS
     ; Ordinals 100 to 110 are those of the Windows runtime: games link d3d12.dll by ordinal (101 = D3D12CreateDevice).

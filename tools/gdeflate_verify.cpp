@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Checks GDeflate calls dumped by D3D12METAL_GDEFLATE_DUMP=<dir> against the reference decoder.
 // Build and run with tools/gdeflate_verify.sh <dir>. A dump is "GDV2", u32 stream count, u64 output address, u64 output
 // extent, then per stream u32 output offset, u32 input and output sizes followed by the stream's compressed bytes and the

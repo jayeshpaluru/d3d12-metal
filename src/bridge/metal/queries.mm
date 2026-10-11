@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Query heaps and GPU clocks.
 #include "bridge/metal/log.h"
 #include "internal.h"

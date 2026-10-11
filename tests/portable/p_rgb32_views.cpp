@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Typed buffer SRVs of R32G32B32_UINT / _SINT / _FLOAT (tests/shaders/rgb32_views.hlsl). Metal has no 3-channel 32-bit
 // formats, so the layer widens the elements into a shadow buffer at the start of every submit. Checked with exact
 // values: a load of element i returns (x, y, z, 1) from byte 12 * (FirstElement + i), for views at FirstElement 0 and

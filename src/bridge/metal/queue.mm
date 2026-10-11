@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Queues and command stream replay.
 #define IR_PRIVATE_IMPLEMENTATION  // generates the runtime header's implementation (internal.h includes it)
 #include "bridge/metal/log.h"

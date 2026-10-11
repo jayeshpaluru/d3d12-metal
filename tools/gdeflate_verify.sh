@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
 # Builds tools/gdeflate_verify.cpp against the reference GDeflate codec in third_party and runs it on dumped calls.
 # usage: tools/gdeflate_verify.sh <dir with call-N.bin>     (dumps: D3D12METAL_GDEFLATE_DUMP=<dir> while the game runs)
 set -e

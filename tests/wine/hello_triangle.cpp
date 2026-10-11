@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // A port of Microsoft's D3D12HelloTriangle sample (DirectX-Graphics-Samples, MIT
 // licence) for the MinGW headers, built to run under Wine on d3d12-metal. The
 // structure and the D3D12 calls follow the sample: window, FLIP_DISCARD swap

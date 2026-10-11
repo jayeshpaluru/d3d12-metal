@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // The window-less scenarios of the native test suite, run under Wine: they prove
 // the PE front-end, the unix-call transport and the Metal backend end to end.
 // Device and adapter, buffer copies, an offscreen triangle, fence events.

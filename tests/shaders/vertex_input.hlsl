@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Interpolates a per-vertex colour. Position and offset come from one vertex
 // buffer slot, the colour (packed 8-bit) from another.
 struct VSInput

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Hull and domain shader emulation: one triangle patch, tessellated by the fixed-function stage; the domain shader
 // turns the barycentric coordinates into colours.
 #include "t12.h"

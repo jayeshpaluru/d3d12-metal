@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Tests dxilconv_window_typed_buffers: rewrites DXC-compiled shaders, checks the output parses (dxc -dumpbin), converts
 // it with Metal Shader Converter against a root signature holding the original and the window ranges and, for the GPU
 // shader, runs it on a buffer with more than 2^28 elements. Build and run with test/run.sh.

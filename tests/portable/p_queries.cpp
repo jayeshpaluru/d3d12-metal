@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Queries (occlusion, binary occlusion, timestamps, pipeline statistics), markers and events, predication,
 // WriteBufferImmediate and clock calibration.
 #include "color_ps.h"

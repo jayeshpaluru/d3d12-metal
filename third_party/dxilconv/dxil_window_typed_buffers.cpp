@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // dxilconv_window_typed_buffers: rewrites typed buffer accesses of a DXIL container so that element indices >= 2^28 go
 // through "window" resources (see dxilconv_c.h). Metal texture buffers hold at most 2^28 elements; the layer binds, per
 // typed buffer descriptor, three more views starting at element w * 2^28 into a shadow descriptor table, and this pass

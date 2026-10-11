@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Shader Model 5 bytecode (DXBC, as FXC and D3DCompile produce it) is accepted: tests/shaders/dxbc.hlsl is converted
 // to DXIL by dxilconv and runs as a draw and as a compute dispatch. Needs libdxilconv (tools/build-dxilconv.sh).
 #include "dxbc_cs.h"

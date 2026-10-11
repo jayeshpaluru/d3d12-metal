@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Layer options. Every D3D12METAL_<KEY> environment variable can also be set in d3d12metal.conf, next to
 // d3d12.dll (key=value lines, '#' comments, `key` in lower case: log=1, log_file=/unix/path, trace=1,
 // stats=1, dump_failed=/dir, cache_dir=...). A game started by Steam does not see the environment of the shell,

@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
 # Builds and runs window_test against build-dxilconv/arm64/libdxilconv.dylib (run tools/build-dxilconv.sh arm64 first).
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

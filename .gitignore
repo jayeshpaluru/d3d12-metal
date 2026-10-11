@@ -11,3 +11,5 @@ captures/
 .claude/
 __pycache__/
 build-dxilconv/
+build-app/
+app/.build/

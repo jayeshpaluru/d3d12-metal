@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
 project(
   'd3d12-metal', ['c', 'cpp'],
   version: '0.1.0',

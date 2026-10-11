@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Draw variations: primitive topologies, per-instance data with step rates, StartInstanceLocation,
 // BaseVertexLocation, adjacency topologies (skipped without a geometry shader) and bundles.
 #include "color_ps.h"

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 /* dxgi.dll has no logic of its own: each export calls the same function in d3d12.dll, which carries the whole
  * layer. They are real functions, not export forwarders (a .def "name = d3d12.name" entry): code that reads the
  * export table itself, as the AMD GPU Services library does, takes a forwarder's RVA for a function and jumps into

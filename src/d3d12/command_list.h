@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // ID3D12GraphicsCommandList (implemented up to ID3D12GraphicsCommandList1).
 //
 // Calls are recorded into an mtlb command stream (bridge/mtlb_cmd.h) that

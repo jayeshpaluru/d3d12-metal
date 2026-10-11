@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Helpers for the portable tests: the same test sources build natively (arm64
 // macOS, DirectX-Headers, run against the layer's dylib) and as Win32 programs
 // (MinGW headers, run under Wine against d3d12.dll). Everything here compiles

@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
 # Prints the state of the game's screen: profile1, profile2 (SELECT PROFILE, that row highlighted), main-continue (main menu, CONTINUE
 # highlighted), gameplay (the open world of the saved scene), or unknown (intro, loading, a menu without a reference, no window).
 # Compares a capture with the reference captures of the game profile in build-wine/ref/<sm1|sm2>/ (<state>.png,

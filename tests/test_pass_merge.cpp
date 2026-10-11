@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // A render pass continues across a barrier only when that is provably safe (queue.mm, Replay::barrier): the barrier
 // names nothing the pass renders to and no draw of the pass binds a UAV. Draws whose pixel shader wrote a UAV end the
 // pass at the barrier, so the next draw (reading it from the vertex shader) sees the data. Counts the passes of a list

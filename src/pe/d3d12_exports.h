@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 /* The DXGI entry points exported by d3d12.dll (src/pe/d3d12.def), for dxgi_forwarder.c. */
 #pragma once
 

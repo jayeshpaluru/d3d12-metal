@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Ports of Microsoft's D3D12HelloTexture and D3D12HelloConstBuffers samples (DirectX-Graphics-Samples,
 // MIT licence) for the MinGW headers, to run under Wine on d3d12-metal: a window, a FLIP_DISCARD swap
 // chain, the sample's resources and draws, a fence-synchronised render loop. The sample's own pixels

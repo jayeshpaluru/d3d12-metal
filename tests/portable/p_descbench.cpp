@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Descriptor write throughput: how many CreateXxxView / CreateSampler / CopyDescriptors calls per second
 // the front-end sustains. Games write tens of thousands of descriptors per frame, and under Wine a bridge
 // crossing costs about 350 ns, so descriptor creation must be a memory write. Prints one line per kind

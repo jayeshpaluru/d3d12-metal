@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Operating system services the front-end needs but cannot get portably.
 //
 // The front-end builds natively on macOS (headless tests) and, later, as PE

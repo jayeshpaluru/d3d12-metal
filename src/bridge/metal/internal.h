@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Backend-internal object definitions. Public handles are pointers to these
 // structs cast to uint64_t.
 #pragma once
@@ -22,6 +23,7 @@
 
 #include "bridge/mtlb.h"
 #include "disk_cache.h"
+#include "hud.h"
 
 namespace mtlb {
 
@@ -351,6 +353,11 @@ struct Swapchain {
 
     std::atomic<bool> display_sync{true};
 
+    // The performance overlay (hud=1): font and shader, a pipeline per drawable format.
+    bool hud = false;
+    HudState hud_state;
+    id<MTLRenderPipelineState> hud_pipeline = nil;
+
     // Debug aid: D3D12METAL_DUMP_PRESENT=<file.png> writes what the Nth present
     // (D3D12METAL_DUMP_PRESENT_FRAME, default 30) drew onto the drawable; with D3D12METAL_DUMP_PRESENT_EVERY=K
     // also every Kth present after it, into <file>-<present>.png.
@@ -415,6 +422,7 @@ void commit_residency(Device *device);
 struct Drawable {
     id<CAMetalDrawable> drawable = nil;  // nil when none was available (a hidden window)
     id<MTLRenderPipelineState> pipeline = nil;
+    id<MTLRenderPipelineState> hud_pipeline = nil;  // when the overlay is on
 };
 
 // Takes the swap chain's next drawable and applies the sync interval. Blocks while

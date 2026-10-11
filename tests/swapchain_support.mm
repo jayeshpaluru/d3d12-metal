@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Objective-C side of test_swapchain: the layer that stands in for a window, and
 // reading a PNG. Kept apart because Objective-C's BOOL clashes with the D3D headers.
 #import <ImageIO/ImageIO.h>

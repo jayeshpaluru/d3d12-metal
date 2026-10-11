@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
 test_deps = [directx_headers]
 # Every test gets a shader cache directory of its own (never the user's, never shared between parallel tests).
 test_cache_root = meson.current_build_dir() / 'shader-cache'
@@ -134,3 +135,15 @@ test_swapchain = executable(
   link_with: d3d12_metal,
 )
 test('test_swapchain', test_swapchain, timeout: 60, env: {'D3D12METAL_CACHE_DIR': test_cache_root / 'swapchain'})
+
+# The performance overlay on a detached layer, with and without hud=1.
+test_hud = executable(
+  'test_hud', 'test_hud.cpp', 'swapchain_support.mm',
+  include_directories: test_inc,
+  dependencies: [test_deps, dependency('appleframeworks', modules: ['QuartzCore', 'ImageIO', 'CoreGraphics', 'Foundation', 'Metal'])],
+  objcpp_args: ['-fobjc-arc'],
+  link_with: d3d12_metal,
+)
+foreach mode : ['on', 'off']
+  test('test_hud_' + mode, test_hud, args: [mode], timeout: 60, env: {'D3D12METAL_CACHE_DIR': test_cache_root / ('hud_' + mode)})
+endforeach

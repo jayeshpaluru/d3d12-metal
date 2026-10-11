@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Misuse the layer must survive without crashing or writing where it should not: CPU descriptor handles that
 // are not inside a heap of the right type, render target views of subresources that do not exist, views whose
 // resources are destroyed before use, and objects released while a command list still names them.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // The backend must reject copy, resolve and render target records that reach outside their resources
 // (Metal aborts or faults the GPU on those), and keep working afterwards.
 #include <cstring>

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // A triangle with a vertex at an infinite position draws nothing, as D3D12 clips it (Metal rasterizes it: the layer
 // turns infinite position components into NaN, which drops the primitive). A finite triangle beside it still draws.
 #include <cmath>

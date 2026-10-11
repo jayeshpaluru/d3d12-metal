@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // CreatePipelineState: parsing of the pipeline state stream.
 //
 // The stream is a sequence of subobjects, each starting at a pointer-aligned

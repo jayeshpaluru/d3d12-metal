@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // The fence mirror (what GetCompletedValue reads) follows the event's actual value (Metal's events never go down), and a signal whose command buffer failed still advances it, so that a spin on
 // GetCompletedValue after a GPU error ends.
 #include <chrono>

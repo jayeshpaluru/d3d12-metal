@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Buffer copies: upload -> default -> readback.
 #include <cstring>
 #include <vector>

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Unix side of the Wine unix-call transport: Wine's loader finds
 // __wine_unix_call_funcs in d3d12metal.so; each entry unpacks the parameters the
 // PE client packed and calls the Metal backend.

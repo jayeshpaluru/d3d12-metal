@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
 # The PE half of the Wine build. Everything is in d3d12.dll (the front-end shares
 # its objects between D3D12 and DXGI); dxgi.dll only forwards its exports to it.
 pe_include = include_directories('../../src')

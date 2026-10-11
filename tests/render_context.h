@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Offscreen rendering helpers for the colour-triangle tests: a render target,
 // root signatures, pipelines, and texture readback.
 #pragma once

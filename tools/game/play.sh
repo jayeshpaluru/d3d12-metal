@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
 # Launches the game with statistics on (the installed d3d12metal.conf is left alone: the environment overrides it)
 # and drives it from the profile menu into the open world (tools/game/to-gameplay.sh), screenshots land in
 # build-wine/game-screens/load-N.png. The layer log is build-wine/game-logs/<name>.log.

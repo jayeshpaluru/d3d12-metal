@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Draws geometry in a constant colour. The colour comes from register b0; the
 // tests bind that register as root constants, a descriptor table or a root CBV.
 cbuffer Color : register(b0)

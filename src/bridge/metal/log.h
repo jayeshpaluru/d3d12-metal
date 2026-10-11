@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 // Log output of the backend: stderr, and D3D12METAL_LOG_FILE when it is set (the front-end writes to the same
 // file through mtlb_log_write).
 #pragma once
