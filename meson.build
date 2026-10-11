@@ -56,6 +56,7 @@ portable_tests = [
   ['psothreads', ['instanced'], ['fill']],
   ['dxbc', [], []],
   ['rtmismatch', ['rt_mismatch'], []],
+  ['inf_position', ['inf_position'], []],
   ['geometry', ['geometry'], []],
   ['tessellation', ['tessellation'], []],
   ['embedded_rs', ['embedded_rs_gfx'], ['embedded_rs']],

@@ -329,6 +329,11 @@ Performance findings (Spider-Man, gameplay scene, `tools/game/measure.sh`):
 - **Typed buffer windows.** The game views a 2 GiB vertex buffer (its global managed buffer) through typed buffer views of 536M (RGBA8,
   RGB10A2, R32_UINT) and 1.07G (R16_UINT) elements; data lives up to 1.6 GiB into it, past the 2^28 elements a Metal texture buffer holds,
   where the clamped views read zero (heads and faces collapsed, T-poses in cutscenes). Fixed by the windows (ARCHITECTURE.md).
+- **Hair streaks.** The strand vertex shaders cull vertices with position (+inf, 0, 0, 0); D3D12 clips such primitives, Metal rasterized
+  them as streaks across the screen. Vertex, geometry and domain shaders are now converted with the converter's VertexPositionInfToNan
+  (NaN drops the primitive); only those stages' cache keys changed (`p_inf_position`).
+- **R32G32B32 typed buffer SRVs** read through a 16-byte-stride shadow the backend refills ahead of every submit (`p_rgb32_views`); they were
+  null descriptors (Metal has no 96-bit formats). UAVs of these formats stay null.
 - Debugging switches: `D3D12METAL_DUMP_SHADERS=<dir>` (every pipeline shader as DXIL, for `dxc -dumpbin`), `D3D12METAL_DUMP_PRESENT_EVERY=K`
   (every Kth present after `D3D12METAL_DUMP_PRESENT_FRAME`), `D3D12METAL_SERIALIZE=1` (each submission completes before the next),
   `D3D12METAL_GDEFLATE_DUMP`.

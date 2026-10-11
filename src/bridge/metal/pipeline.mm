@@ -51,16 +51,21 @@ std::string error_text(IRError *error, const char *what)
 // The converter settings every shader is compiled with (they are part of the disk cache key). D3D12METAL_COMPAT_FLAGS
 // (a number, IRCompatibilityFlags) and D3D12METAL_GPU_FAMILY (IRGPUFamily, e.g. 1008) replace them, to measure what
 // a flag costs.
-IRCompatibilityFlags compatibility_flags()
+// D3D12 semantics the converter leaves off by default: out-of-bounds buffer and texture reads return zero (and writes
+// are dropped), the descriptors' min LOD clamp and the samplers' LOD bias are applied, NaN coordinates sample as zero,
+// and equal vertex shaders give equal positions. Stages that output positions also turn infinite position components
+// into NaN, which drops the primitive as D3D12 clipping does, where Metal rasterizes it (Spider-Man 2 culls hair strand
+// vertices with x = +inf, w = 0: they drew streaks across the screen). D3D12METAL_COMPAT_FLAGS replaces them all.
+IRCompatibilityFlags compatibility_flags(IRShaderStage stage)
 {
-    static const IRCompatibilityFlags flags = [] {
-        if (const char *v = std::getenv("D3D12METAL_COMPAT_FLAGS"); v && *v)
-            return static_cast<IRCompatibilityFlags>(std::strtoul(v, nullptr, 0));
-        return static_cast<IRCompatibilityFlags>(
-            IRCompatibilityFlagBoundsCheck | IRCompatibilityFlagTextureMinLODClamp | IRCompatibilityFlagSamplerLODBias
-            | IRCompatibilityFlagSampleNanToZero | IRCompatibilityFlagPositionInvariance);
-    }();
-    return flags;
+    static const char *override_flags = std::getenv("D3D12METAL_COMPAT_FLAGS");
+    if (override_flags && *override_flags)
+        return static_cast<IRCompatibilityFlags>(std::strtoul(override_flags, nullptr, 0));
+    uint32_t flags = IRCompatibilityFlagBoundsCheck | IRCompatibilityFlagTextureMinLODClamp | IRCompatibilityFlagSamplerLODBias
+                     | IRCompatibilityFlagSampleNanToZero | IRCompatibilityFlagPositionInvariance;
+    if (stage == IRShaderStageVertex || stage == IRShaderStageGeometry || stage == IRShaderStageDomain)
+        flags |= IRCompatibilityFlagVertexPositionInfToNan;
+    return static_cast<IRCompatibilityFlags>(flags);
 }
 
 uint32_t minimum_gpu_family()
@@ -86,10 +91,6 @@ IRCompiler *thread_compiler(bool emulation = false)
         // Vertex shaders fetch their inputs through a separate stage-in function
         // (see get_stage_in) instead of Metal vertex fetch.
         IRCompilerSetStageInGenerationMode(compiler.ptr, IRStageInCodeGenerationModeUseSeparateStageInFunction);
-        // D3D12 semantics the converter leaves off by default: out-of-bounds buffer and texture reads
-        // return zero (and writes are dropped), the descriptors' min LOD clamp and the samplers' LOD bias
-        // are applied, NaN coordinates sample as zero, and equal vertex shaders give equal positions.
-        IRCompilerSetCompatibilityFlags(compiler.ptr, compatibility_flags());
         if (minimum_gpu_family())
             IRCompilerSetMinimumGPUFamily(compiler.ptr, static_cast<IRGPUFamily>(minimum_gpu_family()));
     }
@@ -195,7 +196,7 @@ CacheKey stage_key(RootSignature *root_signature, const void *dxil, uint64_t siz
         h.update(std::string("typed-buffer-windows-1"));
     h.update(DiskCache::converter_identity());
     h.update_value(kCacheRevision);
-    h.update_value(static_cast<uint32_t>(compatibility_flags()));
+    h.update_value(static_cast<uint32_t>(compatibility_flags(ir_stage)));
     if (minimum_gpu_family())  // (the keys without it stay as they were)
         h.update_value(minimum_gpu_family());
     h.update_value(static_cast<uint32_t>(ir_stage));
@@ -370,6 +371,7 @@ mtlb_result convert_stage(Device *device, RootSignature *root_signature, const v
     if (options.emulation)
         IRCompilerSetInputTopology(compiler, options.topology);
     IRCompilerSetGlobalRootSignature(compiler, target->ir);
+    IRCompilerSetCompatibilityFlags(compiler, compatibility_flags(ir_stage));
 
     OwnedObject input(IRObjectCreateFromDXIL(static_cast<const uint8_t *>(source), source_size, IRBytecodeOwnershipNone));
     IRError *error = nullptr;

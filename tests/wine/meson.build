@@ -36,6 +36,7 @@ else
                     ['const_buffers', '../shaders/const_buffers.hlsl'],
                     ['instanced', '../shaders/instanced.hlsl'],
                     ['rt_mismatch', '../shaders/rt_mismatch.hlsl'],
+                    ['inf_position', '../shaders/inf_position.hlsl'],
                     ['embedded_rs_gfx', '../shaders/embedded_rs_gfx.hlsl'],
                     ['geometry', '../shaders/geometry.hlsl'], ['tessellation', '../shaders/tessellation.hlsl'],
                     ['rov', '../shaders/rov.hlsl']]
