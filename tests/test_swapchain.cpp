@@ -4,7 +4,9 @@
 // creation, outputs) and the present pass, whose output is checked through the
 // backend's present dump: an RGBA back buffer must reach the BGRA layer with
 // its channels in the right place.
+#include <chrono>
 #include <cstdlib>
+#include <thread>
 #include <unistd.h>
 #include <string>
 
@@ -122,9 +124,13 @@ int main()
     }
     CHECK_HR(swap_chain->Present(0, DXGI_PRESENT_TEST));
 
-    // The third present went to the dump: R and B must not be swapped.
+    // The third present went to the dump: R and B must not be swapped. The dump is written when the GPU is done with
+    // the present, after Present returned.
     uint8_t rgb[3] = {};
-    CHECK(test_png_pixel(dump.c_str(), 8, 8, rgb));
+    bool dumped = false;
+    for (int tries = 0; tries < 500 && !(dumped = test_png_pixel(dump.c_str(), 8, 8, rgb)); ++tries)
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    CHECK(dumped);
     std::printf("presented pixel: (%u,%u,%u)\n", rgb[0], rgb[1], rgb[2]);
     CHECK(rgb[0] > 250 && rgb[1] < 5 && rgb[2] > 123 && rgb[2] < 133);
     std::remove(dump.c_str());

@@ -11,6 +11,8 @@
 
 #include "layer_provider.h"
 
+#include <cstdio>
+
 namespace {
 
 using namespace mtlb;
@@ -86,9 +88,10 @@ id<MTLRenderPipelineState> make_pipeline(Swapchain *swapchain, MTLPixelFormat pi
     return pipeline;
 }
 
-// Writes a BGRA8 texture as a PNG.
+// Writes a BGRA8 texture as a PNG (to a temporary name, then renamed: a reader never sees half a file).
 void write_png(id<MTLTexture> texture, const std::string &path)
 {
+    const std::string temporary = path + ".partial";
     const NSUInteger width = texture.width, height = texture.height, pitch = width * 4;
     NSMutableData *pixels = [NSMutableData dataWithLength:pitch * height];
     [texture getBytes:pixels.mutableBytes bytesPerRow:pitch fromRegion:MTLRegionMake2D(0, 0, width, height) mipmapLevel:0];
@@ -97,8 +100,8 @@ void write_png(id<MTLTexture> texture, const std::string &path)
                                                  static_cast<uint32_t>(kCGImageAlphaNoneSkipFirst) | static_cast<uint32_t>(kCGBitmapByteOrder32Little));
     CGImageRef image = context ? CGBitmapContextCreateImage(context) : nullptr;
     // A path that is not valid UTF-8 would make NSURL's convenience constructors throw.
-    CFURLRef url = CFURLCreateFromFileSystemRepresentation(nullptr, reinterpret_cast<const UInt8 *>(path.c_str()),
-                                                           static_cast<CFIndex>(path.size()), false);
+    CFURLRef url = CFURLCreateFromFileSystemRepresentation(nullptr, reinterpret_cast<const UInt8 *>(temporary.c_str()),
+                                                           static_cast<CFIndex>(temporary.size()), false);
     CGImageDestinationRef destination =
         url ? CGImageDestinationCreateWithURL(url, CFSTR("public.png"), 1, nullptr) : nullptr;
     if (url)
@@ -106,7 +109,7 @@ void write_png(id<MTLTexture> texture, const std::string &path)
     bool ok = false;
     if (image && destination) {
         CGImageDestinationAddImage(destination, image, nullptr);
-        ok = CGImageDestinationFinalize(destination);
+        ok = CGImageDestinationFinalize(destination) && std::rename(temporary.c_str(), path.c_str()) == 0;
     }
     backend_log("%s present dump %s", ok ? "wrote" : "failed to write", path.c_str());
     if (destination)
