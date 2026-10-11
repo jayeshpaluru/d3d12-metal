@@ -335,6 +335,8 @@ struct Queue {
     uint64_t resolve_value = 0, resolve_wait = 0;
     bool fence_pending = false;  // an encoder updated the fence and no later encoder has waited yet
     uint32_t test_drop_signals = 0;  // mtlb_queue_test_drop_signals
+    uint32_t id = 0;                 // creation order, names the queue in the timeline
+    uint64_t committed_count = 0;    // command buffers committed (timeline)
 };
 
 // A CAMetalLayer attached to an application window, and what it takes to put a

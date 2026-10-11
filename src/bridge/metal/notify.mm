@@ -6,6 +6,7 @@
 // push a record and notify a condition variable; everything else happens on the
 // front-end's waiter thread.
 #include "internal.h"
+#include "timeline.h"
 
 #include <condition_variable>
 #include <deque>
@@ -54,9 +55,11 @@ mtlb_result mtlb_event_notify(mtlb_event event_handle, uint64_t value, mtlb_noti
     if (!event || !ref)
         return MTLB_ERROR_INVALID_ARGUMENT;
     NotifyRef queue = *ref;
+    timeline::instant("SetEventOnCompletion", value);
     [event->event notifyListener:event->device->listener
                          atValue:value
                            block:^(id<MTLSharedEvent>, uint64_t reached) {
+        timeline::instant("fence reached (listener)", reached);
         {
             std::lock_guard<std::mutex> lock(queue->mutex);
             queue->pending.push_back({cookie, reached});
@@ -74,6 +77,7 @@ mtlb_result mtlb_notify_wait(mtlb_notify handle, mtlb_notification *out, uint32_
     NotifyQueue &queue = **ref;
     std::unique_lock<std::mutex> lock(queue.mutex);
     queue.wake.wait(lock, [&] { return queue.closed || !queue.pending.empty(); });
+    timeline::instant("waiter wakes", queue.pending.size());
     *count = 0;
     while (*count < max && !queue.pending.empty() && !queue.closed) {
         out[(*count)++] = queue.pending.front();

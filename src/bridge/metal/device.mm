@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 // Device, buffer, descriptor heap, texture and event objects.
 #include "internal.h"
+#include "timeline.h"
 
 #include <algorithm>
 #include <cstring>
@@ -269,6 +270,7 @@ mtlb_result mtlb_event_wait_cpu(mtlb_event handle, uint64_t value, uint64_t time
     Event *event = from_handle<Event>(handle);
     if (!event)
         return MTLB_ERROR_INVALID_ARGUMENT;
+    timeline::Scope scope("CPU fence wait", value);
     return [event->event waitUntilSignaledValue:value timeoutMS:timeout_ms] ? MTLB_OK : MTLB_ERROR_TIMEOUT;
 }
 

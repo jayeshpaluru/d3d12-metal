@@ -3,6 +3,7 @@
 #define IR_PRIVATE_IMPLEMENTATION  // generates the runtime header's implementation (internal.h includes it)
 #include "bridge/metal/log.h"
 #include "internal.h"
+#include "timeline.h"
 
 #include <mach/mach_time.h>
 
@@ -2759,6 +2760,15 @@ void commit_open(Queue *queue)
         [queue->open popDebugGroup];
     commit_residency(queue->device);
     id<MTLCommandBuffer> committed = queue->open;
+    if (timeline::enabled()) {
+        const double at = timeline::now();
+        const uint32_t queue_id = queue->id;
+        const uint64_t seq = ++queue->committed_count;
+        [committed addCompletedHandler:^(id<MTLCommandBuffer> done) {
+            timeline::gpu(queue_id, done.GPUStartTime, done.GPUEndTime, at, seq);
+        }];
+        timeline::instant("commit", seq);
+    }
     [committed commit];
     stat_add(kStatCommandBuffers);
     queue->open = nil;
@@ -2800,6 +2810,8 @@ mtlb_result mtlb_queue_create(mtlb_device handle, mtlb_queue *out)
     queue->device = device;
     queue->queue = mtl_queue;
     queue->fence = [device->device newFence];
+    static std::atomic<uint32_t> next_id{0};
+    queue->id = next_id++;
     *out = to_handle(queue);
     return MTLB_OK;
 }
@@ -2824,7 +2836,12 @@ mtlb_result mtlb_queue_submit(mtlb_queue handle, const mtlb_span *spans, uint32_
     if (!queue || (!spans && count))
         return MTLB_ERROR_INVALID_ARGUMENT;
     stat_add(kStatSubmits);
-    std::lock_guard<std::mutex> lock(queue->mutex);
+    timeline::Scope scope("ExecuteCommandLists", queue->id);
+    std::unique_lock<std::mutex> lock(queue->mutex, std::defer_lock);
+    {
+        timeline::Scope locking("queue lock");
+        lock.lock();
+    }
     SubmitTimer timer(kPartSubmit);
     Replay replay(queue, open_command_buffer(queue));
     replay.expand_shadow_views();
@@ -2857,8 +2874,14 @@ mtlb_result mtlb_queue_present(mtlb_queue handle, mtlb_swapchain swapchain_handl
         return MTLB_ERROR_INVALID_ARGUMENT;
     if (texture->texture.sampleCount != 1)
         return fail(MTLB_ERROR_INVALID_ARGUMENT, "cannot present a multisampled texture");
+    timeline::Scope scope("Present", queue->id);
+    timeline::present();
     // A frame with no drawable (nothing to show) is dropped; the queue's other work still runs.
-    const Drawable drawable = acquire_drawable(swapchain, sync_interval);
+    Drawable drawable;
+    {
+        timeline::Scope acquiring("nextDrawable");
+        drawable = acquire_drawable(swapchain, sync_interval);
+    }
     std::lock_guard<std::mutex> lock(queue->mutex);
     if (drawable.drawable)
         encode_present(queue, open_command_buffer(queue), swapchain, texture, drawable);
@@ -2893,6 +2916,7 @@ mtlb_result mtlb_queue_signal(mtlb_queue handle, mtlb_event event_handle, uint64
     Event *event = from_handle<Event>(event_handle);
     if (!queue || !event)
         return MTLB_ERROR_INVALID_ARGUMENT;
+    timeline::Scope scope("Signal", value);
     std::lock_guard<std::mutex> lock(queue->mutex);
     const std::shared_ptr<std::atomic<uint64_t>> mirror = event->mirror;
     id<MTLSharedEvent> shared_event = event->event;
@@ -2931,6 +2955,7 @@ mtlb_result mtlb_queue_wait(mtlb_queue handle, mtlb_event event_handle, uint64_t
     Event *event = from_handle<Event>(event_handle);
     if (!queue || !event)
         return MTLB_ERROR_INVALID_ARGUMENT;
+    timeline::Scope scope("Wait (GPU)", value);
     std::lock_guard<std::mutex> lock(queue->mutex);
     [open_command_buffer(queue) encodeWaitForEvent:event->event value:value];
     return MTLB_OK;

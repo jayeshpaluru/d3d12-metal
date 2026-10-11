@@ -15,6 +15,7 @@ if host_system == 'darwin'
     'metal/queries.mm',
     'metal/queue.mm',
     'metal/swapchain.mm',
+    'metal/timeline.mm',
     'metal/hud.mm',
   )
 endif
