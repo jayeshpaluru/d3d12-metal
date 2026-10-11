@@ -436,10 +436,12 @@ public:
             [cb_ popDebugGroup];
         // Pooled buffers go back once the command buffer has run.
         if (!scratch_used_.empty() || !staging_used_.empty()) {
+            // The handler runs after this Replay is gone: it owns the lists.
             auto scratch_pool = queue_->scratch_pool, staging_pool = queue_->staging_pool;
+            auto scratch = std::move(scratch_used_), staging = std::move(staging_used_);
             [cb_ addCompletedHandler:^(id<MTLCommandBuffer>) {
-                scratch_pool->give(scratch_used_);
-                staging_pool->give(staging_used_);
+                scratch_pool->give(scratch);
+                staging_pool->give(staging);
             }];
         }
     }
