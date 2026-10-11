@@ -73,6 +73,7 @@ void CommandQueue::dispatch(std::unique_ptr<Op> op)
     std::call_once(worker_started_, [this] {
         static const bool enabled = !config_get("ASYNC_SUBMIT") || config_flag("ASYNC_SUBMIT");
         if (enabled && mtlb_notify_create(&notify_) == MTLB_OK) {
+            mtlb_queue_set_manual_commit(queue_, 1);
             worker_ = std::thread([this] { run(); });
             async_ = true;
         }
@@ -85,15 +86,32 @@ void CommandQueue::dispatch(std::unique_ptr<Op> op)
     mtlb_notify_post(notify_, reinterpret_cast<uint64_t>(op.release()), 0);
 }
 
+// The worker commits the queue's command buffer itself, so that consecutive operations share one: after a run of
+// signals (so the fence mirror's completion handler is not delayed by later work) and before it blocks. The commit
+// precedes the executed_ increment of the last operation, so flush() returns only once the work is committed.
 void CommandQueue::run()
 {
     mtlb_notification batch[16];
     uint32_t count = 0;
+    bool signal_ended = false;  // the last operation was a signal and no commit followed
+    unsigned submits = 0;       // submits in the open buffer: a long run without signals still reaches the GPU
+    const auto commit = [&] {
+        mtlb_queue_commit(queue_);
+        signal_ended = false;
+        submits = 0;
+    };
     while (mtlb_notify_wait(notify_, batch, 16, &count) == MTLB_OK && count) {
         for (uint32_t i = 0; i < count; ++i) {
             std::unique_ptr<Op> op(reinterpret_cast<Op *>(batch[i].cookie));
+            if (signal_ended && op->kind != Op::Kind::Signal)
+                commit();
+            const Op::Kind kind = op->kind;
             execute(*op);
             op.reset();
+            signal_ended = kind == Op::Kind::Signal;
+            submits = kind == Op::Kind::Present ? 0 : submits + (kind == Op::Kind::Submit);  // a present commits
+            if (submits >= 4 || (i + 1 == count && !mtlb_notify_pending(notify_)))
+                commit();
             executed_.fetch_add(1);
             if (waiters_.load()) {
                 std::lock_guard<std::mutex> lock(progress_mutex_);

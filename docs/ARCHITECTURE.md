@@ -236,6 +236,10 @@
 - **Present.** `Present` blocks until the queue has executed the previous present (at most one queued or running); the frame latency signal is
   queued behind the present and registers its fence wait once encoded. `CommandQueue::flush()` waits for every enqueued op: it runs before
   `ResizeBuffers`, in `~SwapChain` and `~CommandQueue` (which then joins the worker), and `handle()` (direct bridge access) flushes first.
+- **Deferred commits.** The worker sets `mtlb_queue_set_manual_commit`: submits and signals leave the queue's command buffer open and the worker
+  calls `mtlb_queue_commit` after a run of signals (before any other op, so the fence mirror is not delayed) and before it blocks (no more ops
+  queued, checked with `mtlb_notify_pending`; before `executed_` counts the last op, so `flush()` implies committed). An Execute+Signal pair
+  is one command buffer instead of two; present commits itself.
 - **Switch.** `async_submit=0` (`D3D12METAL_ASYNC_SUBMIT=0`) executes every op inline on the calling thread, as before.
 
 ## Wine build

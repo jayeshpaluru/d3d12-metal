@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 // Asynchronous submission: a queue's worker replays command lists, signals and waits in API order after the calls
 // returned. Run twice, with the default and with D3D12METAL_ASYNC_SUBMIT=0: the results must be the same.
+#include <chrono>
+#include <cstdlib>
 #include <thread>
 
 #include "d3d12/command_queue.h"
@@ -132,6 +134,53 @@ int main()
         CHECK_HR(gate->Signal(1));
         CHECK_HR(ctx.fence->SetEventOnCompletion(value, nullptr));
         check_pixel("after the wait", read_pixel(readback.Get(), pitch, 5, 5), {255, 0, 0, 255});
+    }
+
+    {
+        // Deferred commits: the worker puts an Execute+Signal pair into one command buffer, and never leaves work
+        // uncommitted when it goes idle.
+        const char *async_env = getenv("D3D12METAL_ASYNC_SUBMIT");
+        const bool async = !async_env || strcmp(async_env, "0") != 0;
+        ComPtr<ID3D12GraphicsCommandList> list = ctx.create_list();
+        ComPtr<ID3D12Resource> readback = record_clear(ctx, list.Get(), blue);
+        ID3D12CommandList *raw = list.Get();
+        ComPtr<ID3D12Fence> fence;
+        CHECK_HR(ctx.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(fence.ReleaseAndGetAddressOf())));
+        ctx.wait_idle();
+        constexpr int kPairs = 200;
+        mtlb_stats before, after;
+        mtlb_stats_get(&before);
+        for (int i = 1; i <= kPairs; ++i) {
+            ctx.queue->ExecuteCommandLists(1, &raw);
+            CHECK_HR(ctx.queue->Signal(fence.Get(), i));
+        }
+        queue->flush();
+        mtlb_stats_get(&after);
+        const double per_pair = double(after.command_buffers - before.command_buffers) / kPairs;
+        printf("command buffers per Execute+Signal pair: %.2f\n", per_pair);
+        if (async)
+            CHECK(per_pair < 1.5);
+        // (c) a CPU wait on a value signalled right after Execute returns.
+        CHECK_HR(fence->SetEventOnCompletion(kPairs, nullptr));
+        CHECK(fence->GetCompletedValue() == kPairs);
+
+        // (b) a lone Execute with no Signal still runs: the later signal's wait sees its result.
+        ComPtr<ID3D12GraphicsCommandList> lone = ctx.create_list();
+        ComPtr<ID3D12Resource> lone_readback = record_clear(ctx, lone.Get(), red);
+        ID3D12CommandList *lone_raw = lone.Get();
+        ctx.queue->ExecuteCommandLists(1, &lone_raw);
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        CHECK_HR(ctx.queue->Signal(fence.Get(), kPairs + 1));
+        CHECK_HR(fence->SetEventOnCompletion(kPairs + 1, nullptr));
+        check_pixel("lone execute", read_pixel(lone_readback.Get(), pitch, 5, 5), {255, 0, 0, 255});
+
+        // (d) the completed value arrives with no further API call on the queue.
+        ctx.queue->ExecuteCommandLists(1, &raw);
+        CHECK_HR(ctx.queue->Signal(fence.Get(), kPairs + 2));
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (fence->GetCompletedValue() < kPairs + 2 && std::chrono::steady_clock::now() < deadline) {
+        }
+        CHECK(fence->GetCompletedValue() == kPairs + 2);
     }
 
     {

@@ -2853,7 +2853,9 @@ mtlb_result mtlb_queue_submit(mtlb_queue handle, const mtlb_span *spans, uint32_
             replay.run(spans[i].data, spans[i].size);
     }
     replay.finish();
-    commit_open(queue);
+    // A buffer whose completion handler resolves timestamps ends here: a signal must not fire in it before the handler.
+    if (!queue->manual_commit || queue->resolve_wait)
+        commit_open(queue);
     return replay.error() == MTLB_OK ? MTLB_OK : fail(replay.error(), replay.error_message());
 }
 
@@ -2908,7 +2910,7 @@ mtlb_result mtlb_queue_marker(mtlb_queue handle, uint32_t kind, const char *text
     return MTLB_OK;
 }
 
-// Appends a signal to the open buffer and commits it, so a signal after
+// Appends a signal to the open buffer and commits it (unless the commit is manual), so a signal after
 // ExecuteCommandLists costs one commit for both.
 mtlb_result mtlb_queue_signal(mtlb_queue handle, mtlb_event event_handle, uint64_t value)
 {
@@ -2934,6 +2936,29 @@ mtlb_result mtlb_queue_signal(mtlb_queue handle, mtlb_event event_handle, uint64
             shared_event.signaledValue = value;
         sync_mirror(*mirror, shared_event);
     }];
+    if (!queue->manual_commit)
+        commit_open(queue);
+    return MTLB_OK;
+}
+
+mtlb_result mtlb_queue_set_manual_commit(mtlb_queue handle, uint32_t on)
+{
+    Queue *queue = from_handle<Queue>(handle);
+    if (!queue)
+        return MTLB_ERROR_INVALID_ARGUMENT;
+    std::lock_guard<std::mutex> lock(queue->mutex);
+    queue->manual_commit = on != 0;
+    if (!on)
+        commit_open(queue);
+    return MTLB_OK;
+}
+
+mtlb_result mtlb_queue_commit(mtlb_queue handle)
+{
+    Queue *queue = from_handle<Queue>(handle);
+    if (!queue)
+        return MTLB_ERROR_INVALID_ARGUMENT;
+    std::lock_guard<std::mutex> lock(queue->mutex);
     commit_open(queue);
     return MTLB_OK;
 }

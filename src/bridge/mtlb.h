@@ -641,6 +641,12 @@ typedef struct mtlb_span {
  * completed. */
 MTLB_EXPORT mtlb_result mtlb_queue_submit(mtlb_queue queue, const mtlb_span *spans, uint32_t count);
 
+/* With `on`, mtlb_queue_submit and mtlb_queue_signal leave the queue's command buffer open (more work joins it) until
+ * mtlb_queue_commit; present still commits. The caller must commit before it idles. Turning it off commits. */
+MTLB_EXPORT mtlb_result mtlb_queue_set_manual_commit(mtlb_queue queue, uint32_t on);
+/* Commits the open command buffer, if any. */
+MTLB_EXPORT mtlb_result mtlb_queue_commit(mtlb_queue queue);
+
 /* Number of render passes (render command encoders) the queue has encoded so
  * far; for tests and diagnostics. */
 MTLB_EXPORT uint64_t mtlb_queue_render_pass_count(mtlb_queue queue);
@@ -755,6 +761,8 @@ MTLB_EXPORT void mtlb_notify_close(mtlb_notify queue);
 /* Queues {cookie, value} now and wakes the waiter: front-end threads handing work to each other (a command queue's
  * worker) use the same queue and call, which is cheaper under Wine than a Windows event. */
 MTLB_EXPORT void mtlb_notify_post(mtlb_notify queue, uint64_t cookie, uint64_t value);
+/* The number of queued notifications not yet taken by mtlb_notify_wait. */
+MTLB_EXPORT uint64_t mtlb_notify_pending(mtlb_notify queue);
 
 MTLB_ASSERT_SIZE(mtlb_notification, 16);
 MTLB_ASSERT_SIZE(mtlb_span, 16);
