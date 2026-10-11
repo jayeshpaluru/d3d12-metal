@@ -119,9 +119,44 @@ public enum ConfBuilder {
         # Put your own lines in the game's "extra conf" setting. Environment variables D3D12METAL_<KEY> override these.
 
         """
-        out += "\n"
+        out += "\n" + blockBegin + "\n"
         for (k, v) in entries(profile: profile, settings: settings, logDir: logDir) { out += "\(k)=\(v)\n" }
-        return out
+        return out + blockEnd + "\n"
+    }
+
+    // The managed lines sit between two marker lines, so a file the user also edits can carry them: the installer replaces
+    // only the block (the layer reads the last value of a key, so the block at the end wins over older lines).
+    public static let blockBegin = "# >>> alloy managed: do not edit between these lines >>>"
+    public static let blockEnd = "# <<< alloy managed <<<"
+
+    /// The block (markers included) of a rendered conf, or of a file that has one.
+    public static func block(in text: String) -> String? {
+        guard let a = text.range(of: blockBegin), let b = text.range(of: blockEnd, range: a.upperBound..<text.endIndex) else { return nil }
+        return String(text[a.lowerBound..<b.upperBound]) + "\n"
+    }
+
+    /// `existing` with its block replaced by `block`, or with the block appended when it has none.
+    public static func merging(block: String, into existing: String) -> String {
+        if let a = existing.range(of: blockBegin), let b = existing.range(of: blockEnd, range: a.upperBound..<existing.endIndex) {
+            var end = b.upperBound
+            if end < existing.endIndex, existing[end] == "\n" { end = existing.index(after: end) }
+            return existing.replacingCharacters(in: a.lowerBound..<end, with: block)
+        }
+        return existing + (existing.isEmpty || existing.hasSuffix("\n") ? "" : "\n") + "\n" + block
+    }
+
+    /// `existing` without its block; nil when there is none.
+    public static func removingBlock(from existing: String) -> String? {
+        guard let a = existing.range(of: blockBegin), let b = existing.range(of: blockEnd, range: a.upperBound..<existing.endIndex) else { return nil }
+        var end = b.upperBound
+        if end < existing.endIndex, existing[end] == "\n" { end = existing.index(after: end) }
+        var start = a.lowerBound
+        // Also the blank line the merge put in front of the block.
+        if start > existing.startIndex, existing[existing.index(before: start)] == "\n",
+           existing.index(before: start) > existing.startIndex, existing[existing.index(existing.index(before: start), offsetBy: -1)] == "\n" {
+            start = existing.index(before: start)
+        }
+        return existing.replacingCharacters(in: start..<end, with: "")
     }
 
     /// Parses a conf file (key=value lines, # comments).

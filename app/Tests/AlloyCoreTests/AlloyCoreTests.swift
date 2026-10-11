@@ -326,7 +326,9 @@ let sampleACF = """
         #expect(text(game.appendingPathComponent("d3d12.dll")) == "dll1")
         #expect(text(game.appendingPathComponent("d3d12.dll.d3d12metal-orig")) == "original-d3d12")
         #expect(text(game.appendingPathComponent("d3d12metal.conf.d3d12metal-orig")) == "my own conf")
-        #expect(text(game.appendingPathComponent("d3d12metal.conf"))?.hasPrefix(ConfBuilder.marker) == true)
+        // The user's own conf is kept (a backup of it too) and the managed lines are added at its end.
+        let merged = try #require(text(game.appendingPathComponent("d3d12metal.conf")))
+        #expect(merged.hasPrefix("my own conf") && merged.contains(ConfBuilder.blockBegin))
         #expect(text(game.appendingPathComponent("x86_64-unix/d3d12metal.so")) == "so")
 
         try LayerInstaller.uninstall(gameDir: game, session: nil)
@@ -336,6 +338,53 @@ let sampleACF = """
         #expect(!FileManager.default.fileExists(atPath: game.appendingPathComponent("dxgi.dll").path))
         #expect(!FileManager.default.fileExists(atPath: game.appendingPathComponent("x86_64-unix").path))
         #expect(text(game.appendingPathComponent("game.exe")) == "game")
+    }
+
+    func block(_ body: String) -> String { ConfBuilder.blockBegin + "\n" + body + "\n" + ConfBuilder.blockEnd + "\n" }
+    func rendered(_ body: String) -> String { ConfBuilder.marker + "\n\n" + block(body) }
+
+    @Test func freshConfIsOursAndRemovedOnUninstall() throws {
+        let game = try makeTempDir("game")
+        try LayerInstaller.install(gameDir: game, exe: "g.exe", build: try fakeBuild(), conf: rendered("hud=1"), session: nil)
+        #expect(text(game.appendingPathComponent("d3d12metal.conf")) == rendered("hud=1"))
+        try LayerInstaller.uninstall(gameDir: game, session: nil)
+        #expect(!FileManager.default.fileExists(atPath: game.appendingPathComponent("d3d12metal.conf").path))
+    }
+
+    @Test func userEditedConfSurvivesUpdatesAndUninstall() throws {
+        let game = try makeTempDir("game")
+        let build = try fakeBuild()
+        try "log=1\ntrace=1\n".write(to: game.appendingPathComponent("d3d12metal.conf"), atomically: true, encoding: .utf8)
+        try LayerInstaller.install(gameDir: game, exe: "g.exe", build: build, conf: rendered("hud=1"), session: nil)
+        var conf = try #require(text(game.appendingPathComponent("d3d12metal.conf")))
+        #expect(conf.hasPrefix("log=1\ntrace=1\n") && conf.contains("hud=1"))
+        // A settings change replaces only the block.
+        try LayerInstaller.updateConf(gameDir: game, conf: rendered("hud=0"))
+        conf = try #require(text(game.appendingPathComponent("d3d12metal.conf")))
+        #expect(conf.contains("hud=0") && !conf.contains("hud=1") && conf.hasPrefix("log=1\ntrace=1\n"))
+        // The user edits their lines; a re-install and an uninstall keep the edit.
+        try conf.replacingOccurrences(of: "trace=1", with: "trace=0").write(to: game.appendingPathComponent("d3d12metal.conf"), atomically: true, encoding: .utf8)
+        try LayerInstaller.install(gameDir: game, exe: "g.exe", build: build, conf: rendered("hud=1"), session: nil)
+        try LayerInstaller.uninstall(gameDir: game, session: nil)
+        let left = try #require(text(game.appendingPathComponent("d3d12metal.conf")))
+        #expect(left.contains("trace=0") && left.contains("log=1") && !left.contains("alloy managed"))
+        #expect(!FileManager.default.fileExists(atPath: game.appendingPathComponent("d3d12metal.conf.d3d12metal-orig").path))
+    }
+
+    @Test func conf_of_the_shell_installer_is_user_owned() throws {
+        // tools/install-game.sh writes d3d12metal.conf once and records it as "d3d12metal.conf|-".
+        let game = try makeTempDir("game")
+        let shellConf = "log_file=/somewhere/d3d12metal.log\ntrace=1\n"
+        try shellConf.write(to: game.appendingPathComponent("d3d12metal.conf"), atomically: true, encoding: .utf8)
+        try "d3d12.dll|-\nd3d12metal.conf|-\n".write(to: game.appendingPathComponent(".d3d12metal-install"), atomically: true, encoding: .utf8)
+        try LayerInstaller.install(gameDir: game, exe: "g.exe", build: try fakeBuild(), conf: rendered("hud=1"), session: nil)
+        #expect(text(game.appendingPathComponent("d3d12metal.conf"))?.hasPrefix(shellConf) == true)
+        try LayerInstaller.uninstall(gameDir: game, session: nil)
+        #expect(text(game.appendingPathComponent("d3d12metal.conf")) == shellConf)   // not deleted
+        // And a shell-made manifest alone (no block of ours in the file) never makes us delete the file.
+        try "d3d12metal.conf|-\n".write(to: game.appendingPathComponent(".d3d12metal-install"), atomically: true, encoding: .utf8)
+        try LayerInstaller.uninstall(gameDir: game, session: nil)
+        #expect(text(game.appendingPathComponent("d3d12metal.conf")) == shellConf)
     }
 
     @Test func secondInstallKeepsOriginalBackupAndUpdates() throws {

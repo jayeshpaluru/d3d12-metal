@@ -166,12 +166,44 @@ public enum LayerInstaller {
             manifest.record(rel, backup)
         }
 
+        // d3d12metal.conf may belong to the user (the shell installer's "|-" entries, hand edits): a file that is not ours is kept,
+        // with a backup of the original, and only the managed block is added to it.
+        func placeConf(_ rendered: String) throws {
+            let dest = gameDir.appendingPathComponent(confName)
+            var backup = manifest.backup(of: confName) ?? "-"
+            let block = ConfBuilder.block(in: rendered) ?? rendered
+            if let existing = try? String(contentsOf: dest, encoding: .utf8) {
+                let merged: String
+                if ConfBuilder.isManaged(existing) { merged = rendered }
+                else {
+                    merged = ConfBuilder.merging(block: block, into: existing)
+                    if !manifest.has(confName) || backup == "-" {
+                        if ConfBuilder.block(in: existing) == nil {
+                            backup = confName + ".d3d12metal-orig"
+                            var n = 1
+                            while fm.fileExists(atPath: gameDir.appendingPathComponent(backup).path) { backup = "\(confName).d3d12metal-orig.\(n)"; n += 1 }
+                            log.append("backup:       \(confName) -> \(backup) (your file is kept; the managed lines are added at its end)")
+                            if !dryRun { try fm.copyItem(at: dest, to: gameDir.appendingPathComponent(backup)) }
+                        }
+                    }
+                }
+                if merged == existing { log.append("up to date:   \(confName)") }
+                else {
+                    log.append("install:      \(confName)")
+                    if !dryRun { try merged.write(to: dest, atomically: true, encoding: .utf8) }
+                }
+            } else {
+                log.append("install:      \(confName)")
+                if !dryRun { try rendered.write(to: dest, atomically: true, encoding: .utf8) }
+            }
+            manifest.record(confName, backup)
+        }
+
         for rel in build.files {
             let src = build.dir.appendingPathComponent(rel)
             try place(rel: rel, write: { try fm.copyItem(at: src, to: $0) }, same: { fm.contentsEqual(atPath: src.path, andPath: $0.path) })
         }
-        let confData = Data(conf.utf8)
-        try place(rel: confName, write: { try confData.write(to: $0) }, same: { (try? Data(contentsOf: $0)) == confData })
+        try placeConf(conf)
 
         if !dryRun { try manifest.text.write(to: gameDir.appendingPathComponent(manifestName), atomically: true, encoding: .utf8) }
 
@@ -199,13 +231,16 @@ public enum LayerInstaller {
         return log
     }
 
-    /// Rewrites only d3d12metal.conf (settings changed). The file must already be ours or absent.
+    /// Rewrites only the managed part of d3d12metal.conf (settings changed): the whole file when it is ours, the block when the
+    /// user's own lines share it. A user file without our block is not touched (install the layer first, which backs it up).
     public static func updateConf(gameDir: URL, conf: String) throws {
         let url = gameDir.appendingPathComponent(confName)
-        if let old = try? String(contentsOf: url, encoding: .utf8), !ConfBuilder.isManaged(old) {
+        guard let old = try? String(contentsOf: url, encoding: .utf8) else { try conf.write(to: url, atomically: true, encoding: .utf8); return }
+        if ConfBuilder.isManaged(old) { try conf.write(to: url, atomically: true, encoding: .utf8); return }
+        guard ConfBuilder.block(in: old) != nil, let block = ConfBuilder.block(in: conf) else {
             throw CoreError("\(confName) in the game folder is not managed by \(AppInfo.name)", hint: "Install the layer first, which keeps a backup of it")
         }
-        try conf.write(to: url, atomically: true, encoding: .utf8)
+        try ConfBuilder.merging(block: block, into: old).write(to: url, atomically: true, encoding: .utf8)
     }
 
     // MARK: Uninstall
@@ -220,6 +255,28 @@ public enum LayerInstaller {
         for (rel, backup) in manifest.entries where !rel.hasSuffix("/") {
             let dest = gameDir.appendingPathComponent(rel)
             let backupURL = gameDir.appendingPathComponent(backup)
+            if rel == confName, let existing = try? String(contentsOf: dest, encoding: .utf8), !ConfBuilder.isManaged(existing) {
+                // The user's file (possibly with our block in it): take the block out, keep the rest, never delete their lines.
+                if let rest = ConfBuilder.removingBlock(from: existing) {
+                    log.append("kept:         \(rel) (the managed lines removed from it)")
+                    if !dryRun {
+                        if rest.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            try? fm.removeItem(at: dest)
+                            if backup != "-", fm.fileExists(atPath: backupURL.path) { try? fm.moveItem(at: backupURL, to: dest) }
+                        } else if backup != "-", let original = try? String(contentsOf: backupURL, encoding: .utf8),
+                                  original.trimmingCharacters(in: .whitespacesAndNewlines) == rest.trimmingCharacters(in: .whitespacesAndNewlines) {
+                            try? fm.removeItem(at: dest)          // untouched since the install: the original comes back byte for byte
+                            try fm.moveItem(at: backupURL, to: dest)
+                        } else {
+                            try rest.write(to: dest, atomically: true, encoding: .utf8)   // edited since: their lines stay
+                            if backup != "-" { try? fm.removeItem(at: backupURL) }
+                        }
+                    }
+                } else {
+                    log.append("kept:         \(rel) (not managed by \(AppInfo.name))")
+                }
+                continue
+            }
             if backup != "-", fm.fileExists(atPath: backupURL.path) {
                 log.append("restore:      \(backup) -> \(rel)")
                 if !dryRun { try? fm.removeItem(at: dest); try fm.moveItem(at: backupURL, to: dest) }
