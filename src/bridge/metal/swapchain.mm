@@ -191,12 +191,12 @@ Drawable acquire_drawable(Swapchain *swapchain, uint32_t sync_interval)
         // or while it was being acquired: pair the drawable with a pipeline for its
         // own format, and skip the frame when none matches.
         std::lock_guard<std::mutex> lock(swapchain->mutex);
-        if (result.drawable && result.drawable.texture.pixelFormat == swapchain->pixel_format)
+        if (result.drawable && result.drawable.texture.pixelFormat == swapchain->pixel_format) {
             result.pipeline = swapchain->pipeline;
-        if (result.drawable)
-            result.hud_pipeline = swapchain->hud_pipeline;
-        else if (result.drawable)
+            result.hud_pipeline = swapchain->hud_pipeline;  // built for the same format; nil when the overlay is off
+        } else if (result.drawable) {
             result.drawable = nil;
+        }
     }
     if (!result.drawable) {
         static std::atomic<bool> logged{false};

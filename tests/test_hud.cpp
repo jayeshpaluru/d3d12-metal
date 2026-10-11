@@ -62,6 +62,30 @@ int main(int argc, char **argv)
         ctx.wait_idle();
     }
 
+    // Format-changing resizes with presents in flight: a drawable acquired before the layer was reconfigured must be
+    // dropped, never drawn with the pipelines of the new format (Metal validation rejects that).
+    const DXGI_FORMAT formats[] = {DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R10G10B10A2_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+                                   DXGI_FORMAT_R8G8B8A8_UNORM};
+    for (int i = 0; i < 24; ++i) {
+        const DXGI_FORMAT format = formats[i % 4];
+        CHECK_HR(swap_chain->ResizeBuffers(2, 320, 200, format, 0));
+        for (int j = 0; j < 3; ++j) {
+            const UINT index = swap_chain->GetCurrentBackBufferIndex();
+            ComPtr<ID3D12Resource> buffer;
+            CHECK_HR(swap_chain->GetBuffer(index, IID_PPV_ARGS(buffer.ReleaseAndGetAddressOf())));
+            D3D12_CPU_DESCRIPTOR_HANDLE rtv = rtv_heap->GetCPUDescriptorHandleForHeapStart();
+            rtv.ptr += SIZE_T(index) * increment;
+            ctx.device->CreateRenderTargetView(buffer.Get(), nullptr, rtv);
+            ComPtr<ID3D12GraphicsCommandList> list = ctx.create_list();
+            list->ClearRenderTargetView(rtv, black, 0, nullptr);
+            CHECK_HR(list->Close());
+            ID3D12CommandList *lists[] = {list.Get()};
+            ctx.queue->ExecuteCommandLists(1, lists);
+            CHECK_HR(swap_chain->Present(0, 0));   // no wait: the next resize happens with frames in flight
+        }
+    }
+    ctx.wait_idle();
+
     // The dump is written when the command buffer completes: wait for it.
     uint8_t probe[3] = {};
     for (int i = 0; i < 100 && !test_png_pixel(dump.c_str(), 0, 0, probe); ++i)
