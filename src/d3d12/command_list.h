@@ -7,6 +7,7 @@
 #pragma once
 
 #include <atomic>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -30,6 +31,14 @@ public:
     ObjectRefs() = default;
     ObjectRefs(const ObjectRefs &) = delete;
     ObjectRefs &operator=(const ObjectRefs &) = delete;
+    ObjectRefs(ObjectRefs &&other) noexcept : all_(std::move(other.all_))
+    {
+        for (size_t i = 0; i < kRecent; ++i)
+            recent_[i] = other.recent_[i];
+        other.all_.clear();
+        for (InternalRefCounted *&slot : other.recent_)
+            slot = nullptr;
+    }
     ~ObjectRefs() { clear(); }
 
     // Takes an internal reference of its own.
@@ -90,9 +99,15 @@ public:
 
     bool closed() const { return closed_; }
     const std::vector<uint8_t> &stream() const { return stream_; }
-    // A queue replays the stream after ExecuteCommandLists returned: Reset waits until every submission is replayed.
+    // A queue replays the stream after ExecuteCommandLists returned, from the span captured then. A Reset meanwhile
+    // retires the stream and references (reset_state) instead of waiting; the last end_submit frees them.
     void begin_submit() { in_flight_.fetch_add(1, std::memory_order_relaxed); }
-    void end_submit() { in_flight_.fetch_sub(1, std::memory_order_release); }
+    void end_submit()
+    {
+        std::lock_guard<std::mutex> lock(retired_mutex_);
+        if (in_flight_.fetch_sub(1, std::memory_order_acq_rel) == 1)
+            retired_.clear();
+    }
 
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **out) override
     {
@@ -212,7 +227,6 @@ private:
     bool in_pass_ = false;
 
     void reset_state();
-    void wait_replayed();
     // ours<T>(p) that also keeps the object allocated until the list is reset (see ObjectRefs).
     template <typename T, typename P>
     T *hold(P *p)
@@ -249,6 +263,13 @@ private:
     std::atomic<uint32_t> in_flight_{0};  // submissions not replayed yet (one per occurrence in ExecuteCommandLists)
     std::vector<uint8_t> stream_;
     ObjectRefs refs_;
+    // Streams and references of recordings that a Reset replaced while submissions of them were still queued.
+    struct Retired {
+        std::vector<uint8_t> stream;
+        ObjectRefs refs;
+    };
+    std::mutex retired_mutex_;  // orders retiring (app thread) against the decrement to zero (queue worker)
+    std::vector<Retired> retired_;
 
     bool has_graphics_pipeline_ = false;
     bool has_compute_pipeline_ = false;

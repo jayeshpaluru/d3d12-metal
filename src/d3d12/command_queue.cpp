@@ -50,6 +50,8 @@ struct CommandQueue::Op {
     // Submit
     std::vector<CommandList *> lists;
     std::vector<uint8_t> init_stream;
+    // The streams to replay, captured at enqueue: a Reset of a list meanwhile retires its stream instead of freeing it.
+    std::vector<mtlb_span> spans;
     std::vector<Resource *> initialized;
     // Signal, Wait
     Fence *fence = nullptr;
@@ -74,8 +76,15 @@ void CommandQueue::dispatch(std::unique_ptr<Op> op)
         static const bool enabled = !config_get("ASYNC_SUBMIT") || config_flag("ASYNC_SUBMIT");
         if (enabled && mtlb_notify_create(&notify_) == MTLB_OK) {
             mtlb_queue_set_manual_commit(queue_, 1);
-            worker_ = std::thread([this] { run(); });
-            async_ = true;
+            try {
+                worker_ = std::thread([this] { run(); });
+                async_ = true;
+            } catch (...) {
+                D3D12M_LOG("cannot start the submit worker: operations run on the calling thread");
+                mtlb_queue_set_manual_commit(queue_, 0);
+                mtlb_notify_destroy(notify_);
+                notify_ = 0;
+            }
         }
     });
     if (!async_) {
@@ -87,8 +96,8 @@ void CommandQueue::dispatch(std::unique_ptr<Op> op)
 }
 
 // The worker commits the queue's command buffer itself, so that consecutive operations share one: after a run of
-// signals (so the fence mirror's completion handler is not delayed by later work) and before it blocks. The commit
-// precedes the executed_ increment of the last operation, so flush() returns only once the work is committed.
+// signals (so the fence mirror's completion handler is not delayed by later work) and before it blocks. flush()
+// commits what the worker has not yet.
 void CommandQueue::run()
 {
     mtlb_notification batch[16];
@@ -106,7 +115,12 @@ void CommandQueue::run()
             if (signal_ended && op->kind != Op::Kind::Signal)
                 commit();
             const Op::Kind kind = op->kind;
-            execute(*op);
+            try {
+                execute(*op);
+            } catch (...) {
+                // (e.g. bad_alloc) the operation is lost, but the worker, and the game, go on.
+                D3D12M_LOG("exception while executing a queued operation (dropped)");
+            }
             op.reset();
             signal_ended = kind == Op::Kind::Signal;
             submits = kind == Op::Kind::Present ? 0 : submits + (kind == Op::Kind::Submit);  // a present commits
@@ -124,12 +138,16 @@ void CommandQueue::run()
 void CommandQueue::flush()
 {
     const uint64_t target = posted_.load();
-    if (executed_.load() >= target)
-        return;
-    std::unique_lock<std::mutex> lock(progress_mutex_);
-    waiters_.fetch_add(1);
-    progress_.wait(lock, [&] { return executed_.load() >= target; });
-    waiters_.fetch_sub(1);
+    if (executed_.load() < target) {
+        std::unique_lock<std::mutex> lock(progress_mutex_);
+        waiters_.fetch_add(1);
+        progress_.wait(lock, [&] { return executed_.load() >= target; });
+        waiters_.fetch_sub(1);
+    }
+    // The worker may have left the last operations in an open buffer (it commits when it goes idle, or after a
+    // few submits); committing here keeps their order and makes them reach the GPU.
+    if (async_)
+        mtlb_queue_commit(queue_);
 }
 
 void CommandQueue::execute(Op &op)
@@ -137,15 +155,9 @@ void CommandQueue::execute(Op &op)
     mtlb_result result = MTLB_OK;
     switch (op.kind) {
     case Op::Kind::Submit: {
-        std::vector<mtlb_span> spans;
-        spans.reserve(op.lists.size() + 1);
-        if (!op.init_stream.empty())
-            spans.push_back({op.init_stream.data(), op.init_stream.size()});
-        for (CommandList *list : op.lists)
-            spans.push_back({list->stream().data(), list->stream().size()});
         {
             StatTimer timer(Stat::SubmitNanos);
-            result = mtlb_queue_submit(queue_, spans.data(), static_cast<uint32_t>(spans.size()));
+            result = mtlb_queue_submit(queue_, op.spans.data(), static_cast<uint32_t>(op.spans.size()));
         }
         if (result != MTLB_OK)
             D3D12M_LOG("command submission failed: %s", mtlb_last_error());
@@ -195,8 +207,7 @@ void CommandQueue::execute(Op &op)
     }
 }
 
-void CommandQueue::present(mtlb_swapchain swapchain, Resource *buffer, UINT sync_interval,
-                           std::function<void(mtlb_result)> done)
+void CommandQueue::present(mtlb_swapchain swapchain, Resource *buffer, UINT sync_interval)
 {
     {
         // The application does not run ahead of the display: one present queued or in progress at most.
@@ -214,7 +225,6 @@ void CommandQueue::present(mtlb_swapchain swapchain, Resource *buffer, UINT sync
     op->buffer = buffer;
     op->texture = buffer->texture();
     op->value = sync_interval;
-    op->done = std::move(done);
     dispatch(std::move(op));
 }
 
@@ -247,8 +257,17 @@ void CommandQueue::ExecuteCommandLists(UINT count, ID3D12CommandList *const *lis
         for (CommandList *list : op->lists)
             stat_add(Stat::StreamBytes, list->stream().size());
     }
-    // The streams are replayed later: the lists stay alive and unmodified until then (CommandList::Reset waits).
+    // The streams are replayed later, from the spans captured now: the lists stay alive until then, and a Reset
+    // meanwhile retires the recording they point into (CommandList::reset_state).
+    try {
+        op->spans.reserve(op->lists.size() + 1);
+    } catch (const std::bad_alloc &) {
+        return;
+    }
+    if (!op->init_stream.empty())
+        op->spans.push_back({op->init_stream.data(), op->init_stream.size()});
     for (CommandList *list : op->lists) {
+        op->spans.push_back({list->stream().data(), list->stream().size()});
         list->AddRef();
         list->begin_submit();
     }

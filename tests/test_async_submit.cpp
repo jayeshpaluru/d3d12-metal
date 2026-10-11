@@ -101,6 +101,29 @@ int main()
     }
 
     {
+        // Reset does not wait for the queue: behind a Wait on a fence nobody has signalled, a list is executed, reset
+        // and recorded again at once; after the CPU signals the fence both recordings give their results.
+        ComPtr<ID3D12Fence> gate;
+        CHECK_HR(ctx.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(gate.ReleaseAndGetAddressOf())));
+        ComPtr<ID3D12GraphicsCommandList> list = ctx.create_list();
+        ComPtr<ID3D12Resource> first = record_clear(ctx, list.Get(), red);
+        ID3D12CommandList *raw = list.Get();
+        const auto begin = std::chrono::steady_clock::now();
+        CHECK_HR(ctx.queue->Wait(gate.Get(), 1));
+        ctx.queue->ExecuteCommandLists(1, &raw);
+        CHECK_HR(list->Reset(ctx.allocators.back().Get(), nullptr));
+        ComPtr<ID3D12Resource> second = record_clear(ctx, list.Get(), green);
+        ctx.queue->ExecuteCommandLists(1, &raw);
+        CHECK_HR(list->Reset(ctx.allocators.back().Get(), nullptr));
+        CHECK(std::chrono::steady_clock::now() - begin < std::chrono::seconds(1));
+        CHECK_HR(list->Close());
+        CHECK_HR(gate->Signal(1));
+        ctx.wait_idle();
+        check_pixel("first recording behind a wait", read_pixel(first.Get(), pitch, 5, 5), {255, 0, 0, 255});
+        check_pixel("second recording behind a wait", read_pixel(second.Get(), pitch, 5, 5), {0, 255, 0, 255});
+    }
+
+    {
         // The same closed list twice in one call and again in another: four replays, one pass each.
         ComPtr<ID3D12GraphicsCommandList> list = ctx.create_list();
         ComPtr<ID3D12Resource> readback = record_clear(ctx, list.Get(), yellow);

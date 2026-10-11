@@ -5,6 +5,7 @@
 #include <pthread.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
@@ -31,8 +32,10 @@ struct Event {
 
 struct State {
     const char *path = getenv("D3D12METAL_TIMELINE");
-    uint64_t start = getenv("D3D12METAL_TIMELINE_START") ? strtoull(getenv("D3D12METAL_TIMELINE_START"), nullptr, 10) : 600;
-    uint64_t frames = getenv("D3D12METAL_TIMELINE_FRAMES") ? strtoull(getenv("D3D12METAL_TIMELINE_FRAMES"), nullptr, 10) : 60;
+    // At least 1: presents are counted from 1, so a start of 0 would never record and 0 frames never close the window.
+    // start is also set by the .go trigger, from whichever queue worker presents.
+    std::atomic<uint64_t> start{std::max<uint64_t>(1, getenv("D3D12METAL_TIMELINE_START") ? strtoull(getenv("D3D12METAL_TIMELINE_START"), nullptr, 10) : 600)};
+    uint64_t frames = std::max<uint64_t>(1, getenv("D3D12METAL_TIMELINE_FRAMES") ? strtoull(getenv("D3D12METAL_TIMELINE_FRAMES"), nullptr, 10) : 60);
     std::atomic<uint64_t> presents{0};
     std::atomic<bool> recording{false};
     std::mutex mutex;
@@ -165,11 +168,12 @@ void present()
     // <file>.go starts a recording at once (checked every 30 presents, then removed): captures of a scene reached later.
     static const std::string trigger = std::string(s.path) + ".go";
     if (!s.recording.load() && n % 30 == 0 && unlink(trigger.c_str()) == 0)
-        s.start = n;
-    if (n == s.start) {
+        s.start.store(n);
+    const uint64_t start = s.start.load();
+    if (n == start) {
         s.recording.store(true);
         backend_log("timeline: recording %llu presents", (unsigned long long)s.frames);
-    } else if (n == s.start + s.frames) {
+    } else if (n == start + s.frames) {
         s.recording.store(false);
         std::lock_guard<std::mutex> lock(s.mutex);
         write_file(s);

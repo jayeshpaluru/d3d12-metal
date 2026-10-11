@@ -2865,7 +2865,7 @@ uint64_t mtlb_queue_render_pass_count(mtlb_queue handle)
     return queue ? queue->render_passes.load() : 0;
 }
 
-// Appends the presentation to the open buffer and commits it.
+// Commits the open buffer, then presents in a buffer of its own.
 mtlb_result mtlb_queue_present(mtlb_queue handle, mtlb_swapchain swapchain_handle, mtlb_texture texture_handle,
                                uint32_t sync_interval)
 {
@@ -2879,6 +2879,11 @@ mtlb_result mtlb_queue_present(mtlb_queue handle, mtlb_swapchain swapchain_handl
     timeline::Scope scope("Present", queue->id);
     timeline::present();
     // A frame with no drawable (nothing to show) is dropped; the queue's other work still runs.
+    // The work recorded so far must not wait behind the drawable (nextDrawable can block for a vsync).
+    {
+        std::lock_guard<std::mutex> lock(queue->mutex);
+        commit_open(queue);
+    }
     Drawable drawable;
     {
         timeline::Scope acquiring("nextDrawable");

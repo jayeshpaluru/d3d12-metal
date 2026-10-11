@@ -230,16 +230,20 @@
   caller of `mtlb_queue_submit/signal/wait/marker/present` for its queue. `ExecuteCommandLists`, `Signal`, `Wait`, markers and `Present`
   validate on the caller's thread, then heap-allocate an op and post its address with `mtlb_notify_post` to the worker's `mtlb_notify` queue
   (one allocation and one bridge call; the queue's FIFO order is the API order, no front-end lock; cheaper under Wine than an event). Ops hold
-  their references (lists, fence, back buffer, initialized resources) until executed. Stats timers run in the worker.
-- **Lists.** A list has an in-flight counter (per occurrence in `ExecuteCommandLists`, dropped by the worker after the submit); `Reset`
-  (`reset_state`) waits for zero (yield, then short sleeps) before touching the stream.
+  their references (lists, fence, back buffer, initialized resources) until executed. Stats timers run in the worker. `Signal`, `Wait` and `Present` return `S_OK` once queued: a failure in the worker is only logged, and an
+  exception there drops the op (logged) without ending the worker. If the thread cannot be created, the queue falls back to inline execution.
+- **Lists.** `ExecuteCommandLists` captures each list's stream span (pointer, size) into the op. A list has an in-flight counter
+  (per occurrence, dropped by the worker after the submit); `Reset` (`reset_state`) never waits: while it is non-zero, the old stream buffer and
+  `ObjectRefs` move into the list's retired holder, and the worker's `end_submit` frees the holder when the counter reaches zero (both under one
+  mutex, so a buffer is never freed under a captured span).
 - **Present.** `Present` blocks until the queue has executed the previous present (at most one queued or running); the frame latency signal is
   queued behind the present and registers its fence wait once encoded. `CommandQueue::flush()` waits for every enqueued op: it runs before
   `ResizeBuffers`, in `~SwapChain` and `~CommandQueue` (which then joins the worker), and `handle()` (direct bridge access) flushes first.
 - **Deferred commits.** The worker sets `mtlb_queue_set_manual_commit`: submits and signals leave the queue's command buffer open and the worker
   calls `mtlb_queue_commit` after a run of signals (before any other op, so the fence mirror is not delayed) and before it blocks (no more ops
-  queued, checked with `mtlb_notify_pending`; before `executed_` counts the last op, so `flush()` implies committed). An Execute+Signal pair
-  is one command buffer instead of two; present commits itself.
+  queued, checked with `mtlb_notify_pending`). `flush()` also calls `mtlb_queue_commit` once the ops are executed, so it guarantees committed
+  work. An Execute+Signal pair is one command buffer instead of two; present commits the open buffer before it waits for the drawable
+  (so earlier work never waits behind `nextDrawable`), then encodes itself in a new buffer and commits.
 - **Switch.** `async_submit=0` (`D3D12METAL_ASYNC_SUBMIT=0`) executes every op inline on the calling thread, as before.
 
 ## Wine build

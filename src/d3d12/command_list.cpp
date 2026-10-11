@@ -88,20 +88,16 @@ T *CommandList::append(mtlb_cmd_type type, size_t extra_bytes)
     return append_record<T>(stream_, type, extra_bytes);
 }
 
-// The queue may still be replaying the stream (see begin_submit). Rare: applications reset lists frames later.
-void CommandList::wait_replayed()
-{
-    for (unsigned spins = 0; in_flight_.load(std::memory_order_acquire); ++spins) {
-        if (spins < 100)
-            std::this_thread::yield();
-        else
-            std::this_thread::sleep_for(std::chrono::microseconds(50));
-    }
-}
-
 void CommandList::reset_state()
 {
-    wait_replayed();
+    {
+        // Queued submissions replay the old recording from spans captured at ExecuteCommandLists: keep its buffer
+        // and references until the last one is done (the heap buffer survives the move).
+        std::lock_guard<std::mutex> lock(retired_mutex_);
+        if (in_flight_.load(std::memory_order_acquire) > 0) {
+            retired_.push_back({std::move(stream_), std::move(refs_)});
+        }
+    }
     stream_.clear();
     drop_pass();
     refs_.clear();

@@ -549,7 +549,7 @@ private:
         stats_frame();
         trace_frame();
         // The queue's worker presents (a failure is logged there); this blocks while the previous present is pending.
-        queue_->present(handle_, buffer, sync_interval, {});
+        queue_->present(handle_, buffer, sync_interval);
         buffer->Release();
         ++present_count_;
         if (latency_)

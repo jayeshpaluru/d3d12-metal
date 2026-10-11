@@ -30,18 +30,18 @@ class CommandQueue final : public ChildImpl<ID3D12CommandQueue> {
 public:
     static HRESULT create(Device *device, const D3D12_COMMAND_QUEUE_DESC &desc, REFIID riid, void **out);
 
-    // The backend queue, once every operation enqueued so far has reached it.
+    // The backend queue, once every operation enqueued so far has reached it (and been committed).
     mtlb_queue handle()
     {
         flush();
         return queue_;
     }
-    // Blocks until every operation enqueued so far has been executed (exported: handle() is used by tests).
+    // Blocks until every operation enqueued so far has been executed and committed to the GPU (exported: handle() is
+    // used by tests).
     __attribute__((visibility("default"))) void flush();
     // Enqueues the presentation of `buffer` (kept alive until then). Blocks while an earlier present of this queue
-    // has not been executed yet, so the application cannot run ahead of the display. `done` runs on the thread that
-    // executes it, with the bridge's result, after the present.
-    void present(mtlb_swapchain swapchain, Resource *buffer, UINT sync_interval, std::function<void(mtlb_result)> done);
+    // has not been executed yet, so the application cannot run ahead of the display. Failures are only logged.
+    void present(mtlb_swapchain swapchain, Resource *buffer, UINT sync_interval);
     // As Signal, and `done` runs after the bridge call with its result.
     HRESULT signal(Fence *fence, UINT64 value, std::function<void(mtlb_result)> done);
     Device *device() const { return ChildImpl::device(); }
