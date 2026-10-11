@@ -137,7 +137,7 @@ inline uint vote(bool p) { return uint(ulong(simd_ballot(p))); }
 inline uint firstbithigh_(uint x) { return x ? 31u - clz(x) : 0xffffffffu; }
 inline uint shuf(uint v, uint lane) { return simd_shuffle(v, ushort(lane & 31u)); }
 inline void sync() { threadgroup_barrier(mem_flags::mem_threadgroup); }
-inline void sync_device() { threadgroup_barrier(mem_flags::mem_device); }
+inline void sync_device() { simdgroup_barrier(mem_flags::mem_device); }
 
 inline uint ld32(thread const Ctx &c, uint addr)
 {
@@ -435,24 +435,44 @@ inline uint translate_symbol(thread const Ctx &c, thread BitReader &br, uint sym
     return base + ((bits >> len) & mask_(n));
 }
 
-// Literals are stored by their own lanes; each match is copied by all lanes together.
+// Literals are stored by their own lanes. The matches are copied in batches: a match is ready once no pending match
+// of a lower lane writes what it reads, and the bytes of all ready matches are dealt to the lanes together.
 inline void write_output(thread const Ctx &c, ulong dst, uint offset, uint dist, uint length, uint byte, bool iscopy)
 {
     const uint tid = c.tid;
     if (!iscopy && length != 0)
         st_out(c, dst + offset, byte);
-    uint m = vote(iscopy);
-    if (m)
+    uint pending = vote(iscopy);
+    if (pending)
         sync_device();   // the literals are in place before the copies read them
-    while (m) {
-        const uint lane = ctz(m);
-        const uint off = max(shuf(dist, lane), 1u);
-        const uint len = shuf(length, lane);
-        const ulong output = dst + shuf(offset, lane);
-        for (uint i = tid; i < len; i += 32)
-            st_out(c, output + i, rd_out(c, output + (i % off) - off));
-        sync_device();   // the next copy may read what this one wrote
-        m &= m - 1;
+    const uint d = max(dist, 1u);
+    const int src = int(offset) - int(d), src_end = src + int(min(length, d));
+    while (pending) {
+        bool blocked = false;
+        for (uint m = pending; m; m &= m - 1) {
+            const uint k = ctz(m);
+            const int ok = int(shuf(offset, k)), ok_end = ok + int(shuf(length, k));
+            blocked = blocked || (k < tid && src < ok_end && ok < src_end);
+        }
+        const uint ready_mask = vote(((pending >> tid) & 1u) != 0 && !blocked);
+        const bool ready = ((ready_mask >> tid) & 1u) != 0;
+        const uint r = ready ? length : 0u;
+        const uint start = simd_prefix_exclusive_sum(r);
+        const uint total = simd_broadcast(start + r, ushort(31));
+        for (uint base = 0; base < total; base += 32) {
+            const uint b = base + tid;
+            uint j = 0;   // the owner: the last lane starting at or before byte b
+            for (uint step = 16; step != 0; step >>= 1) {
+                const uint cand = j + step;
+                if (cand < 32 && shuf(start, cand) <= b)
+                    j = cand;
+            }
+            const uint o = shuf(offset, j), od = shuf(d, j), i = b - shuf(start, j);
+            if (b < total)
+                st_out(c, dst + o + i, rd_out(c, dst + o + (i % od) - od));
+        }
+        sync_device();   // the next batch may read what this one wrote
+        pending &= ~ready_mask;
     }
 }
 
