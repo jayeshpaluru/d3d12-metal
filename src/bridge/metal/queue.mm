@@ -1110,6 +1110,9 @@ mtlb_result Replay::clear_only_pass(const PendingClear &clear)
     }
     render_ = new_render_encoder(pass);
     end_render("clear_only_pass");
+    // The pass consumed sync_needed_ (it waited for what came before). Whatever encoder opens next reads or overwrites
+    // the cleared texture and must wait for this pass: without it, a copy right after the clear can run first on the GPU.
+    sync_needed_ = !sync_disabled_;
     return MTLB_OK;
 }
 

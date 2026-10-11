@@ -194,7 +194,8 @@ int main()
     }
 
     // ---- A rejected submission keeps the pending clears for the next one ------------------------------------------------
-    {
+    // (Repeated: the clear pass and the copy after it are separate GPU encoders, and a missing wait between them only shows now and then.)
+    for (int round = 0; round < 100; ++round) {
         ComPtr<ID3D12Heap> scratch = create_heap(gpu, D3D12_HEAP_TYPE_DEFAULT, 2 * kMiB);
         ComPtr<ID3D12Resource> garbage = place(gpu, scratch.Get(), 0, buffer_desc(kMiB));
         std::vector<uint8_t> fill(kMiB, 0xA7);
