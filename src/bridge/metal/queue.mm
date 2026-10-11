@@ -411,6 +411,9 @@ public:
     void finish()
     {
         end_encoders();
+        // Timestamps no encoder started after are sampled by an encoder of their own.
+        if (mtlb_result result = flush_timestamps(); result != MTLB_OK)
+            note_error(result);
         if (profile_ && !profile_->entries.empty()) {
             auto profile = profile_;
             const uint32_t used = static_cast<uint32_t>(profile->entries.size());
@@ -426,9 +429,14 @@ public:
             auto resolves = std::move(timestamp_resolves_);
             [cb_ addCompletedHandler:^(id<MTLCommandBuffer>) {
                 for (const TimestampResolve &r : resolves) {
-                    NSData *data = [r.samples resolveCounterRange:NSMakeRange(r.start, r.count)];
-                    if (data.length >= uint64_t(r.count) * 8)
-                        std::memcpy(static_cast<uint8_t *>(r.destination.contents) + r.offset, data.bytes, uint64_t(r.count) * 8);
+                    auto *destination = static_cast<uint8_t *>(r.destination.contents) + r.offset;
+                    // The whole range at once, or one sample at a time where some are aliases.
+                    const uint32_t step = r.sources.empty() ? r.count : 1;
+                    for (uint32_t i = 0; i < r.count; i += step) {
+                        NSData *data = [r.samples resolveCounterRange:NSMakeRange(r.sources.empty() ? r.start : r.sources[i], step)];
+                        if (data.length >= uint64_t(step) * 8)
+                            std::memcpy(destination + uint64_t(i) * 8, data.bytes, uint64_t(step) * 8);
+                    }
                 }
                 event.signaledValue = value;
             }];
@@ -454,7 +462,53 @@ private:
         id<MTLBuffer> destination;
         uint64_t offset;
         uint32_t start, count;
+        std::vector<uint32_t> sources;  // per query, the sample to read (see QueryHeap::sample_aliases); empty: its own
     };
+    // A timestamp the next encoder samples at its start (see timestamp()).
+    struct PendingTimestamp {
+        QueryHeap *heap;
+        id<MTLCounterSampleBuffer> samples;
+        uint32_t index;
+    };
+    std::vector<PendingTimestamp> pending_timestamps_;
+    // Metal allows MTLMaxSampleBufferAttachments (4), but with two sample buffers in one pass the sample of the first
+    // reads zero on Apple GPUs, so an encoder samples one buffer.
+    static constexpr NSUInteger kMaxSampleAttachments = 1;
+
+    // Gives the pending timestamps to the free sample buffer attachments of an encoder's pass descriptor; `set` fills
+    // an attachment with the sample index. A sample buffer takes one sample per attachment, so the other pending
+    // timestamps of that buffer become aliases of the first; those that find no free attachment stay pending.
+    template <class Pass, class Set>
+    void attach_pending_timestamps(Pass *pass, Set set)
+    {
+        std::vector<PendingTimestamp> kept;
+        PendingTimestamp taken[kMaxSampleAttachments];
+        NSUInteger used = 0, next = 0;
+        for (const PendingTimestamp &p : pending_timestamps_) {
+            std::lock_guard<std::mutex> lock(p.heap->samples_mutex);
+            const PendingTimestamp *same = nullptr;
+            for (NSUInteger i = 0; i < used; ++i) {
+                if (taken[i].samples == p.samples)
+                    same = &taken[i];
+            }
+            if (same) {
+                p.heap->sample_aliases[p.index] = same->index;
+                continue;
+            }
+            while (next < kMaxSampleAttachments && pass.sampleBufferAttachments[next].sampleBuffer)
+                ++next;
+            if (next == kMaxSampleAttachments) {
+                kept.push_back(p);
+                continue;
+            }
+            p.heap->sample_aliases.erase(p.index);
+            auto *attachment = pass.sampleBufferAttachments[next];
+            attachment.sampleBuffer = p.samples;
+            set(attachment, p.index % kSamplesPerBuffer);
+            taken[used++] = p;
+        }
+        pending_timestamps_ = std::move(kept);
+    }
     std::vector<TimestampResolve> timestamp_resolves_;
 
     // Pass profiling (see PassProfile): the entry of the encoder being recorded, or -1.
@@ -555,6 +609,7 @@ private:
     mtlb_result gdeflate(const mtlb_cmd_gdeflate &cmd);
     void dump_gdeflate(uint64_t input_size, uint64_t output_size, uint64_t control_size, Buffer *const *buffers, const uint64_t *offsets);
     mtlb_result timestamp(QueryHeap *heap, uint32_t index);
+    mtlb_result flush_timestamps();
     mtlb_result execute_indirect(const mtlb_cmd_execute_indirect &cmd);
     mtlb_result clear_buffer(const mtlb_cmd_clear_buffer &cmd);
     mtlb_result clear_texture_uav(const mtlb_cmd_clear_texture_uav &cmd);
@@ -827,11 +882,18 @@ id<MTLBlitCommandEncoder> Replay::blit()
         end_render("blit");
         flush_clears(false);
         SubmitTimer timer(kPartBlitEncoder);
-        if (const int slot = profile_begin("blit"); slot >= 0) {
+        const int slot = profile_begin("blit");
+        if (slot >= 0 || !pending_timestamps_.empty()) {
             MTLBlitPassDescriptor *pass = [MTLBlitPassDescriptor blitPassDescriptor];
-            pass.sampleBufferAttachments[0].sampleBuffer = profile_->samples;
-            pass.sampleBufferAttachments[0].startOfEncoderSampleIndex = slot;
-            pass.sampleBufferAttachments[0].endOfEncoderSampleIndex = slot + 1;
+            if (slot >= 0) {
+                pass.sampleBufferAttachments[0].sampleBuffer = profile_->samples;
+                pass.sampleBufferAttachments[0].startOfEncoderSampleIndex = slot;
+                pass.sampleBufferAttachments[0].endOfEncoderSampleIndex = slot + 1;
+            }
+            attach_pending_timestamps(pass, [](auto attachment, uint32_t sample) {
+                attachment.startOfEncoderSampleIndex = sample;
+                attachment.endOfEncoderSampleIndex = MTLCounterDontSample;
+            });
             blit_ = [cb_ blitCommandEncoderWithDescriptor:pass];
         } else {
             blit_ = [cb_ blitCommandEncoder];
@@ -856,12 +918,19 @@ id<MTLComputeCommandEncoder> Replay::compute()
         flush_clears(false);
         SubmitTimer timer(kPartComputeEncoder);
         // Dispatches may overlap; a barrier orders the ones around it.
-        if (const int slot = profile_begin("compute"); slot >= 0) {
+        const int slot = profile_begin("compute");
+        if (slot >= 0 || !pending_timestamps_.empty()) {
             MTLComputePassDescriptor *pass = [MTLComputePassDescriptor computePassDescriptor];
             pass.dispatchType = MTLDispatchTypeConcurrent;
-            pass.sampleBufferAttachments[0].sampleBuffer = profile_->samples;
-            pass.sampleBufferAttachments[0].startOfEncoderSampleIndex = slot;
-            pass.sampleBufferAttachments[0].endOfEncoderSampleIndex = slot + 1;
+            if (slot >= 0) {
+                pass.sampleBufferAttachments[0].sampleBuffer = profile_->samples;
+                pass.sampleBufferAttachments[0].startOfEncoderSampleIndex = slot;
+                pass.sampleBufferAttachments[0].endOfEncoderSampleIndex = slot + 1;
+            }
+            attach_pending_timestamps(pass, [](auto attachment, uint32_t sample) {
+                attachment.startOfEncoderSampleIndex = sample;
+                attachment.endOfEncoderSampleIndex = MTLCounterDontSample;
+            });
             compute_ = [cb_ computeCommandEncoderWithDescriptor:pass];
         } else {
             compute_ = [cb_ computeCommandEncoderWithDispatchType:MTLDispatchTypeConcurrent];
@@ -901,6 +970,12 @@ id<MTLRenderCommandEncoder> Replay::new_render_encoder(MTLRenderPassDescriptor *
             pass.sampleBufferAttachments[0].endOfFragmentSampleIndex = slot + 1;
         }
     }
+    attach_pending_timestamps(pass, [](auto attachment, uint32_t sample) {
+        attachment.startOfVertexSampleIndex = sample;
+        attachment.endOfVertexSampleIndex = MTLCounterDontSample;
+        attachment.startOfFragmentSampleIndex = MTLCounterDontSample;
+        attachment.endOfFragmentSampleIndex = MTLCounterDontSample;
+    });
     id<MTLRenderCommandEncoder> encoder = [cb_ renderCommandEncoderWithDescriptor:pass];
     stat_add(kStatRenderEncoders);
     // Everything before the pass is complete when it starts: it waits, or there is nothing it could wait for.
@@ -1750,12 +1825,27 @@ mtlb_result Replay::end_query(const mtlb_cmd_query &cmd)
     return MTLB_OK;
 }
 
-// A timestamp is the end of a compute pass of its own, after the work before it (on this hardware counters
-// are sampled at the boundaries of encoders only).
+// A timestamp is sampled at the start of the next encoder the replay creates, which begins after the work
+// encoded before it; nothing ends here, so a render pass stays open across timestamps. A timestamp taken
+// inside a render pass is therefore taken when the pass has been followed by another encoder, slightly later
+// than the application asked. On this hardware counters are sampled at the boundaries of encoders only.
+// Timestamps still pending when the results are needed are flushed by flush_timestamps().
 mtlb_result Replay::timestamp(QueryHeap *heap, uint32_t index)
 {
     id<MTLCounterSampleBuffer> samples = sample_buffer(heap, index);
     if (!samples)
+        return MTLB_OK;
+    // Written again before an encoder started: the earlier write is gone.
+    std::erase_if(pending_timestamps_, [&](const PendingTimestamp &p) { return p.heap == heap && p.index == index; });
+    pending_timestamps_.push_back({heap, samples, index});
+    return MTLB_OK;
+}
+
+// Samples the pending timestamps at the end of compute passes of their own (one per sample buffer involved),
+// after the work before them.
+mtlb_result Replay::flush_timestamps()
+{
+    if (pending_timestamps_.empty())
         return MTLB_OK;
     end_blit();
     end_compute();
@@ -1765,22 +1855,25 @@ mtlb_result Replay::timestamp(QueryHeap *heap, uint32_t index)
     id<MTLComputePipelineState> kernel = internal_kernel(queue_->device, @"noop_kernel");
     if (!kernel)
         return MTLB_ERROR_COMPILE_FAILED;
-    MTLComputePassDescriptor *pass = [MTLComputePassDescriptor computePassDescriptor];
-    pass.sampleBufferAttachments[0].sampleBuffer = samples;
-    pass.sampleBufferAttachments[0].startOfEncoderSampleIndex = MTLCounterDontSample;
-    pass.sampleBufferAttachments[0].endOfEncoderSampleIndex = index % kSamplesPerBuffer;
-    id<MTLComputeCommandEncoder> enc = [cb_ computeCommandEncoderWithDescriptor:pass];
-    if (queue_->fence_pending) {
-        [enc waitForFence:queue_->fence];
-        queue_->fence_pending = false;
+    while (!pending_timestamps_.empty()) {
+        MTLComputePassDescriptor *pass = [MTLComputePassDescriptor computePassDescriptor];
+        attach_pending_timestamps(pass, [](auto attachment, uint32_t sample) {
+            attachment.startOfEncoderSampleIndex = MTLCounterDontSample;
+            attachment.endOfEncoderSampleIndex = sample;
+        });
+        id<MTLComputeCommandEncoder> enc = [cb_ computeCommandEncoderWithDescriptor:pass];
+        if (queue_->fence_pending) {
+            [enc waitForFence:queue_->fence];
+            queue_->fence_pending = false;
+        }
+        sync_needed_ = false;
+        [enc setComputePipelineState:kernel];
+        [enc dispatchThreads:MTLSizeMake(1, 1, 1) threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
+        [enc updateFence:queue_->fence];
+        queue_->fence_pending = true;
+        [enc endEncoding];
+        sync_needed_ = true;
     }
-    sync_needed_ = false;
-    [enc setComputePipelineState:kernel];
-    [enc dispatchThreads:MTLSizeMake(1, 1, 1) threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
-    [enc updateFence:queue_->fence];
-    queue_->fence_pending = true;
-    [enc endEncoding];
-    sync_needed_ = true;
     return MTLB_OK;
 }
 
@@ -1800,13 +1893,36 @@ mtlb_result Replay::resolve_query(const mtlb_cmd_resolve_query &cmd)
     // counters lazily), so timestamps are copied on the CPU when this command buffer completes. Work that
     // follows on the queue waits for that copy through an event, without blocking here (see finish()).
     if (cmd.type == MTLB_QUERY_TIMESTAMP && !heap->samples.empty() && dst->buffer.contents) {
+        // The results must be sampled by now.
+        for (const PendingTimestamp &p : pending_timestamps_) {
+            if (p.heap == heap && p.index >= cmd.start && p.index - cmd.start < cmd.count) {
+                if (mtlb_result result = flush_timestamps(); result != MTLB_OK)
+                    return result;
+                break;
+            }
+        }
         // One resolve per sample buffer the range touches.
         for (uint32_t done = 0; done < cmd.count;) {
             const uint32_t query = cmd.start + done;
             const uint32_t piece = std::min(cmd.count - done, kSamplesPerBuffer - query % kSamplesPerBuffer);
             if (id<MTLCounterSampleBuffer> samples = sample_buffer(heap, query)) {
-                timestamp_resolves_.push_back({samples, dst->buffer, cmd.dst_offset + uint64_t(done) * 8,
-                                               query % kSamplesPerBuffer, piece});
+                TimestampResolve resolve{samples, dst->buffer, cmd.dst_offset + uint64_t(done) * 8, query % kSamplesPerBuffer, piece, {}};
+                {
+                    // Aliases as they are now: later timestamps of these queries must not change this resolve.
+                    std::lock_guard<std::mutex> lock(heap->samples_mutex);
+                    for (uint32_t i = 0; i < piece; ++i) {
+                        auto alias = heap->sample_aliases.find(query + i);
+                        if (alias == heap->sample_aliases.end())
+                            continue;
+                        if (resolve.sources.empty()) {
+                            resolve.sources.resize(piece);
+                            for (uint32_t j = 0; j < piece; ++j)
+                                resolve.sources[j] = resolve.start + j;
+                        }
+                        resolve.sources[i] = alias->second % kSamplesPerBuffer;
+                    }
+                }
+                timestamp_resolves_.push_back(std::move(resolve));
             }
             done += piece;
         }

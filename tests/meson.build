@@ -58,6 +58,7 @@ tests = [
   ['test_vertex_input', ['vertex_input']],
   ['test_pass_merge', ['color', 'uav_pass']],
   ['test_query_failure', []],
+  ['test_timestamps', ['color']],
 ]
 foreach t : tests
   sources = [t[0] + '.cpp']

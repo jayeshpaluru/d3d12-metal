@@ -13,6 +13,7 @@
 #include <shared_mutex>
 #include <string>
 #include <tuple>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -160,6 +161,9 @@ struct QueryHeap {
     uint32_t sample_attempts = 0;         // buffer creations tried (mtlb_query_heap_test_sample_attempts)
     bool test_fail_samples = false;
     std::mutex samples_mutex;
+    // Timestamps deferred to the start of an encoder share its one sample per sample buffer: the others are aliases
+    // (query -> the query of the same buffer that was sampled), which resolving reads instead. Guarded by samples_mutex.
+    std::unordered_map<uint32_t, uint32_t> sample_aliases;
     // Occlusion: a query that spans several render passes keeps one result slot per pass (kQuerySlots of them,
     // `results` holds count * kQuerySlots counts); resolving sums the slots used since the query began.
     std::vector<uint32_t> slots_used;
