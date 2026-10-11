@@ -2,7 +2,9 @@
 /* Win32 input helper: run inside the game's Wine prefix, needs no macOS permissions.
  * usage: wine keys.exe [-w <title substring>] [-m sendinput|post] <step>...
  * steps: enter esc space tab up down left right f1..f12 a..z 0..9 (one key press), hold:<key>:<ms>,
- *        click:<x>:<y> (client coordinates), wait:<ms>, focus (bring the window to the foreground), list (print windows)
+ *        press:<key> / release:<key> (a key stays down across later steps), click:<x>:<y> (client coordinates),
+ *        move:<dx>:<dy>:<ms> (relative mouse motion spread over ms, what a camera reads), mouse:<left|right>:<down|up>,
+ *        wait:<ms>, focus (bring the window to the foreground), list (print windows)
  * Default is SendInput with scan codes (what DirectInput/raw input readers see); -m post sends WM_KEYDOWN/UP to the window. */
 #include <windows.h>
 #include <stdio.h>
@@ -68,6 +70,28 @@ static void click(int x, int y)
     SendInput(1, &in[1], sizeof in[1]);
 }
 
+static void mouse(DWORD flags, LONG dx, LONG dy)
+{
+    INPUT in = {0};
+    in.type = INPUT_MOUSE;
+    in.mi.dx = dx;
+    in.mi.dy = dy;
+    in.mi.dwFlags = flags;
+    SendInput(1, &in, sizeof in);
+}
+
+/* Relative motion in 10 ms steps; the remainder goes with the last step. */
+static void move(int dx, int dy, int ms)
+{
+    int steps = ms / 10 > 0 ? ms / 10 : 1, sx = 0, sy = 0;
+    for (int k = 1; k <= steps; k++) {
+        int x = dx * k / steps, y = dy * k / steps;
+        mouse(MOUSEEVENTF_MOVE, x - sx, y - sy);
+        sx = x; sy = y;
+        Sleep(10);
+    }
+}
+
 int main(int argc, char **argv)
 {
     int i = 1;
@@ -89,6 +113,16 @@ int main(int argc, char **argv)
             if (sscanf(s + 5, "%31[^:]:%d", k, &ms) < 2) return 2;
             WORD vk = vk_for(k);
             key(vk, 1); Sleep((DWORD)ms); key(vk, 0);
+        } else if (!strncmp(s, "press:", 6) || !strncmp(s, "release:", 8)) {
+            const int down = s[0] == 'p';
+            key(vk_for(strchr(s, ':') + 1), down);
+        } else if (!strncmp(s, "move:", 5)) {
+            int dx, dy, ms;
+            if (sscanf(s + 5, "%d:%d:%d", &dx, &dy, &ms) != 3) return 2;
+            move(dx, dy, ms);
+        } else if (!strncmp(s, "mouse:", 6)) {
+            const int right = !strncmp(s + 6, "right", 5), down = strstr(s + 6, ":down") != NULL;
+            mouse(right ? (down ? MOUSEEVENTF_RIGHTDOWN : MOUSEEVENTF_RIGHTUP) : (down ? MOUSEEVENTF_LEFTDOWN : MOUSEEVENTF_LEFTUP), 0, 0);
         } else if (!strncmp(s, "click:", 6)) {
             int x, y;
             if (sscanf(s + 6, "%d:%d", &x, &y) != 2) return 2;

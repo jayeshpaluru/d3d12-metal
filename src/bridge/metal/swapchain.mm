@@ -8,6 +8,8 @@
 #include "bridge/metal/log.h"
 #include "internal.h"
 
+#include <unistd.h>
+
 #import <ImageIO/ImageIO.h>
 
 #include "layer_provider.h"
@@ -218,9 +220,11 @@ void encode_present(Queue *queue, id<MTLCommandBuffer> command_buffer, Swapchain
                       drawable.hud_pipeline);
 
     const uint64_t present = ++swapchain->presents;
-    const bool dump = !swapchain->dump_path.empty() && present >= swapchain->dump_frame
-                      && (present == swapchain->dump_frame
-                          || (swapchain->dump_every && (present - swapchain->dump_frame) % swapchain->dump_every == 0));
+    // <dump file>.go asks for a dump of a present soon (checked every 15 presents, then removed).
+    const bool asked = !swapchain->dump_path.empty() && present % 15 == 0 && unlink((swapchain->dump_path + ".go").c_str()) == 0;
+    const bool dump = asked || (!swapchain->dump_path.empty() && present >= swapchain->dump_frame
+                                && (present == swapchain->dump_frame
+                                    || (swapchain->dump_every && (present - swapchain->dump_frame) % swapchain->dump_every == 0)));
     if (dump) {
         // The same pass again into a texture the CPU can read.
         id<MTLTexture> target = drawable.drawable.texture;
@@ -233,7 +237,7 @@ void encode_present(Queue *queue, id<MTLCommandBuffer> command_buffer, Swapchain
         id<MTLTexture> capture = [swapchain->device->device newTextureWithDescriptor:td];
         draw_present_pass(command_buffer, capture, drawable.pipeline, texture->texture, queue, swapchain, drawable.hud_pipeline);
         std::string path = swapchain->dump_path;
-        if (swapchain->dump_every) {
+        if (swapchain->dump_every || asked) {
             const size_t dot = path.rfind(".png");
             path.insert(dot == std::string::npos ? path.size() : dot, "-" + std::to_string(present));
         }
