@@ -324,9 +324,11 @@ struct Swapchain {
     std::atomic<bool> display_sync{true};
 
     // Debug aid: D3D12METAL_DUMP_PRESENT=<file.png> writes what the Nth present
-    // (D3D12METAL_DUMP_PRESENT_FRAME, default 30) drew onto the drawable.
+    // (D3D12METAL_DUMP_PRESENT_FRAME, default 30) drew onto the drawable; with D3D12METAL_DUMP_PRESENT_EVERY=K
+    // also every Kth present after it, into <file>-<present>.png.
     std::string dump_path;
     uint64_t dump_frame = 0;
+    uint64_t dump_every = 0;
     std::atomic<uint64_t> presents{0};
 };
 

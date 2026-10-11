@@ -1,87 +1,112 @@
 // Checks GDeflate calls dumped by D3D12METAL_GDEFLATE_DUMP=<dir> against the reference decoder.
-// Build and run with tools/gdeflate_verify.sh <dir>.
+// Build and run with tools/gdeflate_verify.sh <dir>. A dump is "GDV2", u32 stream count, u64 output address, u64 output
+// extent, then per stream u32 output offset, u32 input and output sizes followed by the stream's compressed bytes and the
+// layer's output (sizes 0: the stream did not fit the dumped part of the buffers). Also prints the highest byte written
+// per output address.
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <map>
+#include <utility>
 #include <vector>
 
 extern "C" {
 #include "libdeflate.h"
 }
 
+namespace {
+
+uint32_t dword(const uint8_t *p)
+{
+    uint32_t v;
+    std::memcpy(&v, p, 4);
+    return v;
+}
+
+// Decodes one stream (header, tile table, tiles) and compares it with `output`; prints the first difference.
+bool check_stream(libdeflate_gdeflate_decompressor *dec, const char *name, uint32_t index, const uint8_t *input, size_t in_size,
+                  const uint8_t *output, size_t out_size)
+{
+    const uint32_t tiles = dword(input) >> 16, last = (dword(input + 4) >> 2) & 0x3ffff;
+    const uint8_t *table = input + 8;
+    const uint8_t *data = table + 4ull * tiles;
+    std::vector<uint8_t> ref(65536);
+    for (uint32_t t = 0; t < tiles; ++t) {
+        const size_t start = t == 0 ? 0 : dword(table + 4 * t);
+        const size_t end = t + 1 < tiles ? dword(table + 4 * (t + 1)) : start + dword(table);
+        const size_t want = t + 1 == tiles && last ? last : 65536;
+        if (data + end > input + in_size || 65536ull * t + want > out_size) {
+            std::printf("%s stream %u tile %u/%u: outside the dumped bytes\n", name, index, t, tiles);
+            return false;
+        }
+        libdeflate_gdeflate_in_page page{data + start, end - start};
+        size_t actual = 0;
+        const auto r = libdeflate_gdeflate_decompress(dec, &page, 1, ref.data(), want, &actual);
+        const uint8_t *got = output + 65536ull * t;
+        if (r != LIBDEFLATE_SUCCESS || actual != want) {
+            std::printf("%s stream %u tile %u/%u: reference decode failed (%d)\n", name, index, t, tiles, int(r));
+            return false;
+        }
+        if (std::memcmp(ref.data(), got, want) != 0) {
+            size_t first = 0, diff = 0;
+            while (first < want && ref[first] == got[first])
+                ++first;
+            for (size_t k = 0; k < want; ++k)
+                diff += ref[k] != got[k];
+            std::printf("%s stream %u tile %u/%u (%zu compressed bytes): output differs, first at %zu, %zu of %zu bytes differ\n", name,
+                        index, t, tiles, end - start, first, diff, want);
+            return false;
+        }
+    }
+    return true;
+}
+
+} // namespace
+
 int main(int argc, char **argv)
 {
     libdeflate_gdeflate_decompressor *dec = libdeflate_alloc_gdeflate_decompressor();
-    long bad_streams = 0, streams = 0;
+    long bad_streams = 0, skipped = 0, streams = 0;
+    std::map<std::pair<uint64_t, uint64_t>, uint64_t> highest;  // {output address, extent} -> highest end written
     for (int a = 1; a < argc; ++a) {
-        FILE *f = fopen(argv[a], "rb");
+        FILE *f = std::fopen(argv[a], "rb");
         if (!f)
             continue;
-        uint64_t sizes[3];
-        if (fread(sizes, 8, 3, f) != 3) {
-            fclose(f);
+        std::vector<uint8_t> file;
+        uint8_t buffer[1 << 16];
+        for (size_t n; (n = std::fread(buffer, 1, sizeof(buffer), f)) > 0;)
+            file.insert(file.end(), buffer, buffer + n);
+        std::fclose(f);
+        if (file.size() < 8 || std::memcmp(file.data(), "GDV2", 4) != 0) {
+            std::printf("%s: not a GDV2 dump\n", argv[a]);
             continue;
         }
-        std::vector<uint8_t> control(sizes[0]), input(sizes[1]), output(sizes[2]);
-        const bool ok = fread(control.data(), 1, control.size(), f) == control.size()
-                        && fread(input.data(), 1, input.size(), f) == input.size()
-                        && fread(output.data(), 1, output.size(), f) == output.size();
-        fclose(f);
-        if (!ok)
-            continue;
-        uint32_t n = 0;
-        memcpy(&n, control.data(), 4);
-        for (uint32_t i = 0; i < n && 4 + 8 * (i + 1) <= control.size(); ++i) {
-            uint32_t in_off, out_off, w0, w1;
-            memcpy(&in_off, &control[4 + 8 * i], 4);
-            memcpy(&out_off, &control[8 + 8 * i], 4);
+        const uint32_t count = dword(&file[4]);
+        uint64_t address = 0, extent = 0;
+        std::memcpy(&address, &file[8], 8);
+        std::memcpy(&extent, &file[16], 8);
+        size_t at = 24;
+        for (uint32_t i = 0; i < count && at + 12 <= file.size(); ++i) {
+            const uint32_t out_off = dword(&file[at]), in_size = dword(&file[at + 4]), out_size = dword(&file[at + 8]);
+            at += 12;
+            uint64_t &top = highest[{address, extent}];
+            top = std::max<uint64_t>(top, uint64_t(out_off) + out_size);
+            if (at + in_size + out_size > file.size())
+                break;
             ++streams;
-            if (in_off + 8ull > input.size()) {
-                printf("%s stream %u: header outside input\n", argv[a], i);
-                continue;
+            if (in_size == 0) {
+                ++skipped;
+                std::printf("%s stream %u: not in the dump (header or data outside the dumped bytes)\n", argv[a], i);
+            } else if (!check_stream(dec, argv[a], i, &file[at], in_size, &file[at + in_size], out_size)) {
+                ++bad_streams;
             }
-            memcpy(&w0, &input[in_off], 4);
-            memcpy(&w1, &input[in_off + 4], 4);
-            const uint32_t tiles = w0 >> 16, last = (w1 >> 2) & 0x3ffff;
-            if (!tiles || in_off + 8ull + 4ull * tiles > input.size()) {
-                printf("%s stream %u: bad header %08x %08x\n", argv[a], i, w0, w1);
-                continue;
-            }
-            std::vector<uint32_t> table(tiles);
-            memcpy(table.data(), &input[in_off + 8], 4 * tiles);
-            const size_t data = in_off + 8 + 4ull * tiles;
-            bool bad = false;
-            for (uint32_t t = 0; t < tiles && !bad; ++t) {
-                const size_t start = t == 0 ? 0 : table[t];
-                const size_t end = t + 1 < tiles ? table[t + 1] : start + table[0];
-                const size_t want = t + 1 == tiles && last ? last : 65536;
-                if (data + end > input.size()) {
-                    printf("%s stream %u tile %u/%u: compressed data outside input\n", argv[a], i, t, tiles);
-                    bad = true;
-                    break;
-                }
-                std::vector<uint8_t> ref(65536);
-                libdeflate_gdeflate_in_page page{&input[data + start], end - start};
-                size_t actual = 0;
-                const auto r = libdeflate_gdeflate_decompress(dec, &page, 1, ref.data(), want, &actual);
-                const uint64_t at = out_off + 65536ull * t;
-                if (r != LIBDEFLATE_SUCCESS || actual != want) {
-                    printf("%s stream %u tile %u/%u: reference decode failed (%d)\n", argv[a], i, t, tiles, int(r));
-                    bad = true;
-                } else if (at + want > output.size() || memcmp(ref.data(), &output[at], want)) {
-                    size_t first = 0, diff = 0;
-                    while (first < want && at + first < output.size() && ref[first] == output[at + first])
-                        ++first;
-                    for (size_t k = 0; k < want && at + k < output.size(); ++k)
-                        diff += ref[k] != output[at + k];
-                    printf("%s stream %u tile %u/%u (%zu compressed bytes): GPU output differs, first at %zu, %zu of %zu bytes differ\n",
-                           argv[a], i, t, tiles, end - start, first, diff, want);
-                    bad = true;
-                }
-            }
-            bad_streams += bad;
+            at += in_size + out_size;
         }
     }
-    printf("%ld streams, %ld mismatching\n", streams, bad_streams);
+    for (const auto &[key, top] : highest)
+        std::printf("output %llx (extent %llu MiB): highest byte written at %llu MiB\n", (unsigned long long)key.first,
+                    (unsigned long long)(key.second >> 20), (unsigned long long)(top >> 20));
+    std::printf("%ld streams, %ld mismatching, %ld not dumped\n", streams, bad_streams, skipped);
     return bad_streams != 0;
 }

@@ -1952,11 +1952,44 @@ void Replay::dump_gdeflate(uint64_t input_size, uint64_t output_size, uint64_t c
     end_blit();
     NSString *path = [NSString stringWithFormat:@"%s/call-%u.bin", dir, index];
     const std::array<uint64_t, 3> sizes_copy = {sizes[0], sizes[1], sizes[2]};
+    // Only the streams' own bytes are written: "GDV2", u32 stream count, u64 output address, u64 bytes from there to the
+    // end of its buffer, then per stream u32 output offset, input and output sizes and the bytes (a stream whose header
+    // or data lie outside the copies gets sizes 0).
+    const uint64_t output_address = buffers[1]->gpu_address + offsets[1], output_extent = output_size;
     [cb_ addCompletedHandler:^(id<MTLCommandBuffer>) {
+        const uint8_t *control = static_cast<const uint8_t *>(staging[0].contents);
+        const uint8_t *input = static_cast<const uint8_t *>(staging[1].contents);
+        const uint8_t *output = static_cast<const uint8_t *>(staging[2].contents);
+        auto dword = [](const uint8_t *p) { uint32_t v; std::memcpy(&v, p, 4); return v; };
+        const uint32_t count = sizes_copy[0] >= 4 ? std::min<uint64_t>(dword(control), (sizes_copy[0] - 4) / 8) : 0;
         NSMutableData *data = [NSMutableData data];
-        [data appendBytes:sizes_copy.data() length:sizeof(uint64_t) * 3];
-        for (int i = 0; i < 3; ++i)
-            [data appendBytes:staging[i].contents length:sizes_copy[i]];
+        [data appendBytes:"GDV2" length:4];
+        [data appendBytes:&count length:4];
+        [data appendBytes:&output_address length:8];
+        [data appendBytes:&output_extent length:8];
+        for (uint32_t i = 0; i < count; ++i) {
+            const uint64_t in_off = dword(control + 4 + 8 * i), out_off = dword(control + 8 + 8 * i);
+            uint32_t in_size = 0, out_size = 0;
+            if (in_off + 8 <= sizes_copy[1]) {
+                const uint32_t tiles = dword(input + in_off) >> 16, last = (dword(input + in_off + 4) >> 2) & 0x3ffff;
+                if (tiles && in_off + 8 + 4ull * tiles <= sizes_copy[1]) {
+                    const uint64_t table = in_off + 8;
+                    const uint64_t data_bytes = (tiles > 1 ? dword(input + table + 4ull * (tiles - 1)) : 0) + dword(input + table);
+                    const uint64_t in_bytes = 8 + 4ull * tiles + data_bytes;
+                    const uint64_t out_bytes = 65536ull * (tiles - 1) + (last ? last : 65536);
+                    if (in_off + in_bytes <= sizes_copy[1] && out_off + out_bytes <= sizes_copy[2]) {
+                        in_size = static_cast<uint32_t>(in_bytes);
+                        out_size = static_cast<uint32_t>(out_bytes);
+                    }
+                }
+            }
+            const uint32_t out_off32 = static_cast<uint32_t>(out_off);
+            [data appendBytes:&out_off32 length:4];
+            [data appendBytes:&in_size length:4];
+            [data appendBytes:&out_size length:4];
+            [data appendBytes:input + in_off length:in_size];
+            [data appendBytes:output + out_off length:out_size];
+        }
         [data writeToFile:path atomically:NO];
     }];
 }

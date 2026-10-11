@@ -6,10 +6,10 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 t="$root/third_party/libdeflate-gdeflate"
 work="$root/build-wine/gdeflate_verify.d"
 exe="$work/gdeflate_verify"
-if [ ! -x "$exe" ]; then
+if [ ! -x "$exe" ] || [ "$root/tools/gdeflate_verify.cpp" -nt "$exe" ]; then
     mkdir -p "$work"
     for c in deflate_compress deflate_decompress gdeflate_compress gdeflate_decompress utils; do
-        clang -O2 -c "$t/lib/$c.c" -I"$t" -I"$t/lib" -I"$t/common" -o "$work/$c.o"
+        [ -f "$work/$c.o" ] || clang -O2 -c "$t/lib/$c.c" -I"$t" -I"$t/lib" -I"$t/common" -o "$work/$c.o"
     done
     clang++ -O2 -std=c++17 "$root/tools/gdeflate_verify.cpp" "$work"/*.o -I"$t" -o "$exe"
 fi

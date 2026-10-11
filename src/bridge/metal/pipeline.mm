@@ -8,6 +8,7 @@
 #include <cctype>
 #include <cstdlib>
 #include <cstdio>
+#include <unistd.h>
 #include <vector>
 
 #include <metal_irconverter/metal_irconverter.h>
@@ -210,6 +211,16 @@ CacheKey stage_key(RootSignature *root_signature, const void *dxil, uint64_t siz
 mtlb_result convert_stage(Device *device, RootSignature *root_signature, const void *dxil, uint64_t size,
                           const char *entry, IRShaderStage ir_stage, const StageOptions &options, ShaderStage &out)
 {
+    // D3D12METAL_DUMP_SHADERS=<dir> keeps every shader a pipeline uses (<dir>/<hash>.dxil, once), for dxc -dumpbin.
+    if (static const char *dir = std::getenv("D3D12METAL_DUMP_SHADERS"); dir) {
+        const std::string path = std::string(dir) + "/" + std::to_string(hash_bytes(dxil, size)) + ".dxil";
+        if (access(path.c_str(), F_OK) != 0) {
+            if (FILE *f = std::fopen(path.c_str(), "wb")) {
+                std::fwrite(dxil, 1, size, f);
+                std::fclose(f);
+            }
+        }
+    }
     DiskCache &cache = DiskCache::instance();
     const bool use_cache = cache.enabled();
     CacheKey key{};

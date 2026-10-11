@@ -206,7 +206,10 @@ void encode_present(Queue *queue, id<MTLCommandBuffer> command_buffer, Swapchain
     draw_present_pass(command_buffer, drawable.drawable.texture, drawable.pipeline, texture->texture, queue);
 
     const uint64_t present = ++swapchain->presents;
-    if (!swapchain->dump_path.empty() && present == swapchain->dump_frame) {
+    const bool dump = !swapchain->dump_path.empty() && present >= swapchain->dump_frame
+                      && (present == swapchain->dump_frame
+                          || (swapchain->dump_every && (present - swapchain->dump_frame) % swapchain->dump_every == 0));
+    if (dump) {
         // The same pass again into a texture the CPU can read.
         id<MTLTexture> target = drawable.drawable.texture;
         MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:target.pixelFormat
@@ -217,7 +220,11 @@ void encode_present(Queue *queue, id<MTLCommandBuffer> command_buffer, Swapchain
         td.storageMode = MTLStorageModeShared;
         id<MTLTexture> capture = [swapchain->device->device newTextureWithDescriptor:td];
         draw_present_pass(command_buffer, capture, drawable.pipeline, texture->texture, queue);
-        const std::string path = swapchain->dump_path;
+        std::string path = swapchain->dump_path;
+        if (swapchain->dump_every) {
+            const size_t dot = path.rfind(".png");
+            path.insert(dot == std::string::npos ? path.size() : dot, "-" + std::to_string(present));
+        }
         [command_buffer addCompletedHandler:^(id<MTLCommandBuffer>) { write_png(capture, path); }];
     }
     [command_buffer presentDrawable:drawable.drawable];
@@ -258,6 +265,8 @@ mtlb_result mtlb_swapchain_create(mtlb_device handle, const mtlb_swapchain_desc 
         const char *frame = getenv("D3D12METAL_DUMP_PRESENT_FRAME");
         swapchain->dump_path = dump;
         swapchain->dump_frame = frame ? strtoull(frame, nullptr, 10) : 30;
+        const char *every = getenv("D3D12METAL_DUMP_PRESENT_EVERY");
+        swapchain->dump_every = every ? strtoull(every, nullptr, 10) : 0;
     }
     swapchain->pipeline = make_pipeline(swapchain.get(), pixel_format);
     if (!swapchain->pipeline)

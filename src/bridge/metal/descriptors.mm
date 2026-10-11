@@ -286,8 +286,12 @@ mtlb_result mtlb_buffer_view(const mtlb_buffer_view_desc *desc, mtlb_descriptor 
     const uint64_t limit = 1ull << 28;
     uint64_t elements = std::min<uint64_t>(desc->num_elements, available / bytes);
     if (elements + padding > limit) {
-        static std::atomic<bool> logged{false};
-        log_once(logged, "a typed buffer view exceeds the texture buffer limit and is clamped to it");
+        static std::atomic<int> logged{0};
+        if (logged.fetch_add(1) < 8)
+            backend_log("a typed buffer view exceeds the texture buffer limit and is clamped to it (format %u, %llu elements "
+                        "from byte %llu of a %llu-byte buffer)",
+                        desc->format, (unsigned long long)desc->num_elements, (unsigned long long)desc->offset,
+                        (unsigned long long)buffer->size);
         elements = limit - padding;
     }
     size_bytes = elements * bytes;
