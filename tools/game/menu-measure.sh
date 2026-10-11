@@ -4,8 +4,10 @@
 # meanwhile (D3D12METAL_STATS=1, a line every 120 presents) and prints the busiest threads' CPU% over the interval.
 # usage: GAME=sm1|sm2 tools/game/menu-measure.sh [seconds] [log]   (log default: build-wine/game-logs/d3d12metal.log)
 source "$(dirname "${BASH_SOURCE[0]}")/env.sh"
+# The game as launch.sh starts it ("<exe> args"), not its crash handler or a shell that only mentions the name.
+game_pattern="^${GAME_EXE//./\\.} "
 seconds="${1:-30}"; log="${2:-$game_logs/d3d12metal.log}"
-pid=$(pgrep -f "$GAME_EXE" | head -1)
+pid=$(pgrep -f "$game_pattern" | head -1)
 [ -n "$pid" ] || { echo "$GAME_EXE is not running" >&2; exit 1; }
 # Per-thread CPU seconds (user + system), one "index seconds" line per thread.
 # (STIME and UTIME are the two fields after PRI, e.g. 46T; the first line also has USER, TT and the command.)
