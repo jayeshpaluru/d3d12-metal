@@ -518,6 +518,25 @@ func requirementProfile(optional: Bool = false, run: String = "setup.bat", extra
     }
 }
 
+// MARK: - Command line
+
+@Suite struct ArgsTests {
+    @Test func repeatedOptionsKeepEveryValue() {
+        let a = Args(["1817070", "--env", "A=1", "--env=B=2", "--env", "C=3", "--hud", "on", "--hud", "off", "--dry-run", "--", "--env", "X=9"])
+        #expect(a.positional == ["1817070"])
+        #expect(a.values("env") == ["A=1", "B=2", "C=3"])
+        #expect(a.option("hud") == "off")           // the last one wins for a single value
+        #expect(a.has("dry-run"))
+        #expect(a.passthrough == ["--env", "X=9"])   // untouched after --
+        #expect(a.values("missing").isEmpty && a.option("missing") == nil)
+    }
+
+    @Test func aValueOptionAtTheEndIsAFlag() {
+        let a = Args(["x", "--env"])
+        #expect(a.has("env") && a.values("env").isEmpty)
+    }
+}
+
 // MARK: - Bottles
 
 @Suite struct BottleTests {

@@ -4,47 +4,6 @@ import Foundation
 
 // MARK: - Argument parsing
 
-struct Args {
-    var positional: [String] = []
-    var options: [String: String] = [:]
-    var flags: Set<String> = []
-    var passthrough: [String] = []
-
-    /// Options that take a value; everything else starting with "--" is a flag.
-    static let valueOptions: Set<String> = [
-        "bottle", "prefix", "name", "folder", "exe", "appid", "version", "output", "lines", "hud", "gpu", "feature-level", "gdeflate",
-        "log", "env", "args", "wine-root", "timeout", "profile",
-    ]
-
-    init(_ argv: [String]) {
-        var i = 0
-        while i < argv.count {
-            let a = argv[i]
-            if a == "--" { passthrough = Array(argv[(i + 1)...]); break }
-            if a.hasPrefix("--") {
-                var key = String(a.dropFirst(2))
-                if let eq = key.firstIndex(of: "=") {
-                    options[String(key[..<eq])] = String(key[key.index(after: eq)...])
-                } else if Self.valueOptions.contains(key), i + 1 < argv.count {
-                    i += 1
-                    options[key] = argv[i]
-                } else {
-                    key = key.lowercased()
-                    flags.insert(key)
-                }
-            } else if a == "-h" {
-                flags.insert("help")
-            } else {
-                positional.append(a)
-            }
-            i += 1
-        }
-    }
-
-    func has(_ flag: String) -> Bool { flags.contains(flag) }
-    func option(_ name: String) -> String? { options[name] }
-}
-
 // MARK: - Output
 
 var jsonMode = false
@@ -378,7 +337,7 @@ case "config":
     if let v = args.option("gdeflate") { s.gdeflate = onOff(v); changed = true }
     if let v = args.option("log") { guard let l = LogLevel(rawValue: v) else { fail("--log must be off, stats, trace or verbose") }; s.logLevel = l; changed = true }
     if let v = args.option("args") { s.customArgs = v; changed = true }
-    if let v = args.option("env") {
+    for v in args.values("env") {
         let parts = v.split(separator: "=", maxSplits: 1).map(String.init)
         guard parts.count == 2 else { fail("--env needs KEY=VALUE") }
         s.customEnv[parts[0]] = parts[1]; changed = true
