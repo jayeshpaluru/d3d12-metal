@@ -8,6 +8,7 @@ struct GameDetailView: View {
     @State private var settings = GameSettings()
     @State private var envText = ""
     @State private var loadedFor: String?
+    @State private var pending: [Profile.Requirement] = []
 
     var state: GameState? { model.games.first { $0.id == gameID } }
 
@@ -16,7 +17,7 @@ struct GameDetailView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
                     header(s)
-                    if !model.ws.pendingRequirementsCached(s).isEmpty { setupNote(s) }
+                    if !pending.isEmpty { setupNote(s) }
                     settingsForm(s)
                     notes(s)
                     tools(s)
@@ -27,6 +28,7 @@ struct GameDetailView: View {
             }
             .navigationTitle(s.game.name)
             .onAppear { load(s) }
+            .onChange(of: s.running) { _, _ in pending = model.ws.pendingRequirements(for: s.game) }
         } else {
             Text("Game not found").foregroundStyle(.secondary)
         }
@@ -36,6 +38,7 @@ struct GameDetailView: View {
         guard loadedFor != s.id else { return }
         settings = model.ws.settings(for: s.game)
         envText = settings.customEnv.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: "\n")
+        pending = model.ws.pendingRequirements(for: s.game)
         loadedFor = s.id
     }
 
@@ -77,7 +80,7 @@ struct GameDetailView: View {
     }
 
     func setupNote(_ s: GameState) -> some View {
-        let items = model.ws.pendingRequirementsCached(s)
+        let items = pending
         return GroupBox {
             VStack(alignment: .leading, spacing: 4) {
                 Label("First launch setup", systemImage: "wrench.and.screwdriver").font(.headline)
@@ -147,22 +150,6 @@ struct GameDetailView: View {
             Button { model.openLogs(s) } label: { Label("Open Logs", systemImage: "doc.text.magnifyingglass") }
             Button { model.report(for: s) } label: { Label("Report a Problem...", systemImage: "ladybug") }
             Button { NSWorkspace.shared.open(s.game.gameDir) } label: { Label("Show Game Folder", systemImage: "folder") }
-        }
-    }
-}
-
-extension Workspace {
-    /// Requirements not satisfied yet, without waiting for Wine (the library view needs this to be cheap): a requirement
-    /// is considered done when its registry key's file is present in the bottle's user.reg.
-    func pendingRequirementsCached(_ s: GameState) -> [Profile.Requirement] {
-        guard !s.profile.requirements.isEmpty, let b = bottles.bottle(named: s.game.bottle) else { return [] }
-        let reg = (try? String(contentsOf: b.prefix.appendingPathComponent("user.reg"), encoding: .utf8)) ?? ""
-        return s.profile.requirements.filter { r in
-            guard let key = r.doneKey else { return true }
-            // HKCU\SOFTWARE\Foo -> [Software\\Foo] in user.reg (case-insensitive)
-            let parts = key.split(separator: "\\").dropFirst().map(String.init)
-            let needle = "[" + parts.joined(separator: "\\\\") + "]"
-            return !reg.lowercased().contains(needle.lowercased())
         }
     }
 }

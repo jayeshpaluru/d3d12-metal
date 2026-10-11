@@ -99,37 +99,6 @@ public final class Workspace: @unchecked Sendable {
         try LayerInstaller.uninstall(gameDir: game.gameDir, session: try? session(bottleName: game.bottle), dryRun: dryRun)
     }
 
-    // MARK: Requirements (Steam's installscript equivalents)
-
-    /// Requirements of the game's profile that are not done yet.
-    public func pendingRequirements(for game: Game) -> [Profile.Requirement] {
-        guard let session = try? session(bottleName: game.bottle) else { return [] }
-        return library.profile(for: game).requirements.filter { r in
-            guard let key = r.doneKey else { return true }
-            return !session.regKeyExists(key)
-        }
-    }
-
-    public func runRequirement(_ r: Profile.Requirement, for game: Game) throws {
-        let session = try session(bottleName: game.bottle)
-        guard let first = r.run.first else { return }
-        let target = game.gameDir.appendingPathComponent(first)
-        guard FileManager.default.fileExists(atPath: target.path) else {
-            throw CoreError("\(first) (needed for \"\(r.title)\") is not in the game folder", hint: "Let Steam finish installing or verify the game files")
-        }
-        var args: [String]
-        switch target.pathExtension.lowercased() {
-        case "bat", "cmd": args = ["cmd", "/c"] + r.run
-        case "msi": args = ["msiexec", "/i", first] + Array(r.run.dropFirst())
-        default: args = r.run
-        }
-        let res = session.run(args, cwd: game.gameDir, timeout: 900)
-        if !res.ok {
-            if r.optional { return }
-            throw CoreError("\"\(r.title)\" failed (exit \(res.status)): \(res.stderr.suffix(300))")
-        }
-    }
-
     // MARK: Launch / stop
 
     public struct LaunchResult: Codable, Sendable {

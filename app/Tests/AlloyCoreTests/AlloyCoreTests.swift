@@ -383,6 +383,92 @@ let sampleACF = """
     }
 }
 
+// MARK: - Workspace with a fake Wine
+
+/// A Workspace whose Wine is a shell script that logs its arguments (exit 1 when an argument contains "fail").
+struct Fixture {
+    var ws: Workspace
+    var paths: Paths
+    var game: Game
+    var bottle: Bottle
+    var wineLog: URL
+    var gameDir: URL
+
+    var wineCalls: [String] { ((try? String(contentsOf: wineLog, encoding: .utf8)) ?? "").split(separator: "\n").map(String.init) }
+}
+
+func makeFixture(profile: String? = nil, exe: String = "fixture-game.exe", files: [String: String] = [:]) throws -> Fixture {
+    let root = try makeTempDir("fx")
+    let home = root.appendingPathComponent("home"), wine = root.appendingPathComponent("wine"), prefix = root.appendingPathComponent("prefix")
+    let gameDir = root.appendingPathComponent("game")
+    for d in [home, wine.appendingPathComponent("bin"), prefix, gameDir] { try FileManager.default.createDirectory(at: d, withIntermediateDirectories: true) }
+    let log = root.appendingPathComponent("wine.log")
+    let script = "#!/bin/sh\necho \"$@\" >> '\(log.path)'\ncase \"$*\" in *fail*) exit 1;; esac\nexit 0\n"
+    try script.write(to: wine.appendingPathComponent("bin/wine"), atomically: true, encoding: .utf8)
+    try "#!/bin/sh\nexit 0\n".write(to: wine.appendingPathComponent("bin/wineserver"), atomically: true, encoding: .utf8)
+    for n in ["wine", "wineserver"] { chmod(wine.appendingPathComponent("bin/" + n).path, 0o755) }
+    try "".write(to: prefix.appendingPathComponent("system.reg"), atomically: true, encoding: .utf8)
+    try "".write(to: prefix.appendingPathComponent("user.reg"), atomically: true, encoding: .utf8)
+    try makePE(imports: ["d3d12.dll"]).write(to: gameDir.appendingPathComponent(exe))
+    for (name, content) in files { try content.write(to: gameDir.appendingPathComponent(name), atomically: true, encoding: .utf8) }
+    let paths = Paths(home: home)
+    var config = Config()
+    config.wineRoot = wine.path
+    try config.save(paths)
+    if let profile {
+        try FileManager.default.createDirectory(at: paths.userProfilesDir, withIntermediateDirectories: true)
+        try profile.write(to: paths.userProfilesDir.appendingPathComponent("fixture.json"), atomically: true, encoding: .utf8)
+    }
+    let ws = Workspace(paths: paths)
+    let bottle = try ws.bottles.add(name: "Fx", existingPrefix: prefix)
+    let game = try ws.library.addCustom(name: "Fixture Game", bottle: "Fx", folder: gameDir, exe: exe)
+    return Fixture(ws: ws, paths: paths, game: game, bottle: bottle, wineLog: log, gameDir: gameDir)
+}
+
+func requirementProfile(optional: Bool = false, run: String = "setup.bat", extra: String = "\"quiet\"") -> String {
+    """
+    {"id":"fixture","name":"Fixture","match":{"exe":["fixture-game.exe"]},"launch":{"mode":"direct"},
+     "requirements":[{"id":"runtime","title":"Runtime","doneKey":"HKCU\\\\SOFTWARE\\\\Vendor\\\\Game","run":["\(run)",\(extra)],"optional":\(optional)}]}
+    """
+}
+
+@Suite struct RequirementTests {
+    @Test func runsOnceAndIsRecorded() throws {
+        let fx = try makeFixture(profile: requirementProfile(), files: ["setup.bat": "@echo off"])
+        let game = try #require(fx.ws.library.find("fixture game"))
+        #expect(fx.ws.pendingRequirements(for: game).count == 1)
+        try fx.ws.runRequirement(fx.ws.pendingRequirements(for: game)[0], for: game)
+        #expect(fx.wineCalls.contains { $0.contains("cmd /c setup.bat quiet") })
+        #expect(fx.wineCalls.contains { $0.contains("reg add") && $0.contains("Vendor") })   // the HasRunKey equivalent
+        // The batch file did not create the registry key (the real one does not): the marker alone ends the loop.
+        #expect(fx.ws.pendingRequirements(for: game).isEmpty)
+        #expect(FileManager.default.fileExists(atPath: fx.bottle.prefix.appendingPathComponent("alloy-requirements.json").path))
+    }
+
+    @Test func optionalFailureIsRecordedAndNotRetried() throws {
+        let fx = try makeFixture(profile: requirementProfile(optional: true, run: "fail.bat"), files: ["fail.bat": "x"])
+        let game = try #require(fx.ws.library.find("fixture game"))
+        try fx.ws.runRequirement(fx.ws.pendingRequirements(for: game)[0], for: game)
+        #expect(fx.ws.pendingRequirements(for: game).isEmpty)
+    }
+
+    @Test func requiredFailureThrowsAndStaysPending() throws {
+        let fx = try makeFixture(profile: requirementProfile(run: "fail.bat"), files: ["fail.bat": "x"])
+        let game = try #require(fx.ws.library.find("fixture game"))
+        #expect(throws: CoreError.self) { try fx.ws.runRequirement(fx.ws.pendingRequirements(for: game)[0], for: game) }
+        #expect(fx.ws.pendingRequirements(for: game).count == 1)
+    }
+
+    @Test func registryKeyAlsoCountsAsDone() throws {
+        let fx = try makeFixture(profile: requirementProfile(), files: ["setup.bat": "x"])
+        let game = try #require(fx.ws.library.find("fixture game"))
+        try "WINE REGISTRY Version 2\n\n[Software\\\\Vendor\\\\Game] 1\n".write(to: fx.bottle.prefix.appendingPathComponent("user.reg"), atomically: true, encoding: .utf8)
+        #expect(fx.ws.pendingRequirements(for: game).isEmpty)
+        #expect(RegistryFile.keyExists("HKCU\\Software\\Vendor\\Game", prefix: fx.bottle.prefix))
+        #expect(!RegistryFile.keyExists("HKCU\\Software\\Vendor\\Other", prefix: fx.bottle.prefix))
+    }
+}
+
 // MARK: - Shell
 
 @Suite struct ShellTests {
