@@ -33,11 +33,7 @@ public struct LayerBuild: Sendable, Equatable {
         var candidates: [URL] = []
         if let d = config.layerDir, !d.isEmpty { candidates.append(URL(fileURLWithPath: (d as NSString).expandingTildeInPath)) }
         if let d = ProcessInfo.processInfo.environment["D3D12METAL_LAYER_DIR"], !d.isEmpty { candidates.append(URL(fileURLWithPath: d)) }
-        if let r = Bundle.main.resourceURL { candidates.append(r.appendingPathComponent("layer")) }
-        // Next to the executable (a release archive: bin/d3d12metal + layer/).
-        let exe = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath().deletingLastPathComponent()
-        candidates.append(exe.appendingPathComponent("layer"))
-        candidates.append(exe.deletingLastPathComponent().appendingPathComponent("layer"))
+        candidates += ResourceLocator.urls("layer")
         candidates.append(paths.layerDir)
         if let root = SourceTree.find() { candidates.append(root.appendingPathComponent("build-wine/out")) }
         return candidates.map(LayerBuild.init(dir:)).first { $0.isComplete }

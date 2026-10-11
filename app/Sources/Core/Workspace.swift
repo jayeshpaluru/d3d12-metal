@@ -25,7 +25,7 @@ public final class Workspace: @unchecked Sendable {
     /// Bundled profiles first, then the source tree's, then the user's (which override by id).
     public static func profileDirectories(paths: Paths) -> [URL] {
         var dirs: [URL] = []
-        if let r = Bundle.main.resourceURL { dirs.append(r.appendingPathComponent("profiles")) }
+        dirs += ResourceLocator.urls("profiles")
         if let env = ProcessInfo.processInfo.environment["D3D12METAL_PROFILES"], !env.isEmpty { dirs.append(URL(fileURLWithPath: env)) }
         if let root = SourceTree.find() { dirs.append(root.appendingPathComponent("profiles")) }
         dirs.append(paths.userProfilesDir)

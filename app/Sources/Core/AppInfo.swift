@@ -101,3 +101,18 @@ public struct CoreError: Error, LocalizedError, CustomStringConvertible {
     public var errorDescription: String? { hint.map { "\(message)\n  hint: \($0)" } ?? message }
     public var description: String { errorDescription ?? message }
 }
+
+/// Where bundled resources (layer/, profiles/, cpuprobe) are: the app bundle's Resources, or next to the command line tool
+/// (a release archive with the tool and a layer folder, or the tool inside the app bundle at Resources/bin).
+public enum ResourceLocator {
+    public static var directories: [URL] {
+        var dirs: [URL] = []
+        if let r = Bundle.main.resourceURL { dirs.append(r) }
+        let exe = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath().deletingLastPathComponent()
+        dirs.append(exe.deletingLastPathComponent())
+        dirs.append(exe)
+        return dirs
+    }
+
+    public static func urls(_ name: String) -> [URL] { directories.map { $0.appendingPathComponent(name) } }
+}

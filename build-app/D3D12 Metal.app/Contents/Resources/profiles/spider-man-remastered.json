@@ -1,0 +1,20 @@
+{
+  "id": "spider-man-remastered",
+  "name": "Marvel's Spider-Man Remastered",
+  "match": { "steamAppId": 1817070, "exe": ["Spider-Man.exe"] },
+  "exe": "Spider-Man.exe",
+  "installDir": "Marvel's Spider-Man Remastered",
+  "status": "playable",
+  "launch": {
+    "mode": "steam",
+    "args": ["-nolauncher"],
+    "env": { "ROSETTA_ADVERTISE_AVX": "1" },
+    "windowTitle": "Spider"
+  },
+  "conf": {},
+  "notes": [
+    "Runs the open world at roughly 55-60 fps on an M2 Max (1080p-class, shader cache warm).",
+    "The first start compiles thousands of shaders (several minutes); the shader cache makes later starts fast.",
+    "Do not use the game's own launcher window: -nolauncher is passed for you."
+  ]
+}

@@ -1,0 +1,425 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
+import Foundation
+import Testing
+@testable import Core
+
+// MARK: - Helpers
+
+func makeTempDir(_ name: String = "t") throws -> URL {
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent("d3d12metal-test-\(name)-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+    return url
+}
+
+/// A minimal 64-bit PE image whose import table lists `dlls`; the first DLL's thunk is by ordinal when `ordinal`.
+func makePE(imports dlls: [String], ordinal: Bool = false) -> Data {
+    var d = Data(count: 0x800)
+    func w16(_ o: Int, _ v: UInt16) { d[o] = UInt8(v & 0xFF); d[o + 1] = UInt8(v >> 8) }
+    func w32(_ o: Int, _ v: UInt32) { w16(o, UInt16(v & 0xFFFF)); w16(o + 2, UInt16(v >> 16)) }
+    func w64(_ o: Int, _ v: UInt64) { w32(o, UInt32(v & 0xFFFF_FFFF)); w32(o + 4, UInt32(v >> 32)) }
+    w16(0, 0x5A4D)
+    w32(0x3C, 0x80)
+    w32(0x80, 0x0000_4550)
+    w16(0x80 + 4, 0x8664)          // machine
+    w16(0x80 + 6, 1)               // sections
+    w16(0x80 + 20, 240)            // optional header size
+    let opt = 0x80 + 24
+    w16(opt, 0x20B)
+    w32(opt + 108, 16)             // number of data directories
+    w32(opt + 112 + 8, 0x1000)     // import directory RVA
+    w32(opt + 112 + 12, 0x100)
+    let sec = opt + 240
+    w32(sec + 8, 0x400)            // virtual size
+    w32(sec + 12, 0x1000)          // virtual address
+    w32(sec + 16, 0x400)           // raw size
+    w32(sec + 20, 0x400)           // raw pointer
+    var nameOffset = 0x400 + 0x100, thunkOffset = 0x400 + 0x300
+    for (i, dll) in dlls.enumerated() {
+        let desc = 0x400 + i * 20
+        let nameRVA = 0x1000 + (nameOffset - 0x400)
+        let thunkRVA = 0x1000 + (thunkOffset - 0x400)
+        for (j, b) in dll.utf8.enumerated() { d[nameOffset + j] = b }
+        w32(desc, UInt32(thunkRVA))            // OriginalFirstThunk
+        w32(desc + 12, UInt32(nameRVA))
+        w32(desc + 16, UInt32(thunkRVA))
+        w64(thunkOffset, (i == 0 && ordinal) ? 0x8000_0000_0000_0000 | 101 : UInt64(nameRVA))
+        nameOffset += 32
+        thunkOffset += 16
+    }
+    return d
+}
+
+func writeExe(_ dir: URL, _ name: String, imports: [String], ordinal: Bool = false) throws {
+    let url = dir.appendingPathComponent(name)
+    try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try makePE(imports: imports, ordinal: ordinal).write(to: url)
+}
+
+// MARK: - VDF / acf
+
+let sampleACF = """
+"AppState"
+{
+\t"appid"\t\t"1817070"
+\t"name"\t\t"Marvel\u{2019}s Spider-Man Remastered"
+\t"StateFlags"\t\t"4"
+\t"installdir"\t\t"Marvel's Spider-Man Remastered"
+\t"SizeOnDisk"\t\t"70825441975"
+\t"InstalledDepots"
+\t{
+\t\t"1817071"
+\t\t{
+\t\t\t"manifest"\t\t"123"
+\t\t}
+\t}
+}
+"""
+
+@Suite struct SteamTests {
+    @Test func parsesAppManifest() throws {
+        let app = try #require(SteamLibrary.parseManifest(sampleACF, steamapps: URL(fileURLWithPath: "/x/steamapps")))
+        #expect(app.appid == 1817070)
+        #expect(app.installDir == "Marvel's Spider-Man Remastered")
+        #expect(app.name.hasPrefix("Marvel"))
+        #expect(app.fullyInstalled)
+        #expect(app.sizeOnDisk == 70_825_441_975)
+        #expect(app.gameFolder.path == "/x/steamapps/common/Marvel's Spider-Man Remastered")
+    }
+
+    @Test func downloadingAppIsNotFullyInstalled() throws {
+        let text = sampleACF.replacingOccurrences(of: "\"StateFlags\"\t\t\"4\"", with: "\"StateFlags\"\t\t\"1026\"")
+        let app = try #require(SteamLibrary.parseManifest(text, steamapps: URL(fileURLWithPath: "/x")))
+        #expect(!app.fullyInstalled)
+    }
+
+    @Test func rejectsBrokenManifest() {
+        #expect(SteamLibrary.parseManifest("\"AppState\" { \"name\" \"x\" }", steamapps: URL(fileURLWithPath: "/x")) == nil)
+        #expect(SteamLibrary.parseManifest("garbage", steamapps: URL(fileURLWithPath: "/x")) == nil)
+    }
+
+    @Test func parsesLibraryFolders() {
+        let text = """
+        "libraryfolders"
+        {
+        \t"0" { "path" "C:\\\\Program Files (x86)\\\\Steam" "apps" { "1" "2" } }
+        \t"1" { "path" "D:\\\\Games\\\\SteamLibrary" }
+        }
+        """
+        #expect(SteamLibrary.parseLibraryFolders(text) == ["C:\\Program Files (x86)\\Steam", "D:\\Games\\SteamLibrary"])
+    }
+
+    @Test func mapsWindowsPaths() {
+        let prefix = URL(fileURLWithPath: "/p")
+        #expect(SteamLibrary.hostPath(forWindowsPath: "C:\\Program Files (x86)\\Steam", prefix: prefix).path == "/p/drive_c/Program Files (x86)/Steam")
+        #expect(SteamLibrary.hostPath(forWindowsPath: "D:\\Games", prefix: prefix).path == "/p/dosdevices/d:/Games")
+    }
+
+    @Test func scansPrefixAndFindsD3D12Exe() throws {
+        let prefix = try makeTempDir("prefix")
+        defer { try? FileManager.default.removeItem(at: prefix) }
+        let steamapps = SteamLibrary.steamDirectory(prefix: prefix).appendingPathComponent("steamapps")
+        try FileManager.default.createDirectory(at: steamapps.appendingPathComponent("common/Cool Game/bin"), withIntermediateDirectories: true)
+        try "\"AppState\"\n{\n\"appid\" \"777\"\n\"name\" \"Cool Game\"\n\"StateFlags\" \"4\"\n\"installdir\" \"Cool Game\"\n}\n"
+            .write(to: steamapps.appendingPathComponent("appmanifest_777.acf"), atomically: true, encoding: .utf8)
+        try writeExe(steamapps.appendingPathComponent("common/Cool Game"), "launcher.exe", imports: ["kernel32.dll"])
+        try writeExe(steamapps.appendingPathComponent("common/Cool Game/bin"), "game.exe", imports: ["kernel32.dll", "D3D12.dll"])
+        try writeExe(steamapps.appendingPathComponent("common/Cool Game/bin"), "unins000.exe", imports: ["D3D12.dll"])
+        let paths = Paths(home: try makeTempDir("home"))
+        let lib = GameLibrary(paths: paths, profiles: ProfileDB(profiles: [ProfileDB.builtinGeneric]))
+        let games = lib.steamGames(in: Bottle(name: "t", prefixPath: prefix.path, managed: false))
+        #expect(games.count == 1)
+        #expect(games[0].exe == "game.exe")
+        #expect(games[0].gameDir.lastPathComponent == "bin")
+        #expect(games[0].id == "steam:777")
+    }
+}
+
+// MARK: - PE
+
+@Suite struct PETests {
+    @Test func detectsImportByName() throws {
+        let info = try #require(PEScanner.scan(data: makePE(imports: ["KERNEL32.dll", "D3D12.dll"])))
+        #expect(info.is64Bit)
+        #expect(info.importsD3D12)
+        #expect(!info.importsD3D12ByOrdinal)
+        #expect(info.imports.contains("kernel32.dll"))
+    }
+
+    @Test func detectsImportByOrdinal() throws {
+        let info = try #require(PEScanner.scan(data: makePE(imports: ["d3d12.dll"], ordinal: true)))
+        #expect(info.importsD3D12 && info.importsD3D12ByOrdinal)
+    }
+
+    @Test func noD3D12() throws {
+        let info = try #require(PEScanner.scan(data: makePE(imports: ["d3d11.dll", "dxgi.dll"])))
+        #expect(!info.importsD3D12)
+    }
+
+    @Test func rejectsNonPE() {
+        #expect(PEScanner.scan(data: Data("hello world".utf8)) == nil)
+        #expect(PEScanner.scan(data: Data(count: 10)) == nil)
+        var bad = makePE(imports: ["d3d12.dll"])
+        bad[0x3C] = 0xFF; bad[0x3D] = 0xFF   // e_lfanew far outside
+        #expect(PEScanner.scan(data: bad) == nil)
+    }
+
+    @Test func truncatedFileDoesNotCrash() {
+        let full = makePE(imports: ["d3d12.dll"])
+        for n in stride(from: 0, to: full.count, by: 37) { _ = PEScanner.scan(data: full.prefix(n)) }
+    }
+
+    @Test func dynamicReferenceHint() throws {
+        let dir = try makeTempDir("dyn")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        var d = makePE(imports: ["kernel32.dll"])
+        d.append(Data("....D3D12CreateDevice....".utf8))
+        try d.write(to: dir.appendingPathComponent("a.exe"))
+        try makePE(imports: ["kernel32.dll"]).write(to: dir.appendingPathComponent("b.exe"))
+        #expect(PEScanner.usesD3D12(url: dir.appendingPathComponent("a.exe")))
+        #expect(!PEScanner.usesD3D12(url: dir.appendingPathComponent("b.exe")))
+    }
+}
+
+// MARK: - Profiles
+
+@Suite struct ProfileTests {
+    func repoProfilesDir() -> URL {
+        URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("profiles")
+    }
+
+    func db() -> ProfileDB {
+        var problems: [String] = []
+        let db = ProfileDB.load(directories: [repoProfilesDir()], problems: &problems)
+        #expect(problems.isEmpty)
+        return db
+    }
+
+    @Test func bundledProfilesLoad() {
+        let ids = Set(db().profiles.map(\.id))
+        #expect(ids.isSuperset(of: ["generic", "spider-man-remastered", "spider-man-2", "control"]))
+    }
+
+    @Test func matchesBySteamAppId() {
+        #expect(db().match(steamAppId: 1817070, exe: nil).id == "spider-man-remastered")
+        #expect(db().match(steamAppId: 2651280, exe: "whatever.exe").id == "spider-man-2")
+        #expect(db().match(steamAppId: 870780, exe: nil).id == "control")
+    }
+
+    @Test func matchesByExeCaseInsensitive() {
+        #expect(db().match(steamAppId: nil, exe: "spider-man2.EXE").id == "spider-man-2")
+        #expect(db().match(steamAppId: nil, exe: "Control_DX12.exe").id == "control")
+    }
+
+    @Test func fallsBackToGeneric() {
+        #expect(db().match(steamAppId: 42, exe: "unknown.exe").id == Profile.genericID)
+        #expect(db().match(steamAppId: nil, exe: nil).id == Profile.genericID)
+    }
+
+    @Test func appIdBeatsExe() {
+        #expect(db().match(steamAppId: 1817070, exe: "Spider-Man2.exe").id == "spider-man-remastered")
+    }
+
+    @Test func spiderMan2Content() throws {
+        let p = db().match(steamAppId: 2651280, exe: nil)
+        #expect(p.launch.env["ROSETTA_ADVERTISE_AVX"] == "1")
+        #expect(p.launch.args == ["-nolauncher"])
+        #expect(p.conf["quirk_force_compute_barrier"] == "0x324071d329f05ccc")
+        #expect(p.requirements.first?.run.first == "install_pspc_sdk_runtime.bat")
+    }
+
+    @Test func userProfileOverridesAndBadFilesAreReported() throws {
+        let user = try makeTempDir("profiles")
+        defer { try? FileManager.default.removeItem(at: user) }
+        try #"{"id":"control","name":"My Control","match":{"steamAppId":870780},"conf":{"hud":"1"}}"#
+            .write(to: user.appendingPathComponent("control.json"), atomically: true, encoding: .utf8)
+        try "{ not json".write(to: user.appendingPathComponent("bad.json"), atomically: true, encoding: .utf8)
+        var problems: [String] = []
+        let merged = ProfileDB.load(directories: [repoProfilesDir(), user], problems: &problems)
+        #expect(merged.match(steamAppId: 870780, exe: nil).name == "My Control")
+        #expect(problems.count == 1 && problems[0].hasPrefix("bad.json"))
+    }
+}
+
+// MARK: - Conf writing
+
+@Suite struct ConfTests {
+    @Test func defaultsWriteOnlyLogPaths() {
+        let kv = ConfBuilder.entries(profile: ProfileDB.builtinGeneric, settings: GameSettings(), logDir: URL(fileURLWithPath: "/logs/g"))
+        #expect(kv.map(\.0) == ["dump_failed", "log_file"])
+    }
+
+    @Test func settingsMapToKeys() {
+        var s = GameSettings()
+        s.hud = true; s.gpuIdentity = .amd; s.featureLevel121 = true; s.gdeflate = false; s.logLevel = .trace
+        s.extraConf = ["cache_max_mb": "64"]
+        var profile = ProfileDB.builtinGeneric
+        profile.conf = ["quirk_force_compute_barrier": "0x1"]
+        let kv = Dictionary(uniqueKeysWithValues: ConfBuilder.entries(profile: profile, settings: s, logDir: nil))
+        #expect(kv["hud"] == "1")
+        #expect(kv["vendor_id"] == "1002" && kv["device_id"] == "73bf" && kv["adapter_name"] == "AMD Radeon RX 6800")
+        #expect(kv["feature_level"] == "12_1")
+        #expect(kv["gdeflate"] == "0")
+        #expect(kv["trace"] == "1" && kv["stats"] == "1" && kv["log"] == nil)
+        #expect(kv["quirk_force_compute_barrier"] == "0x1")
+        #expect(kv["cache_max_mb"] == "64")
+    }
+
+    @Test func extraConfOverridesProfile() {
+        var s = GameSettings()
+        s.extraConf = ["feature_level": "12_0"]
+        var p = ProfileDB.builtinGeneric
+        p.conf = ["feature_level": "12_1"]
+        #expect(Dictionary(uniqueKeysWithValues: ConfBuilder.entries(profile: p, settings: s, logDir: nil))["feature_level"] == "12_0")
+    }
+
+    @Test func renderedFileParsesBack() {
+        var s = GameSettings()
+        s.hud = true
+        let text = ConfBuilder.render(profile: ProfileDB.builtinGeneric, settings: s, logDir: URL(fileURLWithPath: "/l"))
+        #expect(text.hasPrefix(ConfBuilder.marker))
+        let kv = ConfBuilder.parse(text)
+        #expect(kv["hud"] == "1" && kv["log_file"] == "/l/d3d12metal.log")
+    }
+
+    @Test func settingsRoundTripAndOldFilesDecode() throws {
+        let paths = Paths(home: try makeTempDir("settings"))
+        var s = GameSettings()
+        s.customEnv = ["A": "b"]; s.customArgs = "-windowed -w 1280"
+        try s.save(gameID: "steam:1", paths: paths)
+        #expect(GameSettings.load(gameID: "steam:1", paths: paths) == s)
+        #expect(s.argumentList == ["-windowed", "-w", "1280"])
+        #expect(try JSONDecoder().decode(GameSettings.self, from: Data("{}".utf8)) == GameSettings())
+    }
+}
+
+// MARK: - Layer install / uninstall
+
+@Suite struct InstallTests {
+    func fakeBuild(version: String = "v1", dllContent: String = "dll1") throws -> LayerBuild {
+        let dir = try makeTempDir("build")
+        try FileManager.default.createDirectory(at: dir.appendingPathComponent("x86_64-unix"), withIntermediateDirectories: true)
+        try dllContent.write(to: dir.appendingPathComponent("d3d12.dll"), atomically: true, encoding: .utf8)
+        try "dxgi".write(to: dir.appendingPathComponent("dxgi.dll"), atomically: true, encoding: .utf8)
+        try "so".write(to: dir.appendingPathComponent("x86_64-unix/d3d12metal.so"), atomically: true, encoding: .utf8)
+        try "dxil".write(to: dir.appendingPathComponent("x86_64-unix/libdxilconv.dylib"), atomically: true, encoding: .utf8)
+        try version.write(to: dir.appendingPathComponent("layer-version.txt"), atomically: true, encoding: .utf8)
+        return LayerBuild(dir: dir)
+    }
+
+    func text(_ url: URL) -> String? { try? String(contentsOf: url, encoding: .utf8) }
+
+    @Test func installsAndUninstallsCleanly() throws {
+        let game = try makeTempDir("game")
+        let build = try fakeBuild()
+        try "original-d3d12".write(to: game.appendingPathComponent("d3d12.dll"), atomically: true, encoding: .utf8)
+        try "my own conf".write(to: game.appendingPathComponent("d3d12metal.conf"), atomically: true, encoding: .utf8)
+        try "game".write(to: game.appendingPathComponent("game.exe"), atomically: true, encoding: .utf8)
+
+        #expect(!LayerInstaller.status(gameDir: game, build: build).installed)
+        let conf = ConfBuilder.render(profile: ProfileDB.builtinGeneric, settings: GameSettings(), logDir: nil)
+        try LayerInstaller.install(gameDir: game, exe: "game.exe", build: build, conf: conf, session: nil)
+
+        let st = LayerInstaller.status(gameDir: game, build: build)
+        #expect(st.installed && st.upToDate && st.installedVersion == "v1" && st.exe == "game.exe")
+        #expect(text(game.appendingPathComponent("d3d12.dll")) == "dll1")
+        #expect(text(game.appendingPathComponent("d3d12.dll.d3d12metal-orig")) == "original-d3d12")
+        #expect(text(game.appendingPathComponent("d3d12metal.conf.d3d12metal-orig")) == "my own conf")
+        #expect(text(game.appendingPathComponent("d3d12metal.conf"))?.hasPrefix(ConfBuilder.marker) == true)
+        #expect(text(game.appendingPathComponent("x86_64-unix/d3d12metal.so")) == "so")
+
+        try LayerInstaller.uninstall(gameDir: game, session: nil)
+        #expect(!LayerInstaller.status(gameDir: game, build: build).installed)
+        #expect(text(game.appendingPathComponent("d3d12.dll")) == "original-d3d12")
+        #expect(text(game.appendingPathComponent("d3d12metal.conf")) == "my own conf")
+        #expect(!FileManager.default.fileExists(atPath: game.appendingPathComponent("dxgi.dll").path))
+        #expect(!FileManager.default.fileExists(atPath: game.appendingPathComponent("x86_64-unix").path))
+        #expect(text(game.appendingPathComponent("game.exe")) == "game")
+    }
+
+    @Test func secondInstallKeepsOriginalBackupAndUpdates() throws {
+        let game = try makeTempDir("game")
+        try "orig".write(to: game.appendingPathComponent("d3d12.dll"), atomically: true, encoding: .utf8)
+        let conf = "# managed by d3d12metal\n"
+        try LayerInstaller.install(gameDir: game, exe: "g.exe", build: try fakeBuild(version: "v1"), conf: conf, session: nil)
+        let newer = try fakeBuild(version: "v2", dllContent: "dll2")
+        #expect(!LayerInstaller.status(gameDir: game, build: newer).upToDate)
+        try LayerInstaller.install(gameDir: game, exe: "g.exe", build: newer, conf: conf, session: nil)
+        #expect(text(game.appendingPathComponent("d3d12.dll")) == "dll2")
+        #expect(text(game.appendingPathComponent("d3d12.dll.d3d12metal-orig")) == "orig")
+        #expect(LayerInstaller.status(gameDir: game, build: newer).installedVersion == "v2")
+        try LayerInstaller.uninstall(gameDir: game, session: nil)
+        #expect(text(game.appendingPathComponent("d3d12.dll")) == "orig")
+    }
+
+    @Test func dryRunChangesNothing() throws {
+        let game = try makeTempDir("game")
+        let log = try LayerInstaller.install(gameDir: game, exe: "g.exe", build: try fakeBuild(), conf: "x", session: nil, dryRun: true)
+        #expect(log.contains { $0.hasPrefix("install:") })
+        #expect(try FileManager.default.contentsOfDirectory(atPath: game.path).isEmpty)
+    }
+
+    @Test func manifestIsCompatibleWithShellScripts() throws {
+        let game = try makeTempDir("game")
+        try LayerInstaller.install(gameDir: game, exe: "g.exe", build: try fakeBuild(), conf: "x", session: nil)
+        let manifest = try #require(text(game.appendingPathComponent(".d3d12metal-install")))
+        #expect(manifest.contains("d3d12.dll|-\n"))
+        #expect(manifest.contains("x86_64-unix/|-\n"))
+    }
+
+    @Test func updateConfRefusesForeignFile() throws {
+        let game = try makeTempDir("game")
+        try "mine".write(to: game.appendingPathComponent("d3d12metal.conf"), atomically: true, encoding: .utf8)
+        #expect(throws: CoreError.self) { try LayerInstaller.updateConf(gameDir: game, conf: "x") }
+        try ConfBuilder.marker.write(to: game.appendingPathComponent("d3d12metal.conf"), atomically: true, encoding: .utf8)
+        try LayerInstaller.updateConf(gameDir: game, conf: "# managed by d3d12metal\nhud=1\n")
+        #expect(text(game.appendingPathComponent("d3d12metal.conf"))?.contains("hud=1") == true)
+    }
+
+    @Test func incompleteBuildIsRefused() throws {
+        let empty = LayerBuild(dir: try makeTempDir("empty"))
+        #expect(throws: CoreError.self) { try LayerInstaller.install(gameDir: try makeTempDir("g"), exe: "g.exe", build: empty, conf: "", session: nil) }
+    }
+}
+
+// MARK: - Misc
+
+@Suite struct MiscTests {
+    @Test func reportScrubsPersonalData() {
+        let s = Report.scrub("path /Users/alice/code and C:\\users\\alice\\AppData mail a.b@example.com id 76561198000000000 home /Users/alice/x",
+                             user: "alice", home: "/Users/alice")
+        #expect(!s.contains("alice"))
+        #expect(!s.contains("example.com"))
+        #expect(!s.contains("76561198000000000"))
+        #expect(s.contains("~/code"))
+    }
+
+    @Test func vdfEscapesAndComments() {
+        let root = VDF.parse("// c\n\"a\" { \"k\" \"x\\\\y\\\"z\" }")
+        #expect(root["a"]?.string("k") == "x\\y\"z")
+    }
+
+    @Test func customGamesRoundTrip() throws {
+        let paths = Paths(home: try makeTempDir("home"))
+        let folder = try makeTempDir("g")
+        try Data().write(to: folder.appendingPathComponent("Control_DX12.exe"))
+        let lib = GameLibrary(paths: paths, profiles: ProfileDB(profiles: [ProfileDB.builtinGeneric]))
+        let g = try lib.addCustom(name: "My Game!", bottle: "b", folder: folder, exe: "Control_DX12.exe")
+        #expect(g.id == "custom:my-game-")
+        #expect(lib.customGames().count == 1)
+        #expect(lib.find("my game!")?.id == g.id)
+        #expect(throws: CoreError.self) { try lib.addCustom(name: "x", bottle: "b", folder: folder, exe: "missing.exe") }
+        try lib.removeCustom(id: g.id)
+        #expect(lib.customGames().isEmpty)
+    }
+
+    @Test func wineReleaseIsPinned() {
+        #expect(WineRelease.release(version: AppInfo.defaultWineVersion)?.sha256.count == 64)
+    }
+
+    @Test func checksumOfFile() throws {
+        let f = try makeTempDir("sum").appendingPathComponent("a")
+        try Data("abc".utf8).write(to: f)
+        #expect(try RuntimeManager.sha256(of: f) == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+    }
+}

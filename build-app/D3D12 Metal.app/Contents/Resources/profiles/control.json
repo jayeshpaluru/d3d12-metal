@@ -1,0 +1,18 @@
+{
+  "id": "control",
+  "name": "Control Ultimate Edition",
+  "match": { "steamAppId": 870780, "exe": ["Control_DX12.exe"] },
+  "exe": "Control_DX12.exe",
+  "installDir": "Control",
+  "status": "boots",
+  "launch": {
+    "mode": "direct",
+    "env": { "ROSETTA_ADVERTISE_AVX": "1" },
+    "windowTitle": "Control"
+  },
+  "dllOverrides": { "avifil32": "native,builtin" },
+  "notes": [
+    "Start Control_DX12.exe directly (the launcher picks the API itself and is not needed).",
+    "The game folder ships its own avifil32.dll for the intro videos: it is preferred over Wine's."
+  ]
+}

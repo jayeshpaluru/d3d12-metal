@@ -49,16 +49,50 @@ public enum Doctor {
                      fix: r.ok ? nil : "softwareupdate --install-rosetta --agree-to-license")
     }
 
+    /// The x86-64 helper that prints the CPU features Rosetta advertises (Resources/cpuprobe.c, built by tools/build-app.sh).
+    static func cpuProbe() -> URL? {
+        var candidates = ResourceLocator.urls("cpuprobe")
+        if let env = ProcessInfo.processInfo.environment["D3D12METAL_CPUPROBE"] { candidates.insert(URL(fileURLWithPath: env), at: 0) }
+        if let root = SourceTree.find() { candidates.append(root.appendingPathComponent("build-app/cpuprobe")) }
+        if let found = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0.path) }) { return found }
+        // A development checkout: build it once.
+        if let root = SourceTree.find() {
+            let out = root.appendingPathComponent("build-app/cpuprobe")
+            try? FileManager.default.createDirectory(at: out.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let r = Shell.run("/usr/bin/clang", ["-arch", "x86_64", "-O1", "-o", out.path, root.appendingPathComponent("app/Resources/cpuprobe.c").path], timeout: 60)
+            if r.ok { return out }
+        }
+        return nil
+    }
+
+    /// Features Rosetta gives an x86-64 process with the environment variable set or not.
+    static func probe(_ probe: URL, advertise: Bool) -> [String: Bool]? {
+        let r = Shell.run("/usr/bin/arch", ["-x86_64", probe.path], env: ["ROSETTA_ADVERTISE_AVX": advertise ? "1" : "0"], timeout: 20)
+        guard r.ok else { return nil }
+        var out: [String: Bool] = [:]
+        for kv in r.stdout.split(whereSeparator: { $0 == " " || $0 == "\n" }) {
+            let p = kv.split(separator: "=")
+            if p.count == 2 { out[String(p[0])] = p[1] == "1" }
+        }
+        return out.isEmpty ? nil : out
+    }
+
     static func avx() -> Check {
-        // Rosetta only advertises AVX/AVX2/F16C to x86 programs when asked (modern games require AVX2). Support arrived
-        // with macOS 15; the tools set ROSETTA_ADVERTISE_AVX=1 for every Wine process they start.
-        let major = ProcessInfo.processInfo.operatingSystemVersion.majorVersion
-        if major >= 15 {
+        // Rosetta hides AVX/AVX2/FMA/BMI2/F16C from x86 programs unless ROSETTA_ADVERTISE_AVX=1 (modern games need AVX2).
+        guard let helper = cpuProbe(), let on = probe(helper, advertise: true) else {
+            return Check(id: "avx", title: "AVX2 through Rosetta", level: .info,
+                         detail: "could not run the CPU probe; \(AppInfo.name) sets ROSETTA_ADVERTISE_AVX=1 for Wine and the games", fix: nil)
+        }
+        let off = probe(helper, advertise: false) ?? [:]
+        let need = ["avx", "avx2", "fma", "bmi2", "f16c"]
+        if need.allSatisfy({ on[$0] == true }) {
+            let always = need.allSatisfy { off[$0] == true }
             return Check(id: "avx", title: "AVX2 through Rosetta", level: .ok,
-                         detail: "supported; \(AppInfo.name) sets ROSETTA_ADVERTISE_AVX=1 for Wine and the games", fix: nil)
+                         detail: always ? "always advertised" : "advertised with ROSETTA_ADVERTISE_AVX=1, which \(AppInfo.name) sets for Wine and the games", fix: nil)
         }
         return Check(id: "avx", title: "AVX2 through Rosetta", level: .warning,
-                     detail: "Rosetta does not advertise AVX2 before macOS 15; games that require it will not start", fix: "Update macOS")
+                     detail: "Rosetta does not advertise \(need.filter { on[$0] != true }.joined(separator: ", ")) even with ROSETTA_ADVERTISE_AVX=1; games that require AVX2 will not start",
+                     fix: "Update macOS")
     }
 
     static func gpu() -> [Check] {

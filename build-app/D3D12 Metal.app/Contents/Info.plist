@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key><string>D3D12 Metal</string>
+    <key>CFBundleDisplayName</key><string>D3D12 Metal</string>
+    <key>CFBundleIdentifier</key><string>org.d3d12metal.app</string>
+    <key>CFBundleExecutable</key><string>D3D12MetalApp</string>
+    <key>CFBundleIconFile</key><string>AppIcon</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleShortVersionString</key><string>0.9.0</string>
+    <key>CFBundleVersion</key><string>0.9.0</string>
+    <key>LSMinimumSystemVersion</key><string>14.0</string>
+    <key>LSApplicationCategoryType</key><string>public.app-category.games</string>
+    <key>NSHighResolutionCapable</key><true/>
+    <key>NSHumanReadableCopyright</key><string>LGPL-2.1-or-later</string>
+</dict>
+</plist>

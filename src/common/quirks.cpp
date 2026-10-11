@@ -16,13 +16,11 @@ namespace d3d12m {
 
 namespace {
 
-// Shaders known to need a workaround.
-const QuirkEntry kBuiltinQuirks[] = {
-    // Marvel's Spider-Man 2: a compute shader whose results are read by the next dispatch without a barrier (vkd3d-proton
-    // applies VKD3D_SHADER_QUIRK_FORCE_COMPUTE_BARRIER to it). [unverified here: the hash is vkd3d's; confirm with a
-    // trace of the game that a shader of this hash is created]
-    {0x324071d329f05ccc, "Spider-Man2", kQuirkForceComputeBarrier},
-};
+// Built-in shader workarounds. Empty on purpose: game-specific quirks come from the game's profile (profiles/*.json), which
+// the app and CLI write into d3d12metal.conf as quirk_force_compute_barrier=<hashes>. The table stays as the mechanism
+// for hashes that apply to every game of an executable name.
+const QuirkEntry *const kBuiltinQuirks = nullptr;
+constexpr size_t kBuiltinQuirkCount = 0;
 
 bool equal_nocase(const std::string &a, const char *b)
 {
@@ -113,7 +111,7 @@ uint32_t lookup_quirks(const QuirkEntry *table, size_t count, const std::string 
 uint32_t quirks_for_shader(uint64_t hash)
 {
     const Configured &c = configured();
-    uint32_t quirks = lookup_quirks(kBuiltinQuirks, sizeof(kBuiltinQuirks) / sizeof(kBuiltinQuirks[0]), c.exe, hash, nullptr);
+    uint32_t quirks = lookup_quirks(kBuiltinQuirks, kBuiltinQuirkCount, c.exe, hash, nullptr);
     if (c.force_compute_barrier.count(hash))
         quirks |= kQuirkForceComputeBarrier;
     return quirks;
@@ -128,7 +126,7 @@ D3D12M_EXPORT uint64_t d3d12m_shader_hash(const void *code, size_t size)
 // The quirks of `hash` in an executable named `exe`: the built-in table and the hash list `force_compute_barrier`.
 D3D12M_EXPORT uint32_t d3d12m_lookup_quirks(const char *exe, uint64_t hash, const char *force_compute_barrier)
 {
-    return lookup_quirks(kBuiltinQuirks, sizeof(kBuiltinQuirks) / sizeof(kBuiltinQuirks[0]), exe, hash, force_compute_barrier);
+    return lookup_quirks(kBuiltinQuirks, kBuiltinQuirkCount, exe, hash, force_compute_barrier);
 }
 
 bool shader_hashes_logged()

@@ -114,6 +114,11 @@ if [ "${SPOOF_GPU:-}" = amd ]; then
     run wine_cmd reg add "$pci" /v Driver /t REG_SZ /d '{4D36E968-E325-11CE-BFC1-08002BE10318}\0000' /f >/dev/null
 fi
 
+# Game-specific quirks come from profiles/*.json (the d3d12metal CLI writes them); this dev script knows Spider-Man 2's.
+if [ "${GAME:-}" = sm2 ] && [ "$dry_run" = 0 ] && ! grep -q '^quirk_force_compute_barrier=' "$conf"; then
+    echo 'quirk_force_compute_barrier=0x324071d329f05ccc' >> "$conf"
+fi
+
 if [ "$dry_run" = 0 ]; then
     cp "$manifest_tmp" "$manifest"
 else

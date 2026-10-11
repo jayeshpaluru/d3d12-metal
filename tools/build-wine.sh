@@ -46,5 +46,12 @@ if [ -f "$root/build-dxilconv/x86_64/libdxilconv.dylib" ]; then
 else
     echo "note: build-dxilconv/x86_64/libdxilconv.dylib is missing: DXBC shaders will be refused (tools/build-dxilconv.sh)" >&2
 fi
+# What the app and CLI show as the layer version, and the Steam web helper shim they install into bottles.
+{
+    rev="$(git -C "$root" rev-parse --short=8 HEAD 2>/dev/null || echo unknown)"
+    [ -n "$(git -C "$root" status --porcelain --untracked-files=no 2>/dev/null)" ] && rev="$rev-dirty"
+    echo "$rev"
+} > "$out/layer-version.txt"
+x86_64-w64-mingw32-gcc -O2 -municode -mwindows -o "$out/steamwebhelper-shim.exe" "$root/tools/steamwebhelper-shim.c"
 echo "built $out:"
 ls -R "$out"
