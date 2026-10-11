@@ -44,6 +44,9 @@ final class AppModel: ObservableObject {
     @Published var loading = false
     private var timer: Timer?
     private var initialGame: String?
+    private var refreshing = false
+    private var refreshAgain = false
+    private var refreshAgainFull = false
 
     init(ws: Workspace = Workspace()) {
         self.ws = ws
@@ -53,7 +56,7 @@ final class AppModel: ObservableObject {
         if AlloyEnv.get("UI_SETUP") == "0" { showSetup = false }
         if AlloyEnv.get("UI_SETUP") == "1" { showSetup = true }
         initialGame = AlloyEnv.get("UI_GAME")
-        refresh()
+        refresh(full: true)
         timer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.pollRunning() }
         }
@@ -64,38 +67,61 @@ final class AppModel: ObservableObject {
 
     // MARK: Refreshing
 
-    func refresh() {
+    /// Rescans the library, bottles and Steam state. `full` also re-runs the health checks (slow: they start helper programs), which
+    /// only the setup and health views need. Overlapping calls are coalesced: one runs, and at most one more follows it.
+    func refresh(full: Bool = false) {
+        if refreshing {
+            refreshAgain = true
+            refreshAgainFull = refreshAgainFull || full
+            return
+        }
+        refreshing = true
         loading = true
         let ws = self.ws
         Task.detached {
+            // Everything is computed into local values off the main actor; only the assignments happen on it.
             ws.reloadProfiles()
-            let list = ws.library.allGames().map { g in
-                GameState(game: g, profile: ws.library.profile(for: g), layer: ws.layerStatus(for: g), running: ws.isRunning(g))
+            let library = ws.library
+            let list = ws.allGames().map { g in
+                GameState(game: g, profile: library.profile(for: g), layer: ws.layerStatus(for: g), running: false)
             }
+            let running = ws.runningGameIDs(list.map(\.game))
             let bottles = ws.bottles.list()
             let steam = ws.steamRunning(bottleName: ws.config.defaultBottle)
+            let checks = full ? Doctor.runAll(ws) : nil
             await MainActor.run {
-                self.games = list
+                self.games = list.map { var s = $0; s.running = running.contains(s.id); return s }
                 self.bottles = bottles
                 self.steamRunning = steam
+                if let checks { self.checks = checks }
                 self.loading = false
                 if let g = self.initialGame, list.contains(where: { $0.id == g }) { self.path = [g]; self.initialGame = nil }
                 if self.selectedGameID == nil || !list.contains(where: { $0.id == self.selectedGameID }) { self.selectedGameID = list.first?.id }
+                self.refreshing = false
+                if self.refreshAgain {
+                    let again = self.refreshAgainFull
+                    self.refreshAgain = false
+                    self.refreshAgainFull = false
+                    self.refresh(full: again)
+                }
             }
-            let checks = Doctor.runAll(ws)
-            await MainActor.run { self.checks = checks }
         }
     }
 
+    /// Updates the running flags from one process listing, by game id (the list may have changed while this ran).
     func pollRunning() {
+        guard !refreshing else { return }
         let ws = self.ws
-        let current = games
+        let current = games.map(\.game)
         Task.detached {
-            let running = current.map { ws.isRunning($0.game) }
+            let running = ws.runningGameIDs(current)
             let steam = ws.steamRunning(bottleName: ws.config.defaultBottle)
             await MainActor.run {
                 self.steamRunning = steam
-                for (i, r) in running.enumerated() where i < self.games.count && self.games[i].running != r { self.games[i].running = r }
+                for i in self.games.indices {
+                    let r = running.contains(self.games[i].id)
+                    if self.games[i].running != r { self.games[i].running = r }
+                }
             }
         }
     }
@@ -112,7 +138,7 @@ final class AppModel: ObservableObject {
     // MARK: Running work
 
     /// Runs `work` off the main thread, showing `title` while it runs and any error afterwards.
-    func perform(_ title: String, refreshAfter: Bool = true, work: @escaping @Sendable (@escaping @Sendable (String, Double?) -> Void) async throws -> String?) {
+    func perform(_ title: String, refreshAfter: Bool = true, fullRefresh: Bool = false, work: @escaping @Sendable (@escaping @Sendable (String, Double?) -> Void) async throws -> String?) {
         guard busy == nil else { return }
         busy = title
         progress = nil
@@ -127,7 +153,7 @@ final class AppModel: ObservableObject {
             }
             self.busy = nil
             self.progress = nil
-            if refreshAfter { self.refresh() }
+            if refreshAfter { self.refresh(full: fullRefresh) }
         }
     }
 
@@ -186,7 +212,7 @@ final class AppModel: ObservableObject {
 
     func installWine() {
         let ws = self.ws
-        perform("Downloading Wine") { report in
+        perform("Downloading Wine", fullRefresh: true) { report in
             guard let rel = WineRelease.release(version: ws.config.wineVersion) else { throw CoreError("No pinned Wine release \(ws.config.wineVersion)") }
             _ = try await RuntimeManager.install(rel, paths: ws.paths) { p, stage in report(stage, p < 1 ? p : nil) }
             return nil
@@ -195,7 +221,7 @@ final class AppModel: ObservableObject {
 
     func createBottle(_ name: String) {
         let ws = self.ws
-        perform("Creating bottle \(name)") { _ in
+        perform("Creating bottle \(name)", fullRefresh: true) { _ in
             let rt = try ws.runtime()
             try ws.bottles.create(name: name, runtime: rt)
             return nil
@@ -212,7 +238,7 @@ final class AppModel: ObservableObject {
 
     func installSteam() {
         let ws = self.ws, name = bottleName
-        perform("Installing Steam") { report in
+        perform("Installing Steam", fullRefresh: true) { report in
             let steam = try ws.steam(bottleName: name)
             try await steam.install { p, stage in report(stage, p < 1 ? p : nil) }
             return nil
@@ -221,7 +247,7 @@ final class AppModel: ObservableObject {
 
     func startSteam() {
         let ws = self.ws, name = bottleName
-        perform("Starting Steam") { _ in
+        perform("Starting Steam", fullRefresh: true) { _ in
             let steam = try ws.steam(bottleName: name)
             try steam.start(shim: ws.layerBuild?.webhelperShim, logFile: ws.paths.logsDir.appendingPathComponent("steam-\(Paths.safeName(name)).log"))
             return "Steam is starting. Its window opens in about 30 seconds; sign in there."
@@ -230,7 +256,7 @@ final class AppModel: ObservableObject {
 
     func stopSteam(force: Bool = false) {
         let ws = self.ws, name = bottleName
-        perform("Stopping Steam") { _ in
+        perform("Stopping Steam", fullRefresh: true) { _ in
             let steam = try ws.steam(bottleName: name)
             if force { steam.forceStop() } else { steam.stop() }
             return nil
@@ -239,7 +265,7 @@ final class AppModel: ObservableObject {
 
     func restartSteam() {
         let ws = self.ws, name = bottleName
-        perform("Restarting Steam") { _ in
+        perform("Restarting Steam", fullRefresh: true) { _ in
             let steam = try ws.steam(bottleName: name)
             steam.stop()
             for _ in 0..<20 where steam.isRunning { try await Task.sleep(nanoseconds: 1_000_000_000) }

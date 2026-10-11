@@ -4,22 +4,30 @@ import Foundation
 /// The entry point of Core: configuration, profiles, runtime, bottles and the operations on games.
 public final class Workspace: @unchecked Sendable {
     public let paths: Paths
-    public private(set) var config: Config
-    public private(set) var profiles: ProfileDB
-    public private(set) var profileProblems: [String] = []
+    // The app refreshes from background tasks while views read these: every access goes through the lock.
+    private let lock = NSLock()
+    private var _config: Config
+    private var _profiles: ProfileDB
+    private var _profileProblems: [String] = []
+    private var _gameCache: [String: (signature: String, games: [Game])] = [:]
+
+    public var config: Config { lock.lock(); defer { lock.unlock() }; return _config }
+    public var profiles: ProfileDB { lock.lock(); defer { lock.unlock() }; return _profiles }
+    public var profileProblems: [String] { lock.lock(); defer { lock.unlock() }; return _profileProblems }
 
     public init(paths: Paths = .default) {
         self.paths = paths
-        self.config = Config.load(paths)
-        self.profiles = ProfileDB(profiles: [ProfileDB.builtinGeneric])
+        self._config = Config.load(paths)
+        self._profiles = ProfileDB(profiles: [ProfileDB.builtinGeneric])
         reloadProfiles()
     }
 
     // MARK: Configuration
 
     public func updateConfig(_ change: (inout Config) -> Void) throws {
-        change(&config)
-        try config.save(paths)
+        lock.lock(); defer { lock.unlock() }
+        change(&_config)
+        try _config.save(paths)
     }
 
     /// Bundled profiles first, then the source tree's, then the user's (which override by id).
@@ -34,8 +42,31 @@ public final class Workspace: @unchecked Sendable {
 
     public func reloadProfiles() {
         var problems: [String] = []
-        profiles = ProfileDB.load(directories: Self.profileDirectories(paths: paths), problems: &problems)
-        profileProblems = problems
+        let db = ProfileDB.load(directories: Self.profileDirectories(paths: paths), problems: &problems)   // off the lock: it reads files
+        lock.lock(); defer { lock.unlock() }
+        _profiles = db
+        _profileProblems = problems
+    }
+
+    /// Every game of every bottle plus the hand-added ones. The scan of a bottle's Steam library (reading the executables'
+    /// import tables) is repeated only when its manifests or the profiles changed, or with `forceRescan`.
+    public func allGames(forceRescan: Bool = false) -> [Game] {
+        let lib = library
+        let profileSignature = lib.profiles.profiles.map { "\($0.id)/\($0.exe ?? "")/\($0.match.steamAppId ?? 0)" }.joined(separator: ",")
+        var games: [Game] = []
+        for b in bottles.list() {
+            let signature = SteamLibrary.signature(prefix: b.prefix) + "|" + profileSignature
+            lock.lock(); let cached = _gameCache[b.name]; lock.unlock()
+            if !forceRescan, let cached, cached.signature == signature {
+                games += cached.games
+            } else {
+                let found = lib.steamGames(in: b)
+                lock.lock(); _gameCache[b.name] = (signature, found); lock.unlock()
+                games += found
+            }
+        }
+        for g in lib.customGames() where !games.contains(where: { $0.id == g.id }) { games.append(g) }
+        return games
     }
 
     public var library: GameLibrary { GameLibrary(paths: paths, profiles: profiles) }
@@ -191,14 +222,34 @@ public final class Workspace: @unchecked Sendable {
         bottles.bottle(named: bottleName).map { SteamClient.isRunning(in: $0) } ?? false
     }
 
-    /// The game's processes in its own bottle: a process of the same exe in another bottle is not this game.
-    func gamePIDs(_ game: Game) -> [Int32] {
-        var pids = Shell.pids(named: game.exe)
-        if pids.isEmpty {
-            let escaped = NSRegularExpression.escapedPattern(for: game.exe)
-            pids = Shell.pids(matching: "[\\\\\\\\/]\(escaped)( |$)")
+    /// (pid, command line) of every process: one `ps` for any number of games.
+    static func processTable() -> [(pid: Int32, command: String)] {
+        Shell.run("/bin/ps", ["-axww", "-o", "pid=,command="], timeout: 10).stdout.split(separator: "\n").compactMap { line in
+            let s = line.drop { $0 == " " }
+            guard let space = s.firstIndex(of: " "), let pid = Int32(s[..<space]) else { return nil }
+            return (pid, String(s[s.index(after: space)...]))
         }
-        return ProcessScan.filter(pids, in: bottles.bottle(named: game.bottle))
+    }
+
+    /// Wine names a process after its exe ("Spider-Man2.exe -nolauncher"), or shows a Windows path ("C:\\...\\game.exe args").
+    static func commandRuns(_ command: String, exe: String) -> Bool {
+        let c = command.lowercased(), e = exe.lowercased()
+        if c == e || c.hasPrefix(e + " ") { return true }
+        return ["\\", "/"].contains { c.hasSuffix($0 + e) || c.contains($0 + e + " ") }
+    }
+
+    /// The game's processes in its own bottle: a process of the same exe in another bottle is not this game.
+    func gamePIDs(_ game: Game, table: [(pid: Int32, command: String)]? = nil) -> [Int32] {
+        let rows = table ?? Self.processTable()
+        let me = getpid()
+        let candidates = rows.filter { $0.pid != me && Self.commandRuns($0.command, exe: game.exe) }.map(\.pid)
+        return ProcessScan.filter(candidates, in: bottles.bottle(named: game.bottle))
+    }
+
+    /// The ids of the games that run, from a single process listing (the lsof check is only made for processes that look like a game).
+    public func runningGameIDs(_ games: [Game]) -> Set<String> {
+        let table = Self.processTable()
+        return Set(games.filter { !gamePIDs($0, table: table).isEmpty }.map(\.id))
     }
 
     /// Stops just the game (never wineserver, so Steam keeps running).

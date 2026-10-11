@@ -139,8 +139,8 @@ public struct GameLibrary: Sendable {
         return games
     }
 
-    public func find(_ query: String) -> Game? {
-        let games = allGames()
+    public func find(_ query: String, in games: [Game]? = nil) -> Game? {
+        let games = games ?? allGames()
         let q = query.lowercased()
         if let g = games.first(where: { $0.id.lowercased() == q }) { return g }
         if let appid = Int(q), let g = games.first(where: { $0.steamAppId == appid }) { return g }

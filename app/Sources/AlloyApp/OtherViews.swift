@@ -77,14 +77,14 @@ struct SetupView: View {
                 HStack { if let p = model.progress { ProgressView(value: p) } else { ProgressView().controlSize(.small) }; Text(busy).font(.callout) }
             }
             HStack {
-                Button("Check Again") { model.refresh() }
+                Button("Check Again") { model.refresh(full: true) }
                 Spacer()
                 Button("Done") { model.finishSetup(); dismiss() }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
             }
         }
         .padding(28)
         .frame(width: 640)
-        .onAppear { model.refresh() }
+        .onAppear { model.refresh(full: true) }
     }
 }
 
@@ -201,7 +201,7 @@ struct HealthView: View {
         .navigationTitle("Health")
         .toolbar {
             ToolbarItemGroup {
-                Button { model.refresh() } label: { Label("Check Again", systemImage: "arrow.clockwise") }
+                Button { model.refresh(full: true) } label: { Label("Check Again", systemImage: "arrow.clockwise") }
                 Button { model.report(for: nil) } label: { Label("Report a Problem...", systemImage: "ladybug") }
                 Button { model.showSetup = true } label: { Label("Setup Assistant", systemImage: "wand.and.stars") }
             }

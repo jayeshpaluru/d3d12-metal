@@ -518,6 +518,61 @@ func requirementProfile(optional: Bool = false, run: String = "setup.bat", extra
     }
 }
 
+// MARK: - Workspace: concurrency, caching, one process listing
+
+@Suite struct WorkspaceTests {
+    @Test func concurrentRefreshesAndReadsDoNotRace() throws {
+        let fx = try makeFixture()
+        let ws = fx.ws
+        // What the app does from background tasks while views read: reload profiles, change the config, list games, read settings.
+        DispatchQueue.concurrentPerform(iterations: 120) { i in
+            switch i % 4 {
+            case 0: ws.reloadProfiles()
+            case 1: try? ws.updateConfig { $0.shaderCacheMaxMB = 512 + i }
+            case 2: _ = ws.allGames()
+            default: _ = (ws.profiles.profiles.count, ws.config.defaultBottle, ws.profileProblems.count)
+            }
+        }
+        #expect(ws.profiles.profiles.contains { $0.id == Profile.genericID })
+        #expect(ws.config.shaderCacheMaxMB >= 512)
+    }
+
+    func addSteamGame(_ fx: Fixture, appid: Int, exe: String) throws -> URL {
+        let steamapps = SteamLibrary.steamDirectory(prefix: fx.bottle.prefix).appendingPathComponent("steamapps")
+        let dir = steamapps.appendingPathComponent("common/G\(appid)")
+        try writeExe(dir, exe, imports: ["d3d12.dll"])
+        let manifest = steamapps.appendingPathComponent("appmanifest_\(appid).acf")
+        try "\"AppState\"\n{\n\"appid\" \"\(appid)\"\n\"name\" \"G\(appid)\"\n\"StateFlags\" \"4\"\n\"installdir\" \"G\(appid)\"\n}\n".write(to: manifest, atomically: true, encoding: .utf8)
+        return dir
+    }
+
+    @Test func libraryScanIsCachedUntilTheManifestsChange() throws {
+        let fx = try makeFixture()
+        let dir = try addSteamGame(fx, appid: 501, exe: "a.exe")
+        #expect(fx.ws.allGames().map(\.id).sorted() == ["custom:fixture-game", "steam:501"])
+        // The exe disappears without any manifest change: the cached scan is reused...
+        try FileManager.default.removeItem(at: dir.appendingPathComponent("a.exe"))
+        #expect(fx.ws.allGames().contains { $0.id == "steam:501" })
+        // ...until a rescan is forced, or a manifest changes (a new game appears).
+        #expect(!fx.ws.allGames(forceRescan: true).contains { $0.id == "steam:501" })
+        _ = try addSteamGame(fx, appid: 502, exe: "b.exe")
+        #expect(fx.ws.allGames().contains { $0.id == "steam:502" })
+    }
+
+    @Test func runningGamesComeFromOneListing() throws {
+        let fx = try makeFixture(exe: "fixture-very-long-game-name.exe")
+        let other = try fx.ws.library.addCustom(name: "Other", bottle: "Fx", folder: fx.gameDir, exe: "fixture-very-long-game-name.exe")
+        let standIn = try RunningTests().startStandIn(exe: "fixture-very-long-game-name.exe", bottle: fx.bottle)
+        defer { standIn.cleanup() }
+        let running = fx.ws.runningGameIDs([fx.game, other])
+        #expect(running.contains(fx.game.id))      // matched by id, not by position
+        #expect(fx.ws.runningGameIDs([]).isEmpty)
+        #expect(Workspace.commandRuns("C:\\Program Files\\G\\Game.exe -x", exe: "game.exe"))
+        #expect(Workspace.commandRuns("Game.exe", exe: "game.exe"))
+        #expect(!Workspace.commandRuns("/bin/sh notgame.exe 1", exe: "game.exe"))
+    }
+}
+
 // MARK: - Command line
 
 @Suite struct ArgsTests {
@@ -593,7 +648,7 @@ func requirementProfile(optional: Bool = false, run: String = "setup.bat", extra
         chmod(script.path, 0o755)
         let p = try Shell.spawn("/bin/sh", [script.path, server.appendingPathComponent("tmpmap-test").path])
         Thread.sleep(forTimeInterval: 0.6)
-        return (p, { p.terminate(); _ = Shell.run("/usr/bin/pkill", ["-f", "sleep 40"]); try? FileManager.default.removeItem(at: server) })
+        return (p, { _ = Shell.run("/usr/bin/pkill", ["-P", String(p.processIdentifier)]); p.terminate(); try? FileManager.default.removeItem(at: server) })
     }
 
     @Test func runningIsPerBottleAndWorksForLongExeNames() throws {
