@@ -20,8 +20,8 @@ WINE_ROOT="${WINE_ROOT:-/Users/jsp/code/deps/wine/Wine Devel.app/Contents/Resour
 # environment override the profile (stand-in games).
 GAME="${GAME:-sm1}"
 case "$GAME" in
-    sm1) profile_exe="Spider-Man.exe";  profile_appid=1817070; profile_dir="Marvel's Spider-Man Remastered"; profile_args="-nolauncher"; profile_window="Spider" ;;
-    sm2) profile_exe="Spider-Man2.exe"; profile_appid=2651280; profile_dir="Marvel's Spider-Man 2";         profile_args="-nolauncher"; profile_window="Spider" ;;
+    sm1) profile_exe="Spider-Man.exe";  profile_appid=1817070; profile_dir="Marvel's Spider-Man Remastered"; profile_args="-nolauncher"; profile_window="Spider"; profile_spoof=apple; profile_conf="" ;;
+    sm2) profile_exe="Spider-Man2.exe"; profile_appid=2651280; profile_dir="Marvel's Spider-Man 2";         profile_args="-nolauncher"; profile_window="Spider"; profile_spoof=apple; profile_conf="feature_level=12_1" ;;
     *) echo "unknown GAME=$GAME (sm1 or sm2)" >&2; exit 2 ;;
 esac
 GAME_EXE="${GAME_EXE:-$profile_exe}"
@@ -29,6 +29,10 @@ GAME_APPID="${GAME_APPID:-$profile_appid}"
 GAME_INSTALL_DIR="${GAME_INSTALL_DIR:-$profile_dir}"
 GAME_ARGS="${GAME_ARGS-$profile_args}"
 GAME_WINDOW="${GAME_WINDOW:-$profile_window}"
+# The GPU identity install-game.sh gives the adapter (SPOOF_GPU overrides it): nvidia, amd or apple (no spoof).
+GAME_SPOOF_GPU="${GAME_SPOOF_GPU:-$profile_spoof}"
+# d3d12metal.conf lines install-game.sh keeps in the game's conf (space-separated key=value).
+GAME_CONF="${GAME_CONF-$profile_conf}"
 # Screen-state references of the classifier (tools/game/state.sh), made locally per game.
 game_ref="$game_root/build-wine/ref/$GAME"
 game_out="${GAME_OUT:-$game_root/build-wine/out}"

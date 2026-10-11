@@ -3,8 +3,13 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <initializer_list>
 #include <iterator>
+#include <string>
+#include <utility>
 
+#include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cwchar>
 
@@ -30,6 +35,18 @@ UINT config_hex(const char *key, UINT fallback)
     return value && *value ? static_cast<UINT>(std::strtoul(value, nullptr, 16)) : fallback;
 }
 
+// The user-mode driver version CheckInterfaceSupport reports: driver_version=<a.b.c.d> in d3d12metal.conf (the
+// DriverVersion string of a Windows driver, which games compare with the one in the registry), else 1.
+LONGLONG config_driver_version()
+{
+    const char *value = config_get("DRIVER_VERSION");
+    unsigned a = 0, b = 0, c = 0, d = 0;
+    if (!value || std::sscanf(value, "%u.%u.%u.%u", &a, &b, &c, &d) != 4)
+        return 1;
+    return static_cast<LONGLONG>((static_cast<uint64_t>(a & 0xffff) << 48) | (static_cast<uint64_t>(b & 0xffff) << 32)
+                                 | (static_cast<uint64_t>(c & 0xffff) << 16) | (d & 0xffff));
+}
+
 #ifdef _WIN32
 // The PCI identity Wine registered for the display adapter (HKLM\\System\\CurrentControlSet\\Enum\\PCI\\VEN_..&DEV_..),
 // which is what the adapter's DeviceID string of EnumDisplayDevices names. Games look the driver up through that key
@@ -41,6 +58,64 @@ bool query_pci_ids(UINT &vendor, UINT &device, UINT &subsystem, UINT &revision)
     if (!EnumDisplayDevicesW(nullptr, 0, &adapter, 0))
         return false;
     return swscanf(adapter.DeviceID, L"PCI\\VEN_%x&DEV_%x&SUBSYS_%x&REV_%x", &vendor, &device, &subsystem, &revision) == 4;
+}
+
+// Creates (volatile) key `path` under `parent` and sets string values {name, value}; a REG_MULTI_SZ for `multi`.
+void set_registry_values(HKEY parent, const wchar_t *path, std::initializer_list<std::pair<const wchar_t *, std::wstring>> values,
+                         const wchar_t *multi = nullptr)
+{
+    HKEY key;
+    if (RegCreateKeyExW(parent, path, 0, nullptr, REG_OPTION_VOLATILE, KEY_ALL_ACCESS, nullptr, &key, nullptr) != ERROR_SUCCESS) {
+        D3D12M_LOG("spoofed adapter: cannot create HKLM\\%ls", path);
+        return;
+    }
+    for (const auto &[name, value] : values) {
+        std::wstring data = value;
+        DWORD type = REG_SZ;
+        if (multi && std::wcscmp(name, multi) == 0) {
+            data.push_back(L'\0');  // REG_MULTI_SZ ends with an empty string
+            type = REG_MULTI_SZ;
+        }
+        RegSetValueExW(key, name, 0, type, reinterpret_cast<const BYTE *>(data.c_str()), static_cast<DWORD>((data.size() + 1) * sizeof(wchar_t)));
+    }
+    RegCloseKey(key);
+}
+
+// A spoofed identity (vendor_id / device_id other than the PCI ids Wine registered) also needs the driver keys a
+// game finds through SetupAPI: the PCI device (Enum\PCI\VEN_x&DEV_y&...\00000000) and its driver key in the display
+// class with DriverVersion (driver_version in the conf). Wine prunes display devices it did not detect itself when
+// it refreshes them, so the keys are written by the process, volatile, when its first adapter is made (before the
+// game looks: Spider-Man 2 enumerates PCI devices after its first CreateDXGIFactory).
+void register_spoofed_driver(const wchar_t *name, UINT vendor, UINT device)
+{
+    static std::atomic<bool> done{false};
+    if (done.exchange(true))
+        return;
+    const char *version = config_get("DRIVER_VERSION");
+    wchar_t ids[64];
+    std::swprintf(ids, std::size(ids), L"VEN_%04X&DEV_%04X&SUBSYS_00000000&REV_00", vendor, device);
+    const std::wstring hwid = std::wstring(L"PCI\\") + ids;
+    const wchar_t *provider = vendor == 0x10de ? L"NVIDIA" : vendor == 0x1002 ? L"Advanced Micro Devices, Inc."
+                              : vendor == 0x8086 ? L"Intel Corporation" : L"d3d12-metal";
+    constexpr const wchar_t *kDisplayClass = L"{4D36E968-E325-11CE-BFC1-08002BE10318}";
+    constexpr const wchar_t *kDriverIndex = L"0100";
+    std::wstring version_w;
+    for (const char *c = version ? version : "1.0.0.0"; *c; ++c)
+        version_w.push_back(static_cast<wchar_t>(*c));
+    set_registry_values(HKEY_LOCAL_MACHINE, (std::wstring(L"System\\CurrentControlSet\\Enum\\") + hwid + L"\\00000000").c_str(),
+                        {{L"Class", L"Display"},
+                         {L"ClassGUID", kDisplayClass},
+                         {L"DeviceDesc", name},
+                         {L"Mfg", provider},
+                         {L"Driver", std::wstring(kDisplayClass) + L"\\" + kDriverIndex},
+                         {L"HardwareID", hwid}},
+                        L"HardwareID");
+    set_registry_values(HKEY_LOCAL_MACHINE,
+                        (std::wstring(L"System\\CurrentControlSet\\Control\\Class\\") + kDisplayClass + L"\\" + kDriverIndex).c_str(),
+                        {{L"DriverDesc", name},
+                         {L"DriverVersion", version_w},
+                         {L"ProviderName", provider},
+                         {L"MatchingDeviceId", hwid}});
 }
 #endif
 
@@ -84,6 +159,10 @@ public:
         }
         desc_.VendorId = config_hex("VENDOR_ID", vendor);
         desc_.DeviceId = config_hex("DEVICE_ID", device);
+#ifdef _WIN32
+        if (desc_.VendorId != vendor || desc_.DeviceId != device)
+            register_spoofed_driver(desc_.Description, desc_.VendorId, desc_.DeviceId);
+#endif
         desc_.SubSysId = subsystem;
         desc_.Revision = revision;
         desc_.DedicatedVideoMemory = caps.recommended_max_working_set_size;
@@ -136,7 +215,7 @@ public:
     {
         D3D12M_TRACED_BEGIN
         if (umd_version)
-            umd_version->QuadPart = 1;
+            umd_version->QuadPart = config_driver_version();
         return S_OK;
         D3D12M_TRACED_END(umd_version)
     }

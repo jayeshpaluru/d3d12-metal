@@ -99,18 +99,33 @@ EOF
     record "d3d12metal.conf" "-"
 fi
 
-# SPOOF_GPU=amd: the adapter presents itself as an AMD RX 6800 (1002:73BF), for games that whitelist GPUs by name or vendor
-# (a test switch, off by default): lines in the conf and the PCI enum key Wine would have registered for that id.
-if [ "${SPOOF_GPU:-}" = amd ]; then
-    echo "spoof:        adapter AMD Radeon RX 6800 (1002:73BF)"
-    if [ "$dry_run" = 0 ] && ! grep -q '^adapter_name=' "$conf"; then
-        printf 'adapter_name=AMD Radeon RX 6800\nvendor_id=1002\ndevice_id=73bf\n' >> "$conf"
+# SPOOF_GPU=nvidia|amd|apple (default: the profile's, GAME_SPOOF_GPU): the identity the adapter presents, for games that
+# pick code paths or whitelist GPUs by vendor. Each install rewrites the identity lines of the conf (adapter_name,
+# vendor_id, device_id, driver_version); apple leaves them out (the adapter Wine registered). The layer itself registers
+# the driver keys a game looks up for a spoofed identity (volatile, when the game makes its first adapter: Wine prunes
+# display devices it did not detect, so keys written here would not last).
+# The profile's own conf lines (GAME_CONF: feature_level=12_1 for sm2, whose startup check wants rasterizer ordered
+# views) are rewritten the same way.
+spoof="${SPOOF_GPU:-$GAME_SPOOF_GPU}"
+case "$spoof" in
+    nvidia) identity=("NVIDIA GeForce RTX 3070" 10de 2484 32.0.15.6094) ;;
+    amd) identity=("AMD Radeon RX 6800" 1002 73bf 31.0.24033.1003) ;;
+    apple) identity=() ;;
+    *) echo "unknown SPOOF_GPU=$spoof (nvidia, amd or apple)" >&2; exit 2 ;;
+esac
+if [ "$dry_run" = 0 ] && [ -f "$conf" ]; then
+    grep -v -E '^(adapter_name|vendor_id|device_id|driver_version|feature_level)=' "$conf" > "$conf.new" || true
+    [ -n "$GAME_CONF" ] && printf '%s\n' $GAME_CONF >> "$conf.new"
+    mv "$conf.new" "$conf"
+fi
+[ -n "$GAME_CONF" ] && echo "conf:         $GAME_CONF"
+if [ ${#identity[@]} -gt 0 ]; then
+    echo "spoof:        adapter ${identity[0]} (${identity[1]}:${identity[2]}), driver ${identity[3]}"
+    if [ "$dry_run" = 0 ]; then
+        printf 'adapter_name=%s\nvendor_id=%s\ndevice_id=%s\ndriver_version=%s\n' "${identity[@]}" >> "$conf"
     fi
-    pci='HKLM\System\CurrentControlSet\Enum\PCI\VEN_1002&DEV_73BF&SUBSYS_00000000&REV_00\00000000'
-    run wine_cmd reg add "$pci" /v DeviceDesc /t REG_SZ /d "AMD Radeon RX 6800" /f >/dev/null
-    run wine_cmd reg add "$pci" /v Class /t REG_SZ /d Display /f >/dev/null
-    run wine_cmd reg add "$pci" /v ClassGUID /t REG_SZ /d '{4D36E968-E325-11CE-BFC1-08002BE10318}' /f >/dev/null
-    run wine_cmd reg add "$pci" /v Driver /t REG_SZ /d '{4D36E968-E325-11CE-BFC1-08002BE10318}\0000' /f >/dev/null
+else
+    echo "spoof:        none (the adapter Wine registered)"
 fi
 
 if [ "$dry_run" = 0 ]; then

@@ -14,6 +14,15 @@ int main()
     CHECK_HR(adapter->GetDesc1(&adapter_desc));
     CHECK(adapter_desc.DedicatedVideoMemory > 0);
 
+    // The driver version: 1, or the configured DriverVersion string (a spoofed identity's).
+    LARGE_INTEGER umd = {};
+    CHECK_HR(adapter->CheckInterfaceSupport(__uuidof(IDXGIAdapter), &umd));
+    CHECK(umd.QuadPart == 1);
+    setenv("D3D12METAL_DRIVER_VERSION", "32.0.15.6094", 1);
+    CHECK_HR(adapter->CheckInterfaceSupport(__uuidof(IDXGIAdapter), &umd));
+    CHECK(umd.QuadPart == static_cast<LONGLONG>((32ull << 48) | (15ull << 16) | 6094));
+    unsetenv("D3D12METAL_DRIVER_VERSION");
+
     ComPtr<ID3D12Device> device;
     CHECK_HR(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(device.ReleaseAndGetAddressOf())));
     ComPtr<ID3D12Device2> device2;
