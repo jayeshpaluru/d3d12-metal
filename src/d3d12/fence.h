@@ -42,6 +42,7 @@ private:
     // The backend's shared-memory copy of the completed value (see mtlb_event_create).
     std::atomic<UINT64> *mirror_ = nullptr;
     D3D12_FENCE_FLAGS flags_ = D3D12_FENCE_FLAG_NONE;
+    std::atomic<UINT64> last_seen_{0};  // the timeline marks GetCompletedValue when its answer changes
 };
 
 // Signals application events when fences reach the values they wait for. One

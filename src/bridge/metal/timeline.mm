@@ -13,6 +13,7 @@
 #include <string>
 #include <vector>
 
+#include "bridge/mtlb.h"
 #include "log.h"
 
 namespace mtlb::timeline {
@@ -178,3 +179,14 @@ void present()
 }
 
 } // namespace mtlb::timeline
+
+extern "C" uint64_t mtlb_timeline_enabled(void)
+{
+    return mtlb::timeline::enabled() ? 1 : 0;
+}
+
+extern "C" void mtlb_timeline_mark(const char *name, uint64_t value)
+{
+    if (name)
+        mtlb::timeline::instant(name, value);
+}

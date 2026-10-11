@@ -11,6 +11,7 @@
 
 #include "common/com.h"
 #include "common/log.h"
+#include "common/stats.h"
 #include "common/private_data.h"
 
 namespace d3d12m {
@@ -174,6 +175,7 @@ public:
     HRESULT STDMETHODCALLTYPE WaitForVBlank() override
     {
         D3D12M_TRACED_BEGIN
+        timeline_mark("WaitForVBlank");
         std::this_thread::sleep_for(std::chrono::microseconds(16667));
         return S_OK;
         D3D12M_TRACED_END()

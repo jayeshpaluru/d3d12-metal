@@ -250,6 +250,11 @@ typedef struct mtlb_stats {
 } mtlb_stats;
 MTLB_EXPORT void mtlb_stats_get(mtlb_stats *out);
 
+/* Frame timeline (D3D12METAL_TIMELINE, see metal/timeline.h): nonzero when it is on; a point in time on the calling
+ * thread. `name` must stay valid for the life of the process (a string literal). */
+MTLB_EXPORT uint64_t mtlb_timeline_enabled(void);
+MTLB_EXPORT void mtlb_timeline_mark(const char *name, uint64_t value);
+
 typedef struct mtlb_cache_stats {
     uint64_t hits, misses;     /* lookups: found, not found */
     uint64_t writes;           /* entries stored */

@@ -98,4 +98,16 @@ void stats_frame()
     profile_report(kFramesPerReport);
 }
 
+bool timeline_enabled()
+{
+    static const bool enabled = mtlb_timeline_enabled() != 0;
+    return enabled;
+}
+
+void timeline_mark(const char *name, uint64_t value)
+{
+    if (timeline_enabled())
+        mtlb_timeline_mark(name, value);
+}
+
 } // namespace d3d12m

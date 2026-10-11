@@ -237,6 +237,7 @@ public:
     HRESULT STDMETHODCALLTYPE GetFrameStatistics(DXGI_FRAME_STATISTICS *stats) override
     {
         D3D12M_TRACED_BEGIN
+        timeline_mark("GetFrameStatistics");
         if (!stats)
             return DXGI_ERROR_INVALID_CALL;
         *stats = {};
@@ -532,6 +533,7 @@ private:
     {
         if (flags & DXGI_PRESENT_TEST)
             return S_OK;
+        timeline_mark("Present (sync interval)", sync_interval);
         if (sync_interval > 4)
             return DXGI_ERROR_INVALID_CALL;
         // The bridge call can wait for a drawable: not under the lock.

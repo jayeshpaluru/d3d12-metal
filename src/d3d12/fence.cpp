@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "common/platform.h"
+#include "common/stats.h"
 #include "d3d12/device.h"
 
 namespace d3d12m {
@@ -36,7 +37,10 @@ Fence::~Fence()
 UINT64 Fence::GetCompletedValue()
 {
     D3D12M_TRACE();
-    return mirror_->load(std::memory_order_acquire);
+    const UINT64 value = mirror_->load(std::memory_order_acquire);
+    if (timeline_enabled() && last_seen_.exchange(value, std::memory_order_relaxed) != value)
+        timeline_mark("GetCompletedValue (new value)", value);
+    return value;
 }
 
 UINT64 Fence::refresh()
@@ -54,6 +58,7 @@ UINT64 Fence::refresh()
 HRESULT Fence::SetEventOnCompletion(UINT64 value, HANDLE event)
 {
     D3D12M_TRACED_BEGIN
+    timeline_mark(event ? "SetEventOnCompletion" : "SetEventOnCompletion (block)", value);
     if (!event) {
         const mtlb_result result = mtlb_event_wait_cpu(event_, value, UINT64_MAX);
         if (result == MTLB_OK)
@@ -142,6 +147,7 @@ void FenceWaiter::run()
 HRESULT Fence::Signal(UINT64 value)
 {
     D3D12M_TRACED_BEGIN
+    timeline_mark("Fence::Signal (CPU)", value);
     mtlb_event_signal_cpu(event_, value);
     return S_OK;
     D3D12M_TRACED_END(value)

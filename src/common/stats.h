@@ -57,6 +57,11 @@ struct StatTimer {
     uint64_t start;
 };
 
+// Front-end points in the backend's frame timeline (D3D12METAL_TIMELINE): a bridge call each, only while it is on.
+// `name` must be a string literal.
+bool timeline_enabled();
+void timeline_mark(const char *name, uint64_t value = 0);
+
 // Called by every Present; prints a report when enabled and enough frames have passed.
 void stats_frame();
 
