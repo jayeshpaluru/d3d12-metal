@@ -6,6 +6,7 @@
 // the backend decides how they map onto Metal render passes.
 #pragma once
 
+#include <atomic>
 #include <string>
 #include <vector>
 
@@ -89,6 +90,9 @@ public:
 
     bool closed() const { return closed_; }
     const std::vector<uint8_t> &stream() const { return stream_; }
+    // A queue replays the stream after ExecuteCommandLists returned: Reset waits until every submission is replayed.
+    void begin_submit() { in_flight_.fetch_add(1, std::memory_order_relaxed); }
+    void end_submit() { in_flight_.fetch_sub(1, std::memory_order_release); }
 
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **out) override
     {
@@ -208,6 +212,7 @@ private:
     bool in_pass_ = false;
 
     void reset_state();
+    void wait_replayed();
     // ours<T>(p) that also keeps the object allocated until the list is reset (see ObjectRefs).
     template <typename T, typename P>
     T *hold(P *p)
@@ -241,6 +246,7 @@ private:
 
     D3D12_COMMAND_LIST_TYPE type_;
     bool closed_ = false;
+    std::atomic<uint32_t> in_flight_{0};  // submissions not replayed yet (one per occurrence in ExecuteCommandLists)
     std::vector<uint8_t> stream_;
     ObjectRefs refs_;
 

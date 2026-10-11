@@ -438,6 +438,7 @@ private:
 
     ~SwapChain() override
     {
+        queue_->flush();  // queued presents and signals name the buffers, the swap chain and the fence
         release_buffers();
         if (handle_)
             mtlb_swapchain_destroy(handle_);
@@ -547,16 +548,9 @@ private:
         }
         stats_frame();
         trace_frame();
-        mtlb_result result;
-        {
-            StatTimer timer(Stat::PresentNanos);
-            result = mtlb_queue_present(queue_->handle(), handle_, buffer->texture(), sync_interval);
-        }
+        // The queue's worker presents (a failure is logged there); this blocks while the previous present is pending.
+        queue_->present(handle_, buffer, sync_interval, {});
         buffer->Release();
-        if (result != MTLB_OK) {
-            D3D12M_LOG("present failed: %s", mtlb_last_error());
-            return to_hresult(result);
-        }
         ++present_count_;
         if (latency_)
             track_frame_latency();
@@ -571,20 +565,25 @@ private:
         const UINT64 value = ++fence_value_;
         std::shared_ptr<Latency> latency = latency_;
         latency->frame_presented();
-        const mtlb_result signalled = mtlb_queue_signal(queue_->handle(), static_cast<Fence *>(fence_)->event(), value);
-        const HRESULT waiting =
-            signalled == MTLB_OK ? queue_->device()->fence_waiter().add(static_cast<Fence *>(fence_), value,
-                                                                         [latency] { latency->frame_finished(); })
-                                 : to_hresult(signalled);
-        if (FAILED(waiting)) {
-            // Never leave the application waiting on a frame nobody will finish.
-            D3D12M_LOG("frame latency tracking failed: 0x%08x", static_cast<unsigned>(waiting));
-            latency->frame_finished();
-        }
+        // Queued behind the present. The wait for the fence is registered once the signal has been encoded; the
+        // callback runs before the queue lets go of the fence, and the queue is flushed before the swap chain dies.
+        Device *device = queue_->device();
+        Fence *fence = static_cast<Fence *>(fence_);
+        queue_->signal(fence, value, [device, fence, value, latency](mtlb_result signalled) {
+            const HRESULT waiting =
+                signalled == MTLB_OK ? device->fence_waiter().add(fence, value, [latency] { latency->frame_finished(); })
+                                     : to_hresult(signalled);
+            if (FAILED(waiting)) {
+                // Never leave the application waiting on a frame nobody will finish.
+                D3D12M_LOG("frame latency tracking failed: 0x%08x", static_cast<unsigned>(waiting));
+                latency->frame_finished();
+            }
+        });
     }
 
     HRESULT resize(UINT count, UINT width, UINT height, DXGI_FORMAT format, UINT flags)
     {
+        queue_->flush();  // presents of the old buffers reach the backend before the layer changes size
         std::lock_guard<std::mutex> lock(mutex_);
         DXGI_SWAP_CHAIN_DESC1 saved = desc_;
         if (count)

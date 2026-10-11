@@ -86,6 +86,19 @@ mtlb_result mtlb_notify_wait(mtlb_notify handle, mtlb_notification *out, uint32_
     return MTLB_OK;
 }
 
+void mtlb_notify_post(mtlb_notify handle, uint64_t cookie, uint64_t value)
+{
+    NotifyRef *ref = from_handle<NotifyRef>(handle);
+    if (!ref)
+        return;
+    NotifyQueue &queue = **ref;
+    {
+        std::lock_guard<std::mutex> lock(queue.mutex);
+        queue.pending.push_back({cookie, value});
+    }
+    queue.wake.notify_one();
+}
+
 void mtlb_notify_close(mtlb_notify handle)
 {
     NotifyRef *ref = from_handle<NotifyRef>(handle);

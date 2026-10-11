@@ -88,7 +88,7 @@ else
         cat > "$conf" <<EOF
 # d3d12-metal configuration, read once when the game loads d3d12.dll. Environment variables D3D12METAL_<KEY>
 # override these. Keys: log (every bridge call, very verbose), log_file, trace, stats, dump_failed, cache_dir,
-# cache (0 = off), cache_max_mb, dump_present, dump_present_frame, no_barriers.
+# cache (0 = off), cache_max_mb, dump_present, dump_present_frame, no_barriers, async_submit (0 = off).
 log_file=$game_logs/d3d12metal.log
 trace=1
 stats=1

@@ -224,6 +224,20 @@
   against it (`mtlb_root_signature_set_windowed`); `SetXRootDescriptorTable` also writes the window table's address (the heap's window
   table at 3 times the table's offset). `typed_windows=0` (D3D12METAL_TYPED_WINDOWS=0) turns it all off.
 
+## Milestone 10 design
+
+- **Asynchronous submission.** Each `CommandQueue` has a worker thread (created on first use, a Windows thread in the PE build) that is the only
+  caller of `mtlb_queue_submit/signal/wait/marker/present` for its queue. `ExecuteCommandLists`, `Signal`, `Wait`, markers and `Present`
+  validate on the caller's thread, then heap-allocate an op and post its address with `mtlb_notify_post` to the worker's `mtlb_notify` queue
+  (one allocation and one bridge call; the queue's FIFO order is the API order, no front-end lock; cheaper under Wine than an event). Ops hold
+  their references (lists, fence, back buffer, initialized resources) until executed. Stats timers run in the worker.
+- **Lists.** A list has an in-flight counter (per occurrence in `ExecuteCommandLists`, dropped by the worker after the submit); `Reset`
+  (`reset_state`) waits for zero (yield, then short sleeps) before touching the stream.
+- **Present.** `Present` blocks until the queue has executed the previous present (at most one queued or running); the frame latency signal is
+  queued behind the present and registers its fence wait once encoded. `CommandQueue::flush()` waits for every enqueued op: it runs before
+  `ResizeBuffers`, in `~SwapChain` and `~CommandQueue` (which then joins the worker), and `handle()` (direct bridge access) flushes first.
+- **Switch.** `async_submit=0` (`D3D12METAL_ASYNC_SUBMIT=0`) executes every op inline on the calling thread, as before.
+
 ## Wine build
 
 Under Wine the layer is two halves in one process (one address space):

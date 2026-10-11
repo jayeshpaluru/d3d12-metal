@@ -97,6 +97,7 @@ Steam is configured, since it does not see the environment of your shell.
 | `FEATURE_LEVEL=12_1` | report feature level 12_1 (with ROVs) instead of 12_0 |
 | `GDEFLATE=0` | hide the GPU GDeflate meta command, so DirectStorage uses its own decompression |
 | `QUIRK_FORCE_COMPUTE_BARRIER=<hex hashes>` | shader hashes that get a UAV barrier after every dispatch (per-game, from the profile) |
+| `ASYNC_SUBMIT=0` | run submits, signals, waits, markers and presents on the calling thread instead of a per-queue worker (default on) |
 | `SHADER_HASHES=1` | log the hash of every shader a pipeline is created with |
 
 If DirectX-Headers is not installed under `/opt/homebrew` and `pkg-config` is unavailable, pass `-Ddirectx_headers_prefix=<prefix>` to `meson setup`.

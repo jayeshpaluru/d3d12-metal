@@ -47,6 +47,7 @@ tests = [
   ['test_fence_mirror', []],
   ['test_foreign_objects', []],
   ['test_queue_sync', []],
+  ['test_async_submit', ['color']],
   ['test_rootsig', []],
   ['test_descriptors', []],
   ['test_hardening', []],
@@ -76,6 +77,10 @@ foreach t : tests
     link_with: d3d12_metal,
   )
   test(t[0], exe, timeout: 60, env: {'D3D12METAL_CACHE_DIR': test_cache_root / t[0]})
+  if t[0] == 'test_async_submit'  # the same program with the synchronous path
+    test('test_async_submit_off', exe, timeout: 60,
+         env: {'D3D12METAL_CACHE_DIR': test_cache_root / 'async_submit_off', 'D3D12METAL_ASYNC_SUBMIT': '0'})
+  endif
   if t[0] == 'test_shader_cache'
     shader_cache_exe = exe
     foreach mode : ['disabled', 'evict', 'large']  # the same program in two more modes (see its header)

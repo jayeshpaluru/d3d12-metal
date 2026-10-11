@@ -752,6 +752,9 @@ MTLB_EXPORT mtlb_result mtlb_event_notify(mtlb_event event, uint64_t value, mtlb
 MTLB_EXPORT mtlb_result mtlb_notify_wait(mtlb_notify queue, mtlb_notification *out, uint32_t max, uint32_t *count);
 /* Makes the current and every later mtlb_notify_wait return 0 notifications. */
 MTLB_EXPORT void mtlb_notify_close(mtlb_notify queue);
+/* Queues {cookie, value} now and wakes the waiter: front-end threads handing work to each other (a command queue's
+ * worker) use the same queue and call, which is cheaper under Wine than a Windows event. */
+MTLB_EXPORT void mtlb_notify_post(mtlb_notify queue, uint64_t cookie, uint64_t value);
 
 MTLB_ASSERT_SIZE(mtlb_notification, 16);
 MTLB_ASSERT_SIZE(mtlb_span, 16);
