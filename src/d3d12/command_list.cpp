@@ -1271,6 +1271,13 @@ void CommandList::ExecuteMetaCommand(ID3D12MetaCommand *command, const void *par
     std::memcpy(&args, parameters, sizeof(args));
     if (args.stream_count == 0)
         return;
+    static std::atomic<int> logged{0};
+    if (logged.fetch_add(1) < 40)
+        D3D12M_LOG("ExecuteMetaCommand: in %llx+%llu out %llx+%llu control %llx+%llu scratch %llx+%llu streams %llu status %llx+%llu",
+                   (unsigned long long)args.input_buffer, (unsigned long long)args.input_size, (unsigned long long)args.output_buffer,
+                   (unsigned long long)args.output_size, (unsigned long long)args.control_buffer, (unsigned long long)args.control_size,
+                   (unsigned long long)args.scratch_buffer, (unsigned long long)args.scratch_size, (unsigned long long)args.stream_count,
+                   (unsigned long long)args.status_buffer, (unsigned long long)args.status_size);
     auto *cmd = append<mtlb_cmd_gdeflate>(MTLB_CMD_GDEFLATE);
     cmd->input_address = args.input_buffer;
     cmd->input_size = args.input_size;
