@@ -365,6 +365,13 @@ mtlb_result convert_stage(Device *device, RootSignature *root_signature, const v
             target = windowed;
         } else if (result < 0) {
             cacheable = false;  // (stored under the windowed key it would hide a working rewrite later)
+            if (const char *dir = std::getenv("D3D12METAL_DUMP_FAILED")) {  // (as for conversion failures below)
+                const std::string path = std::string(dir) + "/window_failed_" + std::to_string(hash_bytes(source, source_size)) + ".dxil";
+                if (FILE *f = std::fopen(path.c_str(), "wb")) {
+                    std::fwrite(source, 1, source_size, f);
+                    std::fclose(f);
+                }
+            }
             static std::atomic<bool> logged{false};
             if (!logged.exchange(true))
                 backend_log("%s (typed buffer views stay limited to their first 2^%d elements)", window_error.c_str(),

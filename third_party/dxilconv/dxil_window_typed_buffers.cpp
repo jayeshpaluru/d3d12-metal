@@ -14,6 +14,7 @@
 //   merge: PHIs (one per used component of a load, or the atomic's result), rest of the block
 #include <climits>
 #include <cstdlib>
+#include <cstdio>
 #include <cstring>
 #include <map>
 #include <memory>
@@ -421,7 +422,7 @@ int window(const void *dxil, uint32_t size, uint32_t space_offset, void **out, u
         psv->write(stream);
     }
 
-    std::unique_ptr<DxilContainerWriter> writer(NewDxilContainerWriter());
+    std::unique_ptr<DxilContainerWriter> writer(NewDxilContainerWriter(true));  // (parts keep their sizes, aligned or not)
     for (const DxilPartHeader *p : parts) {
         const uint8_t *data = reinterpret_cast<const uint8_t *>(p + 1);
         const std::vector<uint8_t> *replacement =
@@ -473,7 +474,9 @@ extern "C" int dxilconv_window_typed_buffers(const void *dxil, uint32_t size, ui
     } catch (const Error &e) {
         set_diag(diag, diag_size, e.message);
     } catch (const hlsl::Exception &e) {
-        set_diag(diag, diag_size, e.what() ? e.what() : "DXC exception");
+        char code[16];
+        std::snprintf(code, sizeof(code), "%08x", static_cast<unsigned>(e.hr));
+        set_diag(diag, diag_size, std::string("DXC exception 0x") + code + (e.what() && *e.what() ? std::string(": ") + e.what() : ""));
     } catch (const std::exception &e) {
         set_diag(diag, diag_size, e.what());
     } catch (...) {
