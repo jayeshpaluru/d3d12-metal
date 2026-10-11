@@ -394,6 +394,12 @@ let sampleACF = """
         #expect(s.contains("~/code"))
     }
 
+    @Test func reportScrubsWinePaths() {
+        let s = Report.scrub("conf=Z:\\Users\\alice\\code\\g\\d3d12metal.conf in Z:\\Users\\ALICE", user: "alice", home: "/Users/alice")
+        #expect(!s.lowercased().contains("alice"))
+        #expect(s.contains("~\\code"))
+    }
+
     @Test func vdfEscapesAndComments() {
         let root = VDF.parse("// c\n\"a\" { \"k\" \"x\\\\y\\\"z\" }")
         #expect(root["a"]?.string("k") == "x\\y\"z")

@@ -127,6 +127,21 @@ Tooling for getting Marvel's Spider-Man Remastered running; no game code or asse
   `run-game.sh --direct` and no `WINEDLLOVERRIDES`: the registry overrides load the layer, the conf file is honoured (log file, trace lines,
   method list), screenshots are taken. The real game has not been run yet.
 
+## Milestone 9: a product for other people and other games
+
+- **Licensing.** LGPL-2.1-or-later with SPDX headers, notices for every third-party component, and the redistribution analysis in LICENSING.md
+  (Metal Shader Converter is not redistributable: the app detects it and sends the user to Apple; Wine is downloaded, pinned and checksum-verified).
+  No personal paths remain in tracked files (`tools/check.sh` greps for them).
+- **Swift package `app/`:** `Core`, the `d3d12metal` CLI and the SwiftUI app ("D3D12 Metal", one constant). Bottles, Wine download, Steam install and start (with the web helper
+  shim `tools/steamwebhelper-shim.c`), layer install/uninstall with backups, per-game settings written into `d3d12metal.conf`, profile-driven launch and first-launch setup,
+  `doctor` (including a real Rosetta AVX probe), scrubbed bug-report zips. `tools/build-app.sh` makes the ad-hoc signed bundle. 36 Core tests.
+- **Profiles** (`profiles/*.json`) replace the sm1/sm2 switch of the shell tools for the app and CLI; Spider-Man 2's compute-barrier shader hash moved out of the layer into its
+  profile (the layer has no built-in game quirks any more). The shell tools stay as development tools.
+- **Performance HUD** (`hud=1`): FPS, frame time and GPU time drawn in the present pass with a baked 5x7 font (`src/bridge/metal/hud.mm`); `test_hud_on` / `test_hud_off` check the
+  pixels natively, and it was verified under Wine with `hello_triangle` through the CLI (conf written by `d3d12metal config --hud on`).
+- **Generalisation review.** The layer's defaults are generic: Apple vendor id unless Wine registered a PCI id, feature level 12_0, shader model 6.6, nothing keyed by executable name.
+  Everything else a game needed so far (GPU identity, feature level 12_1, GDeflate switch, quirk hashes, DLL overrides, AVX, launch arguments) is a conf key or a profile field.
+
 ## Known limitations
 
 - Swap chains: windowed only, no HDR (`R16G16B16A16_FLOAT` is presented as sRGB content),

@@ -6,7 +6,14 @@ public enum Report {
     /// Replaces the user name, home directory, e-mail addresses and Steam ids.
     public static func scrub(_ text: String, user: String = NSUserName(), home: String = NSHomeDirectory()) -> String {
         var s = text
-        if !home.isEmpty, home != "/" { s = s.replacingOccurrences(of: home, with: "~") }
+        if !home.isEmpty, home != "/" {
+            s = s.replacingOccurrences(of: home, with: "~")
+            // The same path as Wine prints it (Z:\Users\name\...).
+            s = s.replacingOccurrences(of: home.replacingOccurrences(of: "/", with: "\\"), with: "~", options: .caseInsensitive)
+        }
+        if user.count >= 2 {
+            s = s.replacingOccurrences(of: "\\\\Users\\\\\(NSRegularExpression.escapedPattern(for: user))(?=[\\\\/]|$)", with: "\\\\Users\\\\<user>", options: [.regularExpression, .caseInsensitive])
+        }
         if user.count >= 2 {
             s = s.replacingOccurrences(of: "/Users/\(user)", with: "/Users/<user>")
             for variant in ["C:\\users\\\(user)", "C:\\Users\\\(user)", "c:\\users\\\(user)"] {
@@ -66,7 +73,7 @@ public enum Report {
         try fm.createDirectory(at: outputDir, withIntermediateDirectories: true)
         let zip = outputDir.appendingPathComponent(name + ".zip")
         try? fm.removeItem(at: zip)
-        let r = Shell.run("/usr/bin/ditto", ["-c", "-k", "--keepParent", dir.path, zip.path])
+        let r = Shell.run("/usr/bin/ditto", ["-c", "-k", "--norsrc", "--keepParent", dir.path, zip.path])
         guard r.ok else { throw CoreError("Could not create the report: \(r.stderr)") }
         return zip
     }

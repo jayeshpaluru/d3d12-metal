@@ -144,7 +144,8 @@ public struct GameLibrary: Sendable {
         let q = query.lowercased()
         if let g = games.first(where: { $0.id.lowercased() == q }) { return g }
         if let appid = Int(q), let g = games.first(where: { $0.steamAppId == appid }) { return g }
-        if let g = games.first(where: { $0.name.lowercased() == q || $0.profileID == q }) { return g }
+        if let g = games.first(where: { $0.name.lowercased() == q || $0.id.split(separator: ":").last.map(String.init) == q }) { return g }
+        if let g = games.first(where: { $0.profileID == q }) { return g }
         let partial = games.filter { $0.name.lowercased().contains(q) }
         return partial.count == 1 ? partial[0] : nil
     }
