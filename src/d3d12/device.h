@@ -51,6 +51,8 @@ public:
     // Descriptor heaps by CPU memory, to find the heap behind a CPU descriptor handle.
     void register_heap(DescriptorHeap *heap);
     void unregister_heap(DescriptorHeap *heap);
+    // The shader-visible CBV/SRV/UAV heap that holds GPU descriptor address `address`, or null.
+    DescriptorHeap *find_shader_visible_heap(uint64_t address);
     // The heap of type `type` that holds `count` descriptors from the CPU handle on, or null when the handle is not
     // inside a heap of this device (or runs past its end, or is not on a descriptor boundary). `index` receives
     // the position of the first descriptor in the heap. Cheap: a thread-local cache of the last heap answers
@@ -69,6 +71,8 @@ public:
     ViewInfo *view_info(D3D12_CPU_DESCRIPTOR_HANDLE handle);
     DescriptorHeap *locate_view_heap(D3D12_CPU_DESCRIPTOR_HANDLE handle, size_t *index) const;
     void copy_view_info(DescriptorHeap *to_heap, size_t to_index, DescriptorHeap *from_heap, size_t from_index, UINT count);
+    // Points the windows of descriptor `index` at a null view (a view without windows replaces a windowed one).
+    void clear_windows(DescriptorHeap *heap, size_t index);
     FenceWaiter &fence_waiter() { return fence_waiter_; }
 
     // Pipelines whose creation failed, by PipelineState::key: the application is not asked again to wait for the

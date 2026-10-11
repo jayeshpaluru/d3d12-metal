@@ -197,6 +197,7 @@ struct RootSignature {
     uint64_t id;  // unique for the process lifetime, so cache keys never see a reused address
     IRRootSignature *ir;
     std::array<uint8_t, 32> blob_hash;  // SHA-256 of the serialized root signature the converter was given
+    RootSignature *windowed = nullptr;  // with window tables (mtlb_root_signature_set_windowed); outlives this one
 };
 
 // What the runtime needs to (re)build the mesh pipeline of a pipeline with geometry or tessellation stages.

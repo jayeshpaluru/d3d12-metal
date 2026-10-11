@@ -90,6 +90,7 @@ void CommandList::reset_state()
     stream_.clear();
     drop_pass();
     refs_.clear();
+    resource_heap_ = nullptr;
     has_graphics_pipeline_ = has_compute_pipeline_ = false;
     compute_quirks_ = 0;
     for (RootState *state : {&graphics_, &compute_}) {
@@ -478,8 +479,22 @@ void CommandList::set_root_address(RootState &state, UINT index, D3D12_ROOT_PARA
 {
     if (const RootSignature::Slot *slot = find_slot(state, index, type)) {
         std::memcpy(state.args.data() + slot->offset, &address, sizeof(address));
+        if (slot->window_offset) {
+            const uint64_t windows = window_table(address);
+            std::memcpy(state.args.data() + slot->window_offset, &windows, sizeof(windows));
+        }
         state.dirty = true;
     }
+}
+
+uint64_t CommandList::window_table(uint64_t table)
+{
+    DescriptorHeap *heap = resource_heap_;
+    if (!heap || table - heap->gpu_address() >= uint64_t(heap->count()) * kDescriptorSize)
+        heap = device()->find_shader_visible_heap(table);  // (bundles inherit the heap of the list that runs them)
+    if (!heap || !heap->windows_gpu_address())
+        return table;  // no window table: windows read the table itself (only elements past 2^28 read wrong)
+    return heap->windows_gpu_address() + (table - heap->gpu_address()) * MTLB_TYPED_WINDOWS;
 }
 
 void CommandList::set_root_constants(RootState &state, UINT index, UINT count, const void *data, UINT dest_offset)
@@ -633,8 +648,10 @@ void CommandList::SetDescriptorHeaps(UINT count, ID3D12DescriptorHeap *const *he
         auto *heap = hold<DescriptorHeap>(heaps[i]);
         if (!heap)
             continue;
-        if (heap->type() == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV)
+        if (heap->type() == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV) {
             resource_heap = heap->gpu_address();
+            resource_heap_ = heap;
+        }
         else if (heap->type() == D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER)
             sampler_heap = heap->gpu_address();
     }

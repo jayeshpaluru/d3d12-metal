@@ -135,6 +135,31 @@ HRESULT make_buffer_descriptor(Resource &resource, const BufferViewParams &p, mt
     return resource.buffer_view(view, slot);
 }
 
+// A typed buffer view of more elements than a texture buffer holds also gets its windows (mtlb.h, MTLB_TYPED_WINDOWS):
+// the views of the same buffer from element w * 2^MTLB_TYPED_WINDOW_BITS, written into the heap's window table at
+// `index`; windows past the view's end are `null_window`. Returns whether the view has windows.
+bool write_windows(DescriptorHeap &heap, size_t index, Resource &resource, const BufferViewParams &b,
+                   const mtlb_descriptor &null_window)
+{
+    constexpr UINT64 kWindowElements = 1ull << MTLB_TYPED_WINDOW_BITS;
+    if (b.raw || b.stride || b.format == DXGI_FORMAT_UNKNOWN || b.num_elements <= kWindowElements || !typed_windows_enabled())
+        return false;
+    mtlb_descriptor *windows = heap.windows(static_cast<uint32_t>(index), true);
+    if (!windows)
+        return false;
+    for (UINT w = 1; w <= MTLB_TYPED_WINDOWS; ++w) {
+        const UINT64 first = w * kWindowElements;
+        BufferViewParams window = b;
+        window.counter = nullptr;
+        window.first_element = b.first_element + first;
+        window.num_elements = first < b.num_elements ? std::min(kWindowElements, b.num_elements - first) : 0;
+        if (!window.num_elements || FAILED(make_buffer_descriptor(resource, window, &windows[w - 1])))
+            windows[w - 1] = null_window;
+    }
+    heap.note_windowed_view();
+    return true;
+}
+
 // UAVs and SRVs of a null resource: the bridge's descriptor that reads zero.
 mtlb_null_kind null_srv_kind(D3D12_SRV_DIMENSION dimension, bool typed_buffer)
 {
@@ -181,10 +206,18 @@ void Device::CreateShaderResourceView(ID3D12Resource *resource_ptr, const D3D12_
                                       D3D12_CPU_DESCRIPTOR_HANDLE dest)
 {
     D3D12M_TRACE(resource_ptr, desc, dest);
-    if (!validate_cpu_range(dest, 1, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV))
+    size_t index = 0;
+    DescriptorHeap *heap = validate_cpu_range(dest, 1, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, &index);
+    if (!heap)
         return log_bad_handle("CreateShaderResourceView");
     stat_add(Stat::DescriptorWrites);
     mtlb_descriptor *slot = slot_of(dest);
+    ViewInfo *info = heap->shadow(static_cast<uint32_t>(index));
+    if (info) {
+        if (info->windowed)
+            clear_windows(heap, index);
+        *info = {};  // (only UAVs and windowed views keep what they were made from)
+    }
     auto *resource = ours<Resource>(resource_ptr);
     if (!resource) {
         const bool typed = desc && desc->Format != DXGI_FORMAT_UNKNOWN && !(desc->Buffer.Flags & D3D12_BUFFER_SRV_FLAG_RAW);
@@ -246,6 +279,8 @@ void Device::CreateShaderResourceView(ID3D12Resource *resource_ptr, const D3D12_
         hr = make_buffer_descriptor(*resource, b, slot);
         if (FAILED(hr))
             *slot = null_descriptor(MTLB_NULL_BUFFER);
+        else if (info)
+            info->windowed = write_windows(*heap, index, *resource, b, null_descriptor(MTLB_NULL_TYPED_BUFFER));
         return;
     }
     case D3D12_SRV_DIMENSION_TEXTURE1D:
@@ -342,6 +377,8 @@ void Device::CreateUnorderedAccessView(ID3D12Resource *resource_ptr, ID3D12Resou
                 *shadow = info;
         }
     } store{heap->shadow(static_cast<uint32_t>(index)), info};
+    if (store.shadow && store.shadow->windowed)
+        clear_windows(heap, index);
     auto *resource = ours<Resource>(resource_ptr);
     if (!resource || !desc) {
         const bool typed = desc && desc->Format != DXGI_FORMAT_UNKNOWN && !(desc->Buffer.Flags & D3D12_BUFFER_UAV_FLAG_RAW);
@@ -371,6 +408,7 @@ void Device::CreateUnorderedAccessView(ID3D12Resource *resource_ptr, ID3D12Resou
             return;
         }
         info.kind = ViewInfo::Buffer;
+        info.windowed = write_windows(*heap, index, *resource, b, null_descriptor(MTLB_NULL_UAV_TYPED_BUFFER));
         info.raw = b.raw;
         info.format = b.format;
         info.stride = b.stride;

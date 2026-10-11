@@ -226,6 +226,8 @@ private:
     void set_root_signature(RootState &state, ID3D12RootSignature *signature, const char *what);
     const RootSignature::Slot *find_slot(RootState &state, UINT index, D3D12_ROOT_PARAMETER_TYPE type);
     void set_root_address(RootState &state, UINT index, D3D12_ROOT_PARAMETER_TYPE type, uint64_t address);
+    // The window table (mtlb.h, MTLB_TYPED_WINDOWS) of the descriptor table at GPU address `table`.
+    uint64_t window_table(uint64_t table);
     void set_root_constants(RootState &state, UINT index, UINT count, const void *data, UINT dest_offset);
     void flush_root_args(RootState &state, mtlb_cmd_type type);
     void marker(UINT kind, const std::string &text);
@@ -246,6 +248,7 @@ private:
     uint32_t compute_quirks_ = 0;  // quirks of the compute pipeline set last
     RootState graphics_;
     RootState compute_;
+    DescriptorHeap *resource_heap_ = nullptr;  // the CBV/SRV/UAV heap set last (held by refs_)
 };
 
 } // namespace d3d12m

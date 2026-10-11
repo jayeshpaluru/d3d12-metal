@@ -13,4 +13,10 @@ bool is_dxbc_only(const void *data, uint64_t size);
 // Converts a DXBC container to a DXIL container. On failure returns false with `error` set.
 bool dxbc_to_dxil(const void *dxbc, uint64_t size, std::vector<uint8_t> &dxil, std::string &error);
 
+// Rewrites the typed buffer accesses of a DXIL container to reach past the first texture buffer window (see
+// MTLB_TYPED_WINDOW_BITS in mtlb.h). Returns 1 with the new container in `out`, 0 when the shader has no typed buffer
+// access, or a negative value with `error` set (also when libdxilconv is missing or too old).
+int window_typed_buffers(const void *dxil, uint64_t size, uint32_t window_space_offset, std::vector<uint8_t> &out,
+                         std::string &error);
+
 } // namespace mtlb

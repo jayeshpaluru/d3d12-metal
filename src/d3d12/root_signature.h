@@ -16,6 +16,9 @@ public:
         D3D12_ROOT_PARAMETER_TYPE type;
         uint32_t offset;  // bytes from the start of the argument buffer
         uint32_t size;    // bytes: 4 * Num32BitValues for constants, 8 otherwise
+        // Descriptor tables with SRV or UAV ranges: where their window table's address goes (0: none). The window
+        // table of a table at descriptor i of a heap starts at window entry 3 * i (mtlb.h, MTLB_TYPED_WINDOWS).
+        uint32_t window_offset = 0;
     };
 
     static HRESULT create(Device *device, const void *blob, size_t size, REFIID riid, void **out);
@@ -44,6 +47,7 @@ private:
     ~RootSignature() override;
 
     mtlb_root_signature handle_ = 0;
+    mtlb_root_signature windowed_ = 0;  // the same with window tables appended (pipelines use it for typed buffers)
     RootSignatureKey content_key_;
     bool shared_ = false;  // registered in the device's embedded root signatures
     // Static samplers become a descriptor table, appended after the application's parameters, over

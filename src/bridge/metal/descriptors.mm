@@ -288,8 +288,8 @@ mtlb_result mtlb_buffer_view(const mtlb_buffer_view_desc *desc, mtlb_descriptor 
     if (elements + padding > limit) {
         static std::atomic<int> logged{0};
         if (logged.fetch_add(1) < 8)
-            backend_log("a typed buffer view exceeds the texture buffer limit and is clamped to it (format %u, %llu elements "
-                        "from byte %llu of a %llu-byte buffer)",
+            backend_log("a typed buffer view exceeds the texture buffer limit (format %u, %llu elements from byte %llu of a "
+                        "%llu-byte buffer): its texture buffer holds the first 2^28, windows the rest",
                         desc->format, (unsigned long long)desc->num_elements, (unsigned long long)desc->offset,
                         (unsigned long long)buffer->size);
         elements = limit - padding;

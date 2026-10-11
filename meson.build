@@ -62,6 +62,7 @@ portable_tests = [
   ['gdeflate', [], []],
   ['rov', ['rov'], []],
   ['atomics', [], ['atomics']],
+  ['typed_windows', [], ['typed_windows']],
 ]
 
 # The reference GDeflate codec (NVIDIA's libdeflate fork, MIT, as used by Microsoft's DirectStorage samples): only the

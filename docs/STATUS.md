@@ -263,9 +263,8 @@ Performance findings (Spider-Man, gameplay scene, `tools/game/measure.sh`):
 - `BoundsCheck` off (`D3D12METAL_COMPAT_FLAGS=60`): no measurable GPU change (busy 9.8 vs 9.7 ms), kept on.
 - Shader cache: cold run 7792 PSOs in 307 s (all at load), warm run 7720 PSOs in ~7 s with 2688 hits and 0 misses; no PSO creation happens in gameplay (0.00 per frame).
 - `D3D12METAL_COMPAT_FLAGS`, `D3D12METAL_GPU_FAMILY` replace the converter settings for experiments (part of the cache key).
-- Typed buffer views above 2^28 elements: not solvable here. The limit is the GPU's texture buffer width (measured), Metal Shader Converter has no
-  option to lower typed buffers to raw loads (checked `metal_irconverter.h`), and an index cannot be redirected to a second view without rewriting the DXIL.
-  Such views stay clamped (`p_large_buffers`).
+- Typed buffer views above 2^28 elements: the limit is the GPU's texture buffer width (measured) and Metal Shader Converter has no option to
+  lower typed buffers to raw loads. Solved in milestone 8 by rewriting the DXIL (typed buffer windows, ARCHITECTURE.md "Milestone 8 design").
 - XeSS `mtlb_queue_signal` access violation: not reproduced; hardened (the fence is held during Signal/Wait, the queue's destruction waits for in-flight
   submits, pooled buffers return through shared pools instead of a queue pointer in completion handlers).
 - Deterministic gameplay entry: `tools/game/to-gameplay.sh` looks at the screen before every key (`tools/game/state.sh`: a capture of the game window
@@ -310,3 +309,26 @@ Performance findings (Spider-Man, gameplay scene, `tools/game/measure.sh`):
 - **First boot of Spider-Man 2** (direct launch): DirectStorage creates the GDeflate meta command and initialises it; the game renders its
   first splash ("Sony Interactive Entertainment presents") at ~117 fps with the pipelines it creates, but does not advance past it
   (no ExecuteMetaCommand seen, one compute shader fails DXIL conversion, one typed buffer view format is unsupported).
+
+## Milestone 8: Spider-Man 2
+
+- **GDeflate: every stream after the first few was skipped.** DirectStorage passes the base addresses of its staging and destination buffers
+  with the *sums* of the streams' sizes, and the control buffer's offsets go past those sums. The kernel bounded the offsets by the sizes and
+  rejected nearly every stream, leaving destinations undecompressed: T-posed and headless characters, noise on suits, masks and facades.
+  Inputs and outputs are now bounded by the buffers holding them (`p_gdeflate` covers the DirectStorage call shape). The offline check
+  (`D3D12METAL_GDEFLATE_DUMP=<dir>`, `tools/gdeflate_verify.sh <dir>`) found every stream of a boot to the menu (1094) identical to the
+  reference decoder.
+- **"Unfortunately your GPU is not supported by the game".** The check before that message box (in the exe) asks `D3D12_OPTIONS` and shows it
+  when `ROVsSupported` is 0, whatever the vendor (it also rejects a few GPU names). The sm2 install profile writes `feature_level=12_1`
+  (rasterizer ordered views, `p_rov`); the game then starts without the dialog.
+- **GPU identity.** `SPOOF_GPU=nvidia|amd|apple tools/install-game.sh` (per-profile default `GAME_SPOOF_GPU`, apple for both games) writes
+  `adapter_name`, `vendor_id`, `device_id` and `driver_version` (the UMD version `CheckInterfaceSupport` reports). Wine prunes display devices
+  it did not detect, so the layer writes the PCI device and display-class driver keys of a spoofed identity itself (volatile) when the first
+  adapter is made; the game finds the device through SetupAPI and reads its DriverVersion. With NVIDIA (RTX 3070) the game runs as with the
+  Apple identity and uses the same shaders (2765 shader cache hits, nothing new), so the identity changes nothing visible and stays Apple.
+- **Typed buffer windows.** The game views a 2 GiB vertex buffer (its global managed buffer) through typed buffer views of 536M (RGBA8,
+  RGB10A2, R32_UINT) and 1.07G (R16_UINT) elements; data lives up to 1.6 GiB into it, past the 2^28 elements a Metal texture buffer holds,
+  where the clamped views read zero (heads and faces collapsed, T-poses in cutscenes). Fixed by the windows (ARCHITECTURE.md).
+- Debugging switches: `D3D12METAL_DUMP_SHADERS=<dir>` (every pipeline shader as DXIL, for `dxc -dumpbin`), `D3D12METAL_DUMP_PRESENT_EVERY=K`
+  (every Kth present after `D3D12METAL_DUMP_PRESENT_FRAME`), `D3D12METAL_SERIALIZE=1` (each submission completes before the next),
+  `D3D12METAL_GDEFLATE_DUMP`.

@@ -23,10 +23,14 @@ constexpr uint32_t kFourCC_DXIL = 'D' | 'X' << 8 | 'I' << 16 | 'L' << 24;
 
 using ConvertFn = decltype(&dxilconv_convert);
 using FreeFn = decltype(&dxilconv_free);
+// dxilconv_window_typed_buffers (a library without it rewrites nothing).
+using WindowFn = int (*)(const void *dxil, uint32_t size, uint32_t window_space_offset, void **out, uint32_t *out_size,
+                         char *diag, uint32_t diag_size);
 
 struct Converter {
     ConvertFn convert = nullptr;
     FreeFn free = nullptr;
+    WindowFn window = nullptr;
     std::string error;
 };
 
@@ -37,6 +41,7 @@ bool try_load(const std::string &path, Converter &out)
         return false;
     out.convert = reinterpret_cast<ConvertFn>(dlsym(lib, "dxilconv_convert"));
     out.free = reinterpret_cast<FreeFn>(dlsym(lib, "dxilconv_free"));
+    out.window = reinterpret_cast<WindowFn>(dlsym(lib, "dxilconv_window_typed_buffers"));
     if (out.convert && out.free)
         return true;
     dlclose(lib);
@@ -121,6 +126,29 @@ bool dxbc_to_dxil(const void *dxbc, uint64_t size, std::vector<uint8_t> &dxil, s
     dxil.assign(static_cast<uint8_t *>(blob), static_cast<uint8_t *>(blob) + blob_size);
     c.free(blob);
     return true;
+}
+
+int window_typed_buffers(const void *dxil, uint64_t size, uint32_t window_space_offset, std::vector<uint8_t> &out,
+                         std::string &error)
+{
+    const Converter &c = converter();
+    if (!c.window) {
+        error = c.convert ? "libdxilconv.dylib has no dxilconv_window_typed_buffers" : c.error;
+        return -1;
+    }
+    void *blob = nullptr;
+    uint32_t blob_size = 0;
+    char diag[512] = {};
+    const int result = c.window(dxil, static_cast<uint32_t>(size), window_space_offset, &blob, &blob_size, diag, sizeof(diag));
+    if (result < 0) {
+        error = std::string("typed buffer window rewrite failed: ") + diag;
+        return result;
+    }
+    if (result > 0 && blob) {
+        out.assign(static_cast<uint8_t *>(blob), static_cast<uint8_t *>(blob) + blob_size);
+        c.free(blob);
+    }
+    return result > 0 && !out.empty() ? 1 : 0;
 }
 
 } // namespace mtlb

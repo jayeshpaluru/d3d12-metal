@@ -2,6 +2,7 @@
 // render pipeline and depth-stencil state.
 #include "internal.h"
 #include "dxbc.h"
+#include "log.h"
 
 #include <algorithm>
 #include <atomic>
@@ -186,10 +187,12 @@ dispatch_data_t bytecode_data(const std::vector<uint8_t> &bytes)
 
 // The disk cache key of a converted shader: everything its conversion depends on.
 CacheKey stage_key(RootSignature *root_signature, const void *dxil, uint64_t size, const char *entry, IRShaderStage ir_stage,
-                   const StageOptions &options)
+                   const StageOptions &options, bool windowed)
 {
     Hasher h;
     h.update(std::string("stage"));
+    if (windowed)  // (the keys of shaders without typed buffers stay as they were)
+        h.update(std::string("typed-buffer-windows-1"));
     h.update(DiskCache::converter_identity());
     h.update_value(kCacheRevision);
     h.update_value(static_cast<uint32_t>(compatibility_flags()));
@@ -206,8 +209,99 @@ CacheKey stage_key(RootSignature *root_signature, const void *dxil, uint64_t siz
     return h.finish();
 }
 
+// True when the DXIL container's runtime info (PSV0) lists a typed buffer: an SRV or UAV of kind TypedBuffer, or, in
+// runtime info without resource kinds, any typed SRV or UAV. Only such shaders get the typed buffer window rewrite
+// (and the cache keys of the others stay as they were). DXBC containers have no PSV0: false.
+bool dxil_may_access_typed_buffers(const void *dxil, uint64_t size)
+{
+    if (!dxil || size < 32)
+        return false;
+    const auto *bytes = static_cast<const uint8_t *>(dxil);
+    auto u32 = [&](uint64_t offset) {
+        uint32_t v;
+        std::memcpy(&v, bytes + offset, 4);
+        return v;
+    };
+    if (u32(0) != 0x43425844u)  // 'DXBC'
+        return false;
+    const uint32_t parts = u32(28);
+    if (32 + uint64_t(parts) * 4 > size)
+        return false;
+    for (uint32_t i = 0; i < parts; ++i) {
+        const uint64_t at = u32(32 + i * 4);
+        if (at + 8 > size)
+            return false;
+        if (u32(at) != 0x30565350u)  // 'PSV0'
+            continue;
+        const uint64_t end = std::min<uint64_t>(at + 8 + u32(at + 4), size);
+        uint64_t cursor = at + 8;
+        if (cursor + 4 > end)
+            return false;
+        cursor += 4 + uint64_t(u32(cursor));  // the runtime info
+        if (cursor + 8 > end)
+            return false;
+        const uint32_t resources = u32(cursor), stride = u32(cursor + 4);
+        cursor += 8;
+        if (!resources || stride < 16 || cursor + uint64_t(resources) * stride > end)
+            return false;
+        constexpr uint32_t kSrvTyped = 2, kUavTyped = 6, kTypedBuffer = 10;  // PSVResourceType, DXIL::ResourceKind
+        for (uint32_t r = 0; r < resources; ++r) {
+            const uint64_t entry = cursor + uint64_t(r) * stride;
+            const uint32_t type = u32(entry);
+            if (type != kSrvTyped && type != kUavTyped)
+                continue;
+            if (stride < 24 || u32(entry + 16) == kTypedBuffer)  // PSVResourceBindInfo1 adds the kind
+                return true;
+        }
+        return false;
+    }
+    return false;
+}
+
+// The same for a DXBC container, from its resource definitions (RDEF): a typed SRV or UAV of buffer dimension.
+bool dxbc_may_access_typed_buffers(const void *dxbc, uint64_t size)
+{
+    if (!dxbc || size < 32)
+        return false;
+    const auto *bytes = static_cast<const uint8_t *>(dxbc);
+    auto u32 = [&](uint64_t offset) {
+        uint32_t v;
+        std::memcpy(&v, bytes + offset, 4);
+        return v;
+    };
+    const uint32_t parts = u32(28);
+    if (32 + uint64_t(parts) * 4 > size)
+        return false;
+    for (uint32_t i = 0; i < parts; ++i) {
+        const uint64_t at = u32(32 + i * 4);
+        if (at + 8 > size)
+            return false;
+        if (u32(at) != 0x46454452u)  // 'RDEF'
+            continue;
+        const uint64_t base = at + 8, end = std::min<uint64_t>(base + u32(at + 4), size);
+        if (base + 20 > end)
+            return false;
+        const uint32_t count = u32(base + 8), offset = u32(base + 12), version = u32(base + 16);
+        const uint32_t major = (version >> 8) & 0xff, minor = version & 0xff;
+        const uint64_t stride = major > 5 || (major == 5 && minor >= 1) ? 40 : 32;  // SM 5.1 adds space and id
+        constexpr uint32_t kTexture = 2, kUavTyped = 4, kDimensionBuffer = 1;      // D3D_SHADER_INPUT_TYPE, D3D_SRV_DIMENSION
+        for (uint32_t r = 0; r < count; ++r) {
+            const uint64_t entry = base + offset + r * stride;
+            if (entry + 16 > end)
+                return false;
+            const uint32_t type = u32(entry + 4), dimension = u32(entry + 12);
+            if ((type == kTexture || type == kUavTyped) && dimension == kDimensionBuffer)
+                return true;
+        }
+        return false;
+    }
+    return false;
+}
+
 // Converts one DXIL shader against `root_signature` and loads its Metal function, or loads the converter's
-// earlier output from the disk cache.
+// earlier output from the disk cache. A shader that may access typed buffers, against a root signature with a
+// windowed variant, is rewritten to reach past the first texture buffer window (mtlb.h, MTLB_TYPED_WINDOW_BITS) and
+// converted against the windowed root signature; its cache key is the windowed one's.
 mtlb_result convert_stage(Device *device, RootSignature *root_signature, const void *dxil, uint64_t size,
                           const char *entry, IRShaderStage ir_stage, const StageOptions &options, ShaderStage &out)
 {
@@ -221,11 +315,15 @@ mtlb_result convert_stage(Device *device, RootSignature *root_signature, const v
             }
         }
     }
+    const bool dxbc = is_dxbc_only(dxil, size);
+    RootSignature *windowed = root_signature->windowed
+                                  && (dxbc ? dxbc_may_access_typed_buffers(dxil, size) : dxil_may_access_typed_buffers(dxil, size))
+                                  ? root_signature->windowed : nullptr;
     DiskCache &cache = DiskCache::instance();
     const bool use_cache = cache.enabled();
     CacheKey key{};
     if (use_cache) {
-        key = stage_key(root_signature, dxil, size, entry, ir_stage, options);
+        key = stage_key(windowed ? windowed : root_signature, dxil, size, entry, ir_stage, options, windowed != nullptr);
         std::vector<uint8_t> metallib;
         std::string json;
         if (cache.load(CacheKind::Stage, key, metallib, json)) {
@@ -244,18 +342,34 @@ mtlb_result convert_stage(Device *device, RootSignature *root_signature, const v
     const void *source = dxil;
     uint64_t source_size = size;
     std::vector<uint8_t> converted;
-    if (is_dxbc_only(dxil, size)) {
+    if (dxbc) {
         std::string dxbc_error;
         if (!dxbc_to_dxil(dxil, size, converted, dxbc_error))
             return fail(MTLB_ERROR_COMPILE_FAILED, dxbc_error);
         source = converted.data();
         source_size = converted.size();
     }
+    std::vector<uint8_t> rewritten;
+    RootSignature *target = root_signature;
+    if (windowed) {
+        std::string window_error;
+        const int result = window_typed_buffers(source, source_size, MTLB_WINDOW_SPACE_OFFSET, rewritten, window_error);
+        if (result > 0) {
+            source = rewritten.data();
+            source_size = rewritten.size();
+            target = windowed;
+        } else if (result < 0) {
+            static std::atomic<bool> logged{false};
+            if (!logged.exchange(true))
+                backend_log("%s (typed buffer views stay limited to their first 2^%d elements)", window_error.c_str(),
+                            MTLB_TYPED_WINDOW_BITS);
+        }
+    }
 
     IRCompiler *compiler = thread_compiler(options.emulation);
     if (options.emulation)
         IRCompilerSetInputTopology(compiler, options.topology);
-    IRCompilerSetGlobalRootSignature(compiler, root_signature->ir);
+    IRCompilerSetGlobalRootSignature(compiler, target->ir);
 
     OwnedObject input(IRObjectCreateFromDXIL(static_cast<const uint8_t *>(source), source_size, IRBytecodeOwnershipNone));
     IRError *error = nullptr;
@@ -1124,6 +1238,16 @@ extern "C" mtlb_result mtlb_root_signature_create(mtlb_device handle, const void
     static std::atomic<uint64_t> next_id{1};
     *out = to_handle(new RootSignature{device, next_id++, root_signature.ptr, blob_hasher.finish()});
     root_signature.ptr = nullptr;  // owned by the handle now
+    return MTLB_OK;
+}
+
+extern "C" mtlb_result mtlb_root_signature_set_windowed(mtlb_root_signature base_handle, mtlb_root_signature windowed_handle)
+{
+    RootSignature *base = from_handle<RootSignature>(base_handle);
+    RootSignature *windowed = from_handle<RootSignature>(windowed_handle);
+    if (!base || !windowed || base == windowed || base->device != windowed->device)
+        return MTLB_ERROR_INVALID_ARGUMENT;
+    base->windowed = windowed;
     return MTLB_OK;
 }
 

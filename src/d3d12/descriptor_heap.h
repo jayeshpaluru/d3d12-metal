@@ -1,6 +1,8 @@
 // ID3D12DescriptorHeap and the CPU-side descriptor layouts.
 #pragma once
 
+#include <atomic>
+#include <mutex>
 #include <vector>
 
 #include "bridge/mtlb.h"
@@ -48,7 +50,12 @@ struct ViewInfo {
     uint64_t first_element = 0, num_elements = 0;
     mtlb_view_type type = MTLB_VIEW_2D;        // textures
     uint32_t first_mip = 0, first_slice = 0, slice_count = 1;
+    bool windowed = false;                     // typed buffer SRV or UAV with entries in the heap's window table
 };
+
+// D3D12METAL_TYPED_WINDOWS=0 (typed_windows=0 in the conf) turns the typed buffer windows off (mtlb.h,
+// MTLB_TYPED_WINDOWS): typed buffer views then keep their first 2^28 elements.
+bool typed_windows_enabled();
 
 class DescriptorHeap final : public ChildImpl<ID3D12DescriptorHeap> {
 public:
@@ -71,6 +78,17 @@ public:
     uint32_t count() const { return desc_.NumDescriptors; }
     ViewInfo *shadow(uint32_t index) { return index < shadow_.size() ? &shadow_[index] : nullptr; }
 
+    // The window table of CBV/SRV/UAV heaps (MTLB_TYPED_WINDOWS entries per descriptor, see mtlb.h): the windows of
+    // descriptor `index`, or null. Shader-visible heaps have the table from the start (root arguments point into it);
+    // the others get one when `create` asks (the first windowed view written into them). Only typed buffer views past
+    // 2^28 elements write entries (and views replacing them, a null view).
+    mtlb_descriptor *windows(uint32_t index, bool create);
+    // GPU address of the window table's first entry; 0 when there is none.
+    uint64_t windows_gpu_address() const { return windows_gpu_address_; }
+    // Whether a windowed view was ever written into the heap (copies from other heaps skip their window entries).
+    bool has_windowed_views() const { return has_windowed_views_; }
+    void note_windowed_view() { has_windowed_views_ = true; }
+
 private:
     D3D12_CPU_DESCRIPTOR_HANDLE cpu_start() const;
     D3D12_GPU_DESCRIPTOR_HANDLE gpu_start() const;
@@ -84,6 +102,12 @@ private:
     mtlb_buffer buffer_ = 0;               // shader-visible heaps live in a bridge buffer
     uint64_t gpu_address_ = 0;
     std::vector<ViewInfo> shadow_;
+    std::atomic<mtlb_descriptor *> windows_{nullptr};
+    std::mutex windows_mutex_;                   // creates host_windows_ (views are written from many threads)
+    std::vector<mtlb_descriptor> host_windows_;  // backs windows_ unless the heap is shader visible
+    mtlb_buffer windows_buffer_ = 0;
+    uint64_t windows_gpu_address_ = 0;
+    std::atomic<bool> has_windowed_views_{false};
 };
 
 } // namespace d3d12m

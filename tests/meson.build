@@ -27,7 +27,7 @@ endforeach
 
 # Compute shaders: shaders/<name>.hlsl -> g_<name>_cs.
 compute_headers = {}
-foreach shader : ['noop', 'probe', 'fill', 'msaa_read', 'embedded_rs', 'atomics']
+foreach shader : ['noop', 'probe', 'fill', 'msaa_read', 'embedded_rs', 'atomics', 'typed_windows']
   compute_headers += {shader: custom_target(
     shader + '_cs',
     input: 'shaders/' + shader + '.hlsl',

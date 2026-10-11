@@ -429,6 +429,17 @@ void Device::register_heap(DescriptorHeap *heap)
     heap_generation_.store(++g_heap_generations, std::memory_order_release);
 }
 
+DescriptorHeap *Device::find_shader_visible_heap(uint64_t address)
+{
+    std::shared_lock lock(heaps_mutex_);
+    for (const auto &[storage, heap] : heaps_) {
+        if (heap->type() == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV && heap->gpu_address()
+            && address - heap->gpu_address() < uint64_t(heap->count()) * kDescriptorSize)
+            return heap;
+    }
+    return nullptr;
+}
+
 void Device::unregister_heap(DescriptorHeap *heap)
 {
     if (!heap->storage())
@@ -550,8 +561,39 @@ void Device::copy_view_info(DescriptorHeap *to_heap, size_t to_index, Descriptor
 {
     ViewInfo *to = to_heap->shadow(static_cast<uint32_t>(to_index));
     ViewInfo *from = from_heap->shadow(static_cast<uint32_t>(from_index));
-    if (to && from)
-        std::memmove(static_cast<void *>(to), static_cast<const void *>(from), size_t(count) * sizeof(ViewInfo));
+    if (!to || !from)
+        return;
+    if (to_heap->has_windowed_views()) {
+        // Windowed views replaced by views without windows: past their first 2^28 elements they read zero, as before.
+        for (UINT k = 0; k < count; ++k)
+            if (to[k].windowed && !from[k].windowed)
+                clear_windows(to_heap, to_index + k);
+    }
+    std::memmove(static_cast<void *>(to), static_cast<const void *>(from), size_t(count) * sizeof(ViewInfo));
+    if (!from_heap->has_windowed_views())
+        return;
+    // The windows of windowed views go along (in the order a memmove takes when the ranges overlap in one heap).
+    const bool backwards = to_heap == from_heap && to_index > from_index;
+    for (UINT n = 0; n < count; ++n) {
+        const UINT k = backwards ? count - 1 - n : n;
+        if (!to[k].windowed)
+            continue;
+        const mtlb_descriptor *src = from_heap->windows(static_cast<uint32_t>(from_index + k), false);
+        mtlb_descriptor *dst = to_heap->windows(static_cast<uint32_t>(to_index + k), true);
+        if (src && dst) {
+            std::memcpy(dst, src, sizeof(mtlb_descriptor) * MTLB_TYPED_WINDOWS);
+            to_heap->note_windowed_view();
+        }
+    }
+}
+
+void Device::clear_windows(DescriptorHeap *heap, size_t index)
+{
+    if (mtlb_descriptor *windows = heap->windows(static_cast<uint32_t>(index), false)) {
+        const mtlb_descriptor null_window = null_descriptor(MTLB_NULL_UAV_TYPED_BUFFER);  // (reads zero, takes writes)
+        for (UINT w = 0; w < MTLB_TYPED_WINDOWS; ++w)
+            windows[w] = null_window;
+    }
 }
 
 // ---- Forced initial state of placed render targets and depth-stencils ---------

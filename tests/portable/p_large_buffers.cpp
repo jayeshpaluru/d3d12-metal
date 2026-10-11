@@ -1,6 +1,6 @@
 // Typed buffer views above the texture buffer limit. Metal texture buffers hold at most 2^28 texels (measured
 // on Apple GPUs); the game this layer targets makes 419,430,400-element R16_UINT views of an 800 MB buffer.
-// Such a view is clamped to the limit: elements up to the limit read as stored, the rest read as zero.
+// The layer gives such a view extra window descriptors, so elements past the limit read, load and store like the rest.
 #include "probe.h"
 
 namespace {
@@ -44,9 +44,8 @@ int main()
     CHECK_EQ(int(got[0].x), 1234);
     CHECK_EQ(int(got[1].x), 0);
     CHECK_EQ(int(got[2].x), 4321);  // the last elements below the limit are intact
-    // Past the limit the clamped view reads zero instead of 999 and 777.
-    CHECK_EQ(int(got[3].x), 0);
-    CHECK_EQ(int(got[4].x), 0);
+    CHECK_EQ(int(got[3].x), 999);  // past the limit, through a window
+    CHECK_EQ(int(got[4].x), 777);
 
     // The same view as a UAV (typed loads) and a write near the start.
     D3D12_UNORDERED_ACCESS_VIEW_DESC uav = {};
@@ -54,22 +53,37 @@ int main()
     uav.Format = DXGI_FORMAT_R16_UINT;
     uav.Buffer.NumElements = static_cast<UINT>(kElements);
     gpu.device->CreateUnorderedAccessView(buffer.Get(), nullptr, &uav, gpu.cpu_handle(probe.srv_heap.Get(), 7));
-    const std::vector<Float4> loaded = probe.run(9, {{10, 0, 0, 0}, {float(kLimit - 32), 0, 0, 0}});
+    const std::vector<Float4> loaded = probe.run(9, {{10, 0, 0, 0},
+                                                      {float(kLimit - 32), 0, 0, 0},
+                                                      {float(kLimit + 64), 0, 0, 0},
+                                                      {float(kElements - 32), 0, 0, 0}});
     CHECK_EQ(int(loaded[0].x), 1234);
     CHECK_EQ(int(loaded[1].x), 4321);
+    CHECK_EQ(int(loaded[2].x), 999);
+    CHECK_EQ(int(loaded[3].x), 777);
     probe.run(10, {{20, 55, 0, 0}});
+    // A store past the limit lands at its byte offset.
+    probe.run(10, {{float(kLimit + 128), 4242, 0, 0}});
+    const std::vector<uint8_t> past = gpu.read_buffer(buffer.Get(), 2, (kLimit + 128) * 2);
+    uint16_t stored;
+    std::memcpy(&stored, past.data(), 2);
+    CHECK_EQ(stored, 4242);
     const std::vector<uint8_t> bytes = gpu.read_buffer(buffer.Get(), 64);
     uint16_t halves[32];
     std::memcpy(halves, bytes.data(), 64);
     CHECK_EQ(halves[20], 55);
     CHECK_EQ(halves[10], 1234);
 
-    // A view that starts inside the buffer and ends past the limit keeps its first elements.
-    srv.Buffer.FirstElement = 16;
-    srv.Buffer.NumElements = static_cast<UINT>(kElements - 16);
+    // A view that starts inside the buffer and ends past the limit reads both sides of the limit.
+    srv.Buffer.FirstElement = 32;  // float coordinates are exact to 32 elements above 2^28
+    srv.Buffer.NumElements = static_cast<UINT>(kElements - 32);
     probe.set_srv(4, buffer.Get(), srv);
-    const std::vector<Float4> offset = probe.run(5, {{float(kLimit - 32 - 16), 0, 0, 0}});
+    const std::vector<Float4> offset = probe.run(5, {{float(kLimit - 32 - 32), 0, 0, 0},
+                                                      {float(kLimit + 64 - 32), 0, 0, 0},
+                                                      {float(kElements - 32 - 32), 0, 0, 0}});
     CHECK_EQ(int(offset[0].x), 4321);
+    CHECK_EQ(int(offset[1].x), 999);
+    CHECK_EQ(int(offset[2].x), 777);
 
     std::printf("p_large_buffers: PASS\n");
     return 0;

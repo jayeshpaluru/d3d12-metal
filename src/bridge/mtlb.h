@@ -516,7 +516,9 @@ typedef struct mtlb_render_target_blend {
     uint32_t write_mask;                                   /* bit0=R .. bit3=A */
 } mtlb_render_target_blend;
 
-#define MTLB_MAX_ROOT_PARAMETERS 64
+/* The application's 64 at most, plus what the layer appends (a static sampler table, a window table per descriptor
+ * table). */
+#define MTLB_MAX_ROOT_PARAMETERS 160
 
 /* Where one root parameter lives in the top-level argument buffer. */
 typedef struct mtlb_root_parameter_layout {
@@ -536,6 +538,19 @@ typedef struct mtlb_root_signature_layout {
 MTLB_EXPORT mtlb_result mtlb_root_signature_create(mtlb_device device, const void *blob, uint64_t size,
                                                    mtlb_root_signature *out, mtlb_root_signature_layout *layout);
 MTLB_EXPORT void mtlb_root_signature_destroy(mtlb_root_signature root_signature);
+
+/* Typed buffer windows. A Metal texture buffer holds at most 2^MTLB_TYPED_WINDOW_BITS elements; a typed buffer view
+ * with more gets MTLB_TYPED_WINDOWS more descriptors ("windows"), the views of the same buffer from element
+ * w * 2^MTLB_TYPED_WINDOW_BITS (w = 1..3), which a heap keeps in a window table beside its descriptors: entry
+ * 3 * i + (w - 1) for descriptor i. Shaders that access typed buffers are rewritten to reach elements past the first
+ * window through them (dxilconv_window_typed_buffers): register r of space s becomes register 3 * r + (w - 1) of space
+ * s + MTLB_WINDOW_SPACE_OFFSET, which `windowed`, the root signature with a window table for each descriptor table of
+ * `base` (appended after base's parameters, whose layout it keeps), declares. Pipelines built against `base` use
+ * `windowed` for the shaders that need it. `windowed` must outlive `base`. */
+#define MTLB_TYPED_WINDOW_BITS 28
+#define MTLB_TYPED_WINDOWS 3
+#define MTLB_WINDOW_SPACE_OFFSET 0x1000
+MTLB_EXPORT mtlb_result mtlb_root_signature_set_windowed(mtlb_root_signature base, mtlb_root_signature windowed);
 
 typedef struct mtlb_pipeline_desc {
     /* DXIL blobs; a missing stage has size 0. */
@@ -750,7 +765,7 @@ MTLB_ASSERT_SIZE(mtlb_input_element, 56);
 MTLB_ASSERT_SIZE(mtlb_stencil_face, 16);
 MTLB_ASSERT_SIZE(mtlb_render_target_blend, 32);
 MTLB_ASSERT_SIZE(mtlb_root_parameter_layout, 8);
-MTLB_ASSERT_SIZE(mtlb_root_signature_layout, 520);
+MTLB_ASSERT_SIZE(mtlb_root_signature_layout, 1288);
 MTLB_ASSERT_SIZE(mtlb_pipeline_desc, 2240);
 MTLB_ASSERT_SIZE(mtlb_compute_pipeline_desc, 32);
 MTLB_ASSERT_SIZE(mtlb_swapchain_desc, 24);

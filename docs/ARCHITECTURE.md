@@ -206,6 +206,24 @@
   them, an emulated one skips draws whose topology does not match (patch lists need the hull shader's control point count).
 - **Statistics.** `mtlb_stats` carries the GPU time of completed command buffers; `D3D12METAL_STATS=1` prints it with the frame rate.
 
+## Milestone 8 design
+
+- **Typed buffer windows.** A Metal texture buffer (what the converter uses for `Buffer<T>`/`RWBuffer<T>`) holds 2^28 elements. A typed
+  buffer view with more gets three more descriptors, its *windows*: views of the same buffer from element w * 2^28 (w = 1..3), so views
+  up to 2^30 elements are covered. Every CBV/SRV/UAV heap has a window table beside its descriptors (entry 3 * i + w - 1 for descriptor i;
+  shader-visible heaps from the start, others when a windowed view is first written into them); `CreateShaderResourceView` /
+  `CreateUnorderedAccessView` write the windows of big views and the copies carry them (`ViewInfo::windowed`); a view without
+  windows that replaces a windowed one points its entries at a null view. Other descriptors never touch the window table.
+- **Shaders.** `dxilconv_window_typed_buffers` (third_party/dxilconv, libdxilconv.dylib) rewrites every typed buffer load, store and
+  atomic of a shader: an index below 2^28 takes the original access, a higher one the access of window min(index >> 28, 3) at the local
+  index, through a resource that declares the windows of register r of space s as register 3 * r + w - 1 of space s + 0x1000
+  (`MTLB_WINDOW_SPACE_OFFSET`). Only shaders whose PSV0 (DXIL) or RDEF (DXBC) lists a typed buffer are rewritten, and only their shader cache
+  keys change. Handles from `ResourceDescriptorHeap` (SM 6.6 dynamic resources) are not rewritten.
+- **Root signatures.** Each root signature gets a windowed variant: the application's parameters (at the same argument buffer offsets) and,
+  after them, a window table per descriptor table with SRV or UAV ranges (ranges scaled by 3, space + 0x1000). Rewritten shaders are converted
+  against it (`mtlb_root_signature_set_windowed`); `SetXRootDescriptorTable` also writes the window table's address (the heap's window
+  table at 3 times the table's offset). `typed_windows=0` (D3D12METAL_TYPED_WINDOWS=0) turns it all off.
+
 ## Wine build
 
 Under Wine the layer is two halves in one process (one address space):
