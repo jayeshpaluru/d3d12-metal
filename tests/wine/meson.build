@@ -74,7 +74,7 @@ else
 
   # Compute shaders shared with the native tests.
   wine_compute_headers = {}
-  foreach shader : ['noop', 'probe', 'fill', 'msaa_read', 'embedded_rs']
+  foreach shader : ['noop', 'probe', 'fill', 'msaa_read', 'embedded_rs', 'atomics']
     wine_compute_headers += {shader: custom_target(
       shader + '_cs',
       input: '../shaders/' + shader + '.hlsl',
