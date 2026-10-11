@@ -46,8 +46,10 @@ Buffer *find_buffer(Device *device, uint64_t address, uint64_t *offset)
 
 void commit_residency(Device *device)
 {
-    if (device->residency_dirty.exchange(false))
+    if (device->residency_dirty.exchange(false)) {
+        std::lock_guard<std::mutex> lock(device->residency_mutex);
         [device->residency commit];
+    }
 }
 
 

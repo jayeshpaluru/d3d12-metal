@@ -130,13 +130,18 @@ struct Device {
     id<MTLBuffer> null_buffer = nil;
     id<MTLTexture> null_textures[kNullKinds] = {};
 
+    // A residency set takes no concurrent writes: resources come and go on application threads while queue workers
+    // commit (commit_residency).
+    std::mutex residency_mutex;
     void add_resident(id<MTLAllocation> allocation)
     {
+        std::lock_guard<std::mutex> lock(residency_mutex);
         [residency addAllocation:allocation];
         residency_dirty = true;
     }
     void remove_resident(id<MTLAllocation> allocation)
     {
+        std::lock_guard<std::mutex> lock(residency_mutex);
         [residency removeAllocation:allocation];
         residency_dirty = true;
     }
@@ -318,6 +323,7 @@ struct Queue {
     // signals append to it and commit it (see queue.mm).
     std::mutex mutex;
     id<MTLCommandBuffer> open = nil;
+    bool manual_commit = false;  // submits and signals leave the buffer open; mtlb_queue_commit ends it
     std::atomic<uint64_t> render_passes{0};
 
     // Orders encoders on this queue: resources are reached through GPU addresses and descriptor
