@@ -369,3 +369,30 @@ Performance findings (Spider-Man, gameplay scene, `tools/game/measure.sh`):
 - Debugging switches: `D3D12METAL_DUMP_SHADERS=<dir>` (every pipeline shader as DXIL, for `dxc -dumpbin`), `D3D12METAL_DUMP_PRESENT_EVERY=K`
   (every Kth present after `D3D12METAL_DUMP_PRESENT_FRAME`), `D3D12METAL_SERIALIZE=1` (each submission completes before the next),
   `D3D12METAL_GDEFLATE_DUMP`.
+
+## Milestone 10: performance (Spider-Man 2)
+
+Measured on SELECT PROFILE (no input: `tools/game/menu-scene.sh`, `menu-measure.sh`, `menu-ab.sh`, which stop only the game they started and
+only at the menu) and briefly in the open world (Saved Game 1). The menu background is a slideshow of camera shots that follows the latest
+save, so samples are 90 s long and every result names the shot it started on.
+- **Timeline** (`D3D12METAL_TIMELINE`, ARCHITECTURE.md "Milestone 10 design"). Sunset, the user's settings (FSR, dynamic resolution target
+  30 fps): 30 fps, GPU busy 23 of 33 ms per frame. After each Present the game's Submit Thread made no D3D12 call for ~19 ms and the GPU sat
+  idle ~14 ms: no fence wait through the layer (fence observation is 0.2 ms after the GPU), but 8-10 ms per frame of `ExecuteCommandLists`
+  encode on that thread, and a busy-wait experiment showed ~55% of submit time on the critical path. Day shot: GPU-bound (busy 18.3 of 20.3 ms),
+  43 command buffers per frame, half of them a lone signal that started ~0.3 ms after the work before it.
+- **Asynchronous submission** and **deferred commits**: sunset at the user's settings 28.5 -> 33.7 fps; dynamic resolution then raises the
+  internal resolution (the night shot's G-buffer reached the full 1136x640). Command buffers per frame 46 -> 27, GPU busy 84% -> 90%.
+  At a fixed resolution (dynamic resolution off) the menu is GPU-bound and both builds give ~39.7 fps (sunset).
+- **Open world** (Saved Game 1, standing, fixed resolution, M10): 50.8 fps, GPU busy 14.0 of 19.7 ms; busiest game threads 66% and 61%.
+- **Missing text** (menu labels, minimap) for minutes in 2 of ~12 boots: the first-use clear of placed targets ran on the copy queue after the
+  direct queue had drawn glyph atlases. Fixed (clears go with the first submission that uses the target); every GDeflate stream of a boot
+  (872) was verified identical to the reference decoder, so decompression was not the cause.
+- **GDeflate** (`p_gdeflate --bench`, idle GPU): three-symbol data 2.6 -> 3.0 GB/s (level 1), 4.0 -> 5.25 GB/s (level 6); text-like and
+  stored data unchanged.
+- **Video memory budget**: 90% of `recommendedMaxWorkingSetSize` (~19 GB on 32 GB) is already reported; not a streaming limit.
+- **Edges**: the game window is 1134x637 Windows pixels and Wine's RetinaMode is off, so the back buffer is scaled 2x by Core Animation on a
+  Retina display; with dynamic resolution at ~30 fps the internal resolution was 576x320-784x440 (FSR then upscales ~2x). The jaggies are
+  resolution: higher fps lets dynamic resolution raise it; RetinaMode or a larger window would render more pixels at a GPU cost.
+- Fixed on the way: unsynchronised residency-set writes (validation abort with several queues), the code-review findings on async submission.
+- Tools: `D3D12METAL_PROFILE_ROWS`, `tools/game/shot.sh` (present dumps on request, works with the session locked), `tools/game/settings.sh`
+  (graphics settings backup/restore), keys.exe `press`/`release`/`move`/`cursor`.

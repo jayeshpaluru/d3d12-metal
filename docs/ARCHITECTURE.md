@@ -240,11 +240,24 @@
   queued behind the present and registers its fence wait once encoded. `CommandQueue::flush()` waits for every enqueued op: it runs before
   `ResizeBuffers`, in `~SwapChain` and `~CommandQueue` (which then joins the worker), and `handle()` (direct bridge access) flushes first.
 - **Deferred commits.** The worker sets `mtlb_queue_set_manual_commit`: submits and signals leave the queue's command buffer open and the worker
-  calls `mtlb_queue_commit` after a run of signals (before any other op, so the fence mirror is not delayed) and before it blocks (no more ops
-  queued, checked with `mtlb_notify_pending`). `flush()` also calls `mtlb_queue_commit` once the ops are executed, so it guarantees committed
+  calls `mtlb_queue_commit` after a run of signals (before any other op, so the fence mirror is not delayed), after 4 submits without one
+  (a long run of submits still reaches the GPU) and before it blocks (no more ops queued, checked with `mtlb_notify_pending`). `flush()` also calls `mtlb_queue_commit` once the ops are executed, so it guarantees committed
   work. An Execute+Signal pair is one command buffer instead of two; present commits the open buffer before it waits for the drawable
   (so earlier work never waits behind `nextDrawable`), then encodes itself in a new buffer and commits.
 - **Switch.** `async_submit=0` (`D3D12METAL_ASYNC_SUBMIT=0`) executes every op inline on the calling thread, as before.
+- **Residency.** Writes to the device's `MTLResidencySet` (resources created and destroyed on application threads, commits from queue workers)
+  are serialised by a mutex; the dirty flag is cleared under it, so no queue commits a buffer before the set is committed.
+- **First-use clears of placed targets** go with the first submission whose lists reference the resource (`ObjectRefs`: barriers, render
+  targets and copies all name it), on that queue, ahead of that use; a submission on another queue would run the clear in no order with the
+  first drawing (Spider-Man 2's copy queue wiped glyph atlases that way).
+- **GDeflate match copies** run in batches: a match is ready once no pending match of a lower lane writes what it reads, and the bytes of all
+  ready matches are dealt to the 32 lanes with one SIMD-group barrier per batch.
+- **Frame timeline.** `D3D12METAL_TIMELINE=<file.json>` records, for `D3D12METAL_TIMELINE_FRAMES` presents from
+  `D3D12METAL_TIMELINE_START` (or from when `<file>.go` appears), the backend's calls per thread (submits, signals, waits, presents,
+  `nextDrawable`, CPU fence waits, notifications), front-end points (`mtlb_timeline_mark`: fence polls that see a new value, CPU signals,
+  `SetEventOnCompletion`, `WaitForVBlank`) and each command buffer's GPU interval per queue, as Chrome trace JSON.
+  `tools/timeline_summary.py` (GPU busy and idle gaps, commit-to-start latency, CPU per call and thread) and `tools/timeline_fences.py`
+  (fence latency, what unblocks the submitting thread) read it.
 
 ## Wine build
 
