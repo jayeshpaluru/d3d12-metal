@@ -60,10 +60,10 @@ cd "$godot_dir" || exit 2
 "$WINE_ROOT/bin/wine" "$exe" --rendering-driver d3d12 --rendering-method "$method" \
     --path "$root/tests/godot/project" -- --frames="$frames" --out="Z:$shot" >"$log" 2>&1 &
 pid=$!
-( sleep 240; kill -9 "$pid" 2>/dev/null ) &
+( sleep 240; kill -9 "$pid" 2>/dev/null ) >/dev/null 2>&1 &
 watchdog=$!
 wait "$pid"
-kill "$watchdog" 2>/dev/null
+pkill -P "$watchdog" 2>/dev/null; kill "$watchdog" 2>/dev/null
 wait "$watchdog" 2>/dev/null
 
 failures=0

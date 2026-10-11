@@ -54,11 +54,11 @@ run_limited() {
     shift 2
     "$@" >"$log" 2>&1 &
     local pid=$!
-    ( sleep "$limit"; kill -9 "$pid" 2>/dev/null ) &
+    ( sleep "$limit"; kill -9 "$pid" 2>/dev/null ) >/dev/null 2>&1 &
     local watchdog=$!
     wait "$pid"
     local status=$?
-    kill "$watchdog" 2>/dev/null
+    pkill -P "$watchdog" 2>/dev/null; kill "$watchdog" 2>/dev/null
     wait "$watchdog" 2>/dev/null
     return $status
 }
