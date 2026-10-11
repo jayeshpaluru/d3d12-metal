@@ -5,7 +5,7 @@
 # (tools/build-wine.sh) unless --no-layer.
 #
 # Usage: tools/build-app.sh [--no-layer] [--debug]
-# The app name comes from app/Sources/Core/AppInfo.swift (AppInfo.name), the single place to rename the product.
+# The app name comes from app/Sources/AlloyCore/AppInfo.swift (AppInfo.name), the single place to rename the product.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -19,9 +19,9 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-name="$(sed -n 's/.*static let name = "\(.*\)".*/\1/p' "$root/app/Sources/Core/AppInfo.swift" | head -1)"
-version="$(sed -n 's/.*static let version = "\(.*\)".*/\1/p' "$root/app/Sources/Core/AppInfo.swift" | head -1)"
-bundle_id="$(sed -n 's/.*static let bundleIdentifier = "\(.*\)".*/\1/p' "$root/app/Sources/Core/AppInfo.swift" | head -1)"
+name="$(sed -n 's/.*static let name = "\(.*\)".*/\1/p' "$root/app/Sources/AlloyCore/AppInfo.swift" | head -1)"
+version="$(sed -n 's/.*static let version = "\(.*\)".*/\1/p' "$root/app/Sources/AlloyCore/AppInfo.swift" | head -1)"
+bundle_id="$(sed -n 's/.*static let bundleIdentifier = "\(.*\)".*/\1/p' "$root/app/Sources/AlloyCore/AppInfo.swift" | head -1)"
 app="$root/build-app/$name.app"
 out="$root/build-wine/out"
 
@@ -31,8 +31,8 @@ bin="$(cd "$root/app" && swift build -c "$config" --show-bin-path 2>/dev/null)"
 
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources/bin" "$app/Contents/Resources/licenses"
-cp "$bin/D3D12MetalApp" "$app/Contents/MacOS/D3D12MetalApp"
-cp "$bin/d3d12metal" "$app/Contents/Resources/bin/d3d12metal"
+cp "$bin/AlloyApp" "$app/Contents/MacOS/AlloyApp"
+cp "$bin/alloy" "$app/Contents/Resources/bin/alloy"
 
 # The profiles, licences and the x86-64 CPU probe (run under Rosetta by `doctor`).
 cp -R "$root/profiles" "$app/Contents/Resources/profiles"
@@ -62,12 +62,12 @@ cat > "$app/Contents/Info.plist" <<EOF
     <key>CFBundleName</key><string>$name</string>
     <key>CFBundleDisplayName</key><string>$name</string>
     <key>CFBundleIdentifier</key><string>$bundle_id</string>
-    <key>CFBundleExecutable</key><string>D3D12MetalApp</string>
+    <key>CFBundleExecutable</key><string>AlloyApp</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>$version</string>
     <key>CFBundleVersion</key><string>$version</string>
-    <key>LSMinimumSystemVersion</key><string>14.0</string>
+    <key>LSMinimumSystemVersion</key><string>15.0</string>
     <key>LSApplicationCategoryType</key><string>public.app-category.games</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSHumanReadableCopyright</key><string>LGPL-2.1-or-later</string>
@@ -75,7 +75,7 @@ cat > "$app/Contents/Info.plist" <<EOF
 </plist>
 EOF
 
-# Ad-hoc signature (no developer account needed; Gatekeeper still asks on first open of a downloaded copy).
+# Ad-hoc signature (no developer account: you build and run this yourself; it is not notarized or distributed).
 codesign --force --deep -s - "$app"
 codesign --verify --deep --strict "$app" && echo "signed (ad hoc)"
 echo "built $app"

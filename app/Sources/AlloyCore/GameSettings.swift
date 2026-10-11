@@ -84,7 +84,10 @@ public struct GameSettings: Codable, Equatable, Sendable {
 
 /// Builds the text of d3d12metal.conf from a profile, the user's settings and the log directory.
 public enum ConfBuilder {
-    public static let marker = "# managed by d3d12metal"
+    public static let marker = "# managed by alloy"
+    static let legacyMarker = "# managed by d3d12metal"
+    /// True for a conf file this tool wrote (also by its old name).
+    public static func isManaged(_ text: String) -> Bool { text.hasPrefix(marker) || text.hasPrefix(legacyMarker) }
 
     public static func entries(profile: Profile, settings: GameSettings, logDir: URL?) -> [(String, String)] {
         var kv: [String: String] = [:]

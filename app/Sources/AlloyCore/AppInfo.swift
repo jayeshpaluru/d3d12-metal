@@ -3,26 +3,51 @@ import Foundation
 
 /// Names and versions used everywhere. The product name is a single constant so it can change.
 public enum AppInfo {
-    public static let name = "D3D12 Metal"
-    public static let cliName = "d3d12metal"
-    public static let bundleIdentifier = "org.d3d12metal.app"
+    public static let name = "Alloy"
+    public static let cliName = "alloy"
+    public static let bundleIdentifier = "dev.alloy.Alloy"
     public static let version = "0.9.0"
     /// The Wine build used by default (Gcenx macOS_Wine_builds release tag).
     public static let defaultWineVersion = "11.18"
 }
 
-/// Everything the tools keep on disk lives under one directory (override: D3D12METAL_HOME).
+/// Settings from the environment of the app and tools: `ALLOY_<KEY>`, with `D3D12METAL_<KEY>` (the old name) as a fallback.
+/// (The translation layer's own options stay `D3D12METAL_*`: they are read by the layer, not by these tools.)
+public enum AlloyEnv {
+    public static func get(_ key: String, environment: [String: String] = ProcessInfo.processInfo.environment) -> String? {
+        for name in ["ALLOY_" + key, "D3D12METAL_" + key] {
+            if let v = environment[name], !v.isEmpty { return v }
+        }
+        return nil
+    }
+}
+
+/// Everything the tools keep on disk lives under one directory (override: ALLOY_HOME).
 public struct Paths: Sendable {
     public let home: URL
 
     public init(home: URL) { self.home = home }
 
     public static var `default`: Paths {
-        if let env = ProcessInfo.processInfo.environment["D3D12METAL_HOME"], !env.isEmpty {
+        if let env = AlloyEnv.get("HOME") {
             return Paths(home: URL(fileURLWithPath: (env as NSString).expandingTildeInPath))
         }
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        return Paths(home: support.appendingPathComponent("D3D12Metal"))
+        migrateLegacyHome(in: support)
+        return Paths(home: support.appendingPathComponent("Alloy"))
+    }
+
+    /// The product used to be called "D3D12 Metal" (data in .../D3D12Metal): move that folder to .../Alloy and fix the
+    /// absolute prefix paths in bottles.json.
+    static func migrateLegacyHome(in support: URL) {
+        let fm = FileManager.default
+        let old = support.appendingPathComponent("D3D12Metal"), new = support.appendingPathComponent("Alloy")
+        guard fm.fileExists(atPath: old.path), !fm.fileExists(atPath: new.path) else { return }
+        do { try fm.moveItem(at: old, to: new) } catch { return }
+        let bottles = new.appendingPathComponent("bottles.json")
+        if let text = try? String(contentsOf: bottles, encoding: .utf8) {
+            try? text.replacingOccurrences(of: old.path, with: new.path).write(to: bottles, atomically: true, encoding: .utf8)
+        }
     }
 
     public var runtimeDir: URL { home.appendingPathComponent("runtime") }

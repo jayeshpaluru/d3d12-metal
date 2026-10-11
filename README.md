@@ -1,13 +1,13 @@
-# D3D12 Metal
+# Alloy
 
-Play Windows **Direct3D 12** games on Apple Silicon Macs. A from-scratch Direct3D 12 and DXGI implementation on top of Metal that runs inside
-[Wine](https://www.winehq.org), with a native Mac app and a command line tool to set everything up: Wine, a Steam bottle, the layer in each game, per-game settings and
-diagnostics.
+Play Windows **Direct3D 12** games on Apple Silicon Macs. Alloy is a from-scratch Direct3D 12 and DXGI implementation on top of Metal (the *Alloy translation
+layer*, internally still called `d3d12metal`) that runs inside [Wine](https://www.winehq.org), with a native Mac app and a command line tool that set everything up: Wine, a
+Steam bottle, the layer in each game, per-game settings and diagnostics.
 
 The layer ships replacement `d3d12.dll` / `dxgi.dll`; games run unmodified. No game code or assets are part of this project.
 
 > **Status: early.** Spider-Man Remastered is playable (about 55 to 60 fps on an M2 Max). Other games range from "boots" to "untested": see
-> [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md). Expect rough edges. The working name "D3D12 Metal" is a single constant and may change.
+> [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md). Expect rough edges. Alloy is **build-it-yourself**: there are no binary downloads, you compile it on your Mac (one command, below).
 
 ![Library](docs/images/library.png)
 
@@ -18,23 +18,32 @@ The layer ships replacement `d3d12.dll` / `dxgi.dll`; games run unmodified. No g
 
 ## Requirements
 
-- A Mac with **Apple Silicon** and **macOS 14 or newer** (macOS 15+ recommended: Rosetta's AVX2 support, which most modern games require, arrived there).
-- **Rosetta 2** (`softwareupdate --install-rosetta`). Wine runs as x86-64 code.
-- **Apple's Metal Shader Converter**, installed from [Apple's developer site](https://developer.apple.com/metal/shader-converter/). Apple's terms do not let us include it, so
-  every user installs it once (a free developer download). The app and `d3d12metal doctor` check for it.
-- About 1 GB for Wine and the bottle, plus your games.
-- To build from source: the Xcode Command Line Tools, `brew install meson ninja mingw-w64 directx-headers`, a DXC build; see [docs/DEVELOPING.md](docs/DEVELOPING.md).
-  There are no binary releases yet.
+To run:
 
-## Install
+- A Mac with **Apple Silicon** and **macOS 15 or newer**. (Rosetta's AVX2 support, which most modern games require, arrived in macOS 15; macOS 14 can build and run simpler games.)
+- **Rosetta 2** (`softwareupdate --install-rosetta`). Wine runs as x86-64 code.
+- **Apple's Metal Shader Converter**, installed from [Apple's developer site](https://developer.apple.com/metal/shader-converter/) (a free download). Apple's terms do not let us
+  include it, so every user installs it once. The app and `alloy doctor` check for it.
+- About 1 GB for Wine and the bottle, plus your games. **Wine** itself is downloaded by Alloy on first run (a pinned, checksum-verified Gcenx build); you do not install it.
+
+To build (all of it is done by `tools/bootstrap.sh`, except the first two items):
+
+- **Xcode** in `/Applications` (only for SwiftUI's macro plug-in: it need not be selected or licensed) and the **Xcode Command Line Tools**.
+- Apple's Metal Shader Converter (above), needed to build and to run the layer.
+- Homebrew packages `meson ninja cmake mingw-w64 directx-headers` (the script installs them).
+- A **DirectXShaderCompiler** checkout and build (the HLSL compiler for the tests and the DXBC converter; the script fetches and builds it: 30 to 60 minutes the first time).
+
+## Build it yourself
 
 ```sh
 git clone <this repository> && cd d3d12-metal
-tools/build-dxilconv.sh                 # once: the DXBC converter (needs a DirectXShaderCompiler checkout, see DEVELOPING.md)
-tools/build-wine.sh --dxc <path to dxc> # the layer: d3d12.dll, dxgi.dll, d3d12metal.so
-tools/build-app.sh                      # build-app/D3D12 Metal.app (ad-hoc signed) with the CLI and the layer inside
-open "build-app/D3D12 Metal.app"
+tools/bootstrap.sh            # checks the machine, installs the brew packages, builds DXC if missing, the layer and the app
+open build-app/Alloy.app
 ```
+
+`tools/bootstrap.sh --help` lists the options (`--yes` to run unattended, `--no-app`, `--deps DIR`). Every step is skipped when its result exists, so it is safe to run again.
+The steps by hand are in [docs/DEVELOPING.md](docs/DEVELOPING.md): `tools/build-dxilconv.sh`, `tools/build-wine.sh --dxc <dxc>`, `tools/build-app.sh`. The app is ad-hoc signed
+and not notarized: it is meant to be built and run on the same Mac.
 
 The first start opens the **Setup Assistant**: it checks Rosetta, points you to Metal Shader Converter, downloads Wine (checksum verified), creates a bottle, installs Steam and
 starts it so you can sign in. Install your games in Steam; they show up in the Library.
@@ -47,18 +56,18 @@ GPU decompression, logging, extra arguments and environment. **Report a Problem*
 From a terminal (everything the app does; `--json` for scripts):
 
 ```sh
-d3d12metal setup                 # Wine, bottle, Steam
-d3d12metal doctor                # what is missing and how to fix it
-d3d12metal steam start
-d3d12metal library               # games found in the bottles
-d3d12metal launch 1817070        # install the layer if needed, run first-launch setup, start the game
-d3d12metal config 1817070 --hud on
-d3d12metal logs 1817070
-d3d12metal report 1817070        # zip for a bug report
-d3d12metal uninstall 1817070     # restores every file it replaced
+alloy setup                 # Wine, bottle, Steam
+alloy doctor                # what is missing and how to fix it
+alloy steam start
+alloy library               # games found in the bottles
+alloy launch 1817070        # install the layer if needed, run first-launch setup, start the game
+alloy config 1817070 --hud on
+alloy logs 1817070
+alloy report 1817070        # zip for a bug report
+alloy uninstall 1817070     # restores every file it replaced
 ```
 
-A game that is not in Steam: `d3d12metal game add --name "My Game" --folder <dir> --exe Game.exe`. More in [docs/USER_GUIDE.md](docs/USER_GUIDE.md).
+A game that is not in Steam: `alloy game add --name "My Game" --folder <dir> --exe Game.exe`. More in [docs/USER_GUIDE.md](docs/USER_GUIDE.md).
 
 ## Tested games
 
@@ -73,11 +82,11 @@ Details and what each needs: [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md). Per
 
 ## Troubleshooting
 
-- **A game does not start, or says no GPU was found.** Run `d3d12metal doctor`. In the game's settings try GPU identity "AMD" or "NVIDIA".
+- **A game does not start, or says no GPU was found.** Run `alloy doctor`. In the game's settings try GPU identity "AMD" or "NVIDIA".
 - **"Rosetta does not advertise AVX2".** Use macOS 15 or newer. The app sets `ROSETTA_ADVERTISE_AVX=1` for Wine and the games itself.
-- **Steam's window is black.** Use `Steam > Start` in the app (or `d3d12metal steam start`): it installs a small helper that makes Steam's browser draw under Wine.
+- **Steam's window is black.** Use `Steam > Start` in the app (or `alloy steam start`): it installs a small helper that makes Steam's browser draw under Wine.
 - **First start takes minutes, later ones seconds.** The first run compiles the game's shaders; they are cached (`Preferences > Clear Shader Cache` resets them).
-- **Logs.** The game page has **Open Logs**; `d3d12metal logs <game>`. For a bug report use **Report a Problem**.
+- **Logs.** The game page has **Open Logs**; `alloy logs <game>`. For a bug report use **Report a Problem**.
 
 ## Documentation
 

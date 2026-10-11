@@ -26,4 +26,4 @@ correct implementation), not a check for the game's name.
 
 ## Reporting bugs
 
-Use the app's **Report a Problem** (or `d3d12metal report <game>`) and attach the zip; it has personal paths removed, but look inside first.
+Use the app's **Report a Problem** (or `alloy report <game>`) and attach the zip; it has personal paths removed, but look inside first.

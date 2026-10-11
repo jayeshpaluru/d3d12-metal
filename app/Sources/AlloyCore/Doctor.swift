@@ -52,7 +52,7 @@ public enum Doctor {
     /// The x86-64 helper that prints the CPU features Rosetta advertises (Resources/cpuprobe.c, built by tools/build-app.sh).
     static func cpuProbe() -> URL? {
         var candidates = ResourceLocator.urls("cpuprobe")
-        if let env = ProcessInfo.processInfo.environment["D3D12METAL_CPUPROBE"] { candidates.insert(URL(fileURLWithPath: env), at: 0) }
+        if let env = AlloyEnv.get("CPUPROBE") { candidates.insert(URL(fileURLWithPath: env), at: 0) }
         if let root = SourceTree.find() { candidates.append(root.appendingPathComponent("build-app/cpuprobe")) }
         if let found = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0.path) }) { return found }
         // A development checkout: build it once.
@@ -149,7 +149,7 @@ public enum Doctor {
             let steam = SteamLibrary.steamDirectory(prefix: b.prefix).appendingPathComponent("steam.exe")
             let has = FileManager.default.fileExists(atPath: steam.path)
             return Check(id: "steam-\(b.name)", title: "Bottle \"\(b.name)\"", level: has ? .ok : .info,
-                         detail: has ? "Steam installed" + (SteamClient.isRunning ? ", running" : ", not running") : "no Steam in this bottle",
+                         detail: has ? "Steam installed" + (SteamClient.isRunning(in: b) ? ", running" : ", not running") : "no Steam in this bottle",
                          fix: has ? nil : "\(AppInfo.cliName) steam install --bottle \(b.name)")
         }
     }

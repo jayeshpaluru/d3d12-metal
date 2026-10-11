@@ -28,11 +28,11 @@ public struct LayerBuild: Sendable, Equatable {
         return FileManager.default.fileExists(atPath: u.path) ? u : nil
     }
 
-    /// config.layerDir, D3D12METAL_LAYER_DIR, the app bundle, the managed copy, a source checkout (build-wine/out).
+    /// config.layerDir, ALLOY_LAYER_DIR, the app bundle, the managed copy, a source checkout (build-wine/out).
     public static func locate(paths: Paths, config: Config) -> LayerBuild? {
         var candidates: [URL] = []
         if let d = config.layerDir, !d.isEmpty { candidates.append(URL(fileURLWithPath: (d as NSString).expandingTildeInPath)) }
-        if let d = ProcessInfo.processInfo.environment["D3D12METAL_LAYER_DIR"], !d.isEmpty { candidates.append(URL(fileURLWithPath: d)) }
+        if let d = AlloyEnv.get("LAYER_DIR") { candidates.append(URL(fileURLWithPath: d)) }
         candidates += ResourceLocator.urls("layer")
         candidates.append(paths.layerDir)
         if let root = SourceTree.find() { candidates.append(root.appendingPathComponent("build-wine/out")) }
@@ -45,7 +45,7 @@ public enum SourceTree {
     public static func find() -> URL? {
         var starts = [URL(fileURLWithPath: FileManager.default.currentDirectoryPath)]
         starts.append(URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath().deletingLastPathComponent())
-        if let env = ProcessInfo.processInfo.environment["D3D12METAL_REPO"] { starts.insert(URL(fileURLWithPath: env), at: 0) }
+        if let env = AlloyEnv.get("REPO") { starts.insert(URL(fileURLWithPath: env), at: 0) }
         for start in starts {
             var dir = start
             for _ in 0..<8 {
@@ -202,7 +202,7 @@ public enum LayerInstaller {
     /// Rewrites only d3d12metal.conf (settings changed). The file must already be ours or absent.
     public static func updateConf(gameDir: URL, conf: String) throws {
         let url = gameDir.appendingPathComponent(confName)
-        if let old = try? String(contentsOf: url, encoding: .utf8), !old.hasPrefix(ConfBuilder.marker) {
+        if let old = try? String(contentsOf: url, encoding: .utf8), !ConfBuilder.isManaged(old) {
             throw CoreError("\(confName) in the game folder is not managed by \(AppInfo.name)", hint: "Install the layer first, which keeps a backup of it")
         }
         try conf.write(to: url, atomically: true, encoding: .utf8)

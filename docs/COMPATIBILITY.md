@@ -24,5 +24,5 @@ See [STATUS.md](STATUS.md) for the full list.
 
 ## Reporting a result
 
-Run `d3d12metal report <game>` (or **Report a Problem** in the app), and open an issue with the zip, the game, your Mac model and macOS version. A working
+Run `alloy report <game>` (or **Report a Problem** in the app), and open an issue with the zip, the game, your Mac model and macOS version. A working
 profile is the best contribution: [DEVELOPING.md](DEVELOPING.md#adding-a-game).

@@ -26,7 +26,7 @@ public final class Workspace: @unchecked Sendable {
     public static func profileDirectories(paths: Paths) -> [URL] {
         var dirs: [URL] = []
         dirs += ResourceLocator.urls("profiles")
-        if let env = ProcessInfo.processInfo.environment["D3D12METAL_PROFILES"], !env.isEmpty { dirs.append(URL(fileURLWithPath: env)) }
+        if let env = AlloyEnv.get("PROFILES") { dirs.append(URL(fileURLWithPath: env)) }
         if let root = SourceTree.find() { dirs.append(root.appendingPathComponent("profiles")) }
         dirs.append(paths.userProfilesDir)
         return dirs
@@ -82,7 +82,7 @@ public final class Workspace: @unchecked Sendable {
     @discardableResult
     public func installLayer(for game: Game, dryRun: Bool = false) throws -> [String] {
         guard let build = layerBuild else {
-            throw CoreError("No layer build found", hint: "Build it with tools/build-wine.sh, or set D3D12METAL_LAYER_DIR")
+            throw CoreError("No layer build found", hint: "Build it with tools/build-wine.sh, or set ALLOY_LAYER_DIR")
         }
         let profile = library.profile(for: game)
         let settings = self.settings(for: game)
@@ -164,6 +164,9 @@ public final class Workspace: @unchecked Sendable {
             if !st.installed || !st.upToDate {
                 progress(st.installed ? "Updating the layer" : "Installing the layer")
                 try installLayer(for: game)
+            } else {
+                // Keeps the conf (log paths, profile keys) current when the data folder moved or a profile changed.
+                try? LayerInstaller.updateConf(gameDir: game.gameDir, conf: confText(for: game, settings: settings))
             }
         }
         if runRequirements {
@@ -193,7 +196,7 @@ public final class Workspace: @unchecked Sendable {
         if profile.launch.mode == "steam", let appid = game.steamAppId {
             let steam = SteamClient(session: session, paths: paths)
             guard steam.isInstalled else { throw CoreError("Steam is not installed in bottle \"\(game.bottle)\"", hint: "`\(AppInfo.cliName) steam install`") }
-            if !SteamClient.isRunning {
+            if !steam.isRunning {
                 progress("Starting Steam")
                 _ = try steam.start(shim: layerBuild?.webhelperShim, extraEnv: env, logFile: paths.logsDir.appendingPathComponent("steam-\(Paths.safeName(game.bottle)).log"))
                 Thread.sleep(forTimeInterval: 45)   // the client must be up before -applaunch is forwarded to it
@@ -214,13 +217,19 @@ public final class Workspace: @unchecked Sendable {
 
     public func isRunning(_ game: Game) -> Bool { !gamePIDs(game).isEmpty }
 
+    /// Whether Steam runs in a bottle (not in another one).
+    public func steamRunning(bottleName: String) -> Bool {
+        bottles.bottle(named: bottleName).map { SteamClient.isRunning(in: $0) } ?? false
+    }
+
+    /// The game's processes in its own bottle: a process of the same exe in another bottle is not this game.
     func gamePIDs(_ game: Game) -> [Int32] {
         var pids = Shell.pids(named: game.exe)
         if pids.isEmpty {
             let escaped = NSRegularExpression.escapedPattern(for: game.exe)
             pids = Shell.pids(matching: "[\\\\\\\\/]\(escaped)( |$)")
         }
-        return pids
+        return ProcessScan.filter(pids, in: bottles.bottle(named: game.bottle))
     }
 
     /// Stops just the game (never wineserver, so Steam keeps running).

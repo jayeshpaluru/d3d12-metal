@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
-import Core
+import AlloyCore
 import Foundation
 
 // MARK: - Argument parsing
@@ -305,8 +305,8 @@ case "steam":
         emit(Message(message: "stopped", details: nil), text: "Asked Steam to exit.")
     case "status":
         struct S: Encodable { var installed: Bool; var running: Bool; var bottle: String }
-        emit(S(installed: steam.isInstalled, running: SteamClient.isRunning, bottle: bottleName()),
-             text: "Steam in \"\(bottleName())\": \(steam.isInstalled ? "installed" : "not installed"), \(SteamClient.isRunning ? "running" : "not running")")
+        emit(S(installed: steam.isInstalled, running: steam.isRunning, bottle: bottleName()),
+             text: "Steam in \"\(bottleName())\": \(steam.isInstalled ? "installed" : "not installed"), \(steam.isRunning ? "running" : "not running")")
     default: fail("unknown steam command", hint: helps["steam"])
     }
 

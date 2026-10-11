@@ -15,7 +15,10 @@ public struct SteamClient: Sendable {
     public var cefDir: URL { steamDir.appendingPathComponent("bin/cef/cef.win64") }
 
     /// Steam runs (any bottle: Wine renames the process, the Windows command line is what identifies it).
-    public static var isRunning: Bool { !Shell.pids(matching: "Steam\\\\steam\\.exe").isEmpty }
+    public static func isRunning(in bottle: Bottle) -> Bool {
+        !ProcessScan.filter(Shell.pids(matching: "Steam\\\\steam\\.exe"), in: bottle).isEmpty
+    }
+    public var isRunning: Bool { Self.isRunning(in: session.bottle) }
 
     /// Downloads Valve's installer (the user accepts Valve's terms in it) and installs silently.
     public func install(progress: @escaping @Sendable (Double, String) -> Void = { _, _ in }) async throws {
@@ -54,7 +57,7 @@ public struct SteamClient: Sendable {
     /// Starts Steam (returns once the process is launched). `extraEnv` is inherited by the games it starts.
     @discardableResult
     public func start(shim: URL?, extraEnv: [String: String] = [:], logFile: URL? = nil) throws -> Process {
-        guard isInstalled else { throw CoreError("Steam is not installed in bottle \"\(session.bottle.name)\"", hint: "d3d12metal steam install") }
+        guard isInstalled else { throw CoreError("Steam is not installed in bottle \"\(session.bottle.name)\"", hint: "\(AppInfo.cliName) steam install") }
         installWebhelperShim(shim: shim)
         var env = ["STEAMWEBHELPER_EXTRA": "--in-process-gpu"]
         for (k, v) in extraEnv { env[k] = v }

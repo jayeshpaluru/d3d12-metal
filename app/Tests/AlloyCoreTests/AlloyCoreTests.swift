@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 import Foundation
+import Darwin
 import Testing
-@testable import Core
+@testable import AlloyCore
 
 // MARK: - Helpers
 
@@ -417,6 +418,58 @@ let sampleACF = """
         #expect(throws: CoreError.self) { try lib.addCustom(name: "x", bottle: "b", folder: folder, exe: "missing.exe") }
         try lib.removeCustom(id: g.id)
         #expect(lib.customGames().isEmpty)
+    }
+
+    @Test func environmentPrefersNewNameAndFallsBackToOld() {
+        #expect(AlloyEnv.get("HOME", environment: ["ALLOY_HOME": "/a", "D3D12METAL_HOME": "/b"]) == "/a")
+        #expect(AlloyEnv.get("HOME", environment: ["D3D12METAL_HOME": "/b"]) == "/b")
+        #expect(AlloyEnv.get("HOME", environment: ["ALLOY_HOME": ""]) == nil)
+        #expect(AlloyEnv.get("HOME", environment: [:]) == nil)
+    }
+
+    @Test func legacyDataFolderIsMovedAndBottlePathsFixed() throws {
+        let support = try makeTempDir("support")
+        defer { try? FileManager.default.removeItem(at: support) }
+        let old = support.appendingPathComponent("D3D12Metal")
+        try FileManager.default.createDirectory(at: old.appendingPathComponent("bottles/Steam/prefix"), withIntermediateDirectories: true)
+        try "{\"x\":1}".write(to: old.appendingPathComponent("config.json"), atomically: true, encoding: .utf8)
+        let json = "[{\"name\":\"Steam\",\"prefixPath\":\"\(old.path)/bottles/Steam/prefix\",\"managed\":true}]"
+        try json.write(to: old.appendingPathComponent("bottles.json"), atomically: true, encoding: .utf8)
+        Paths.migrateLegacyHome(in: support)
+        let new = support.appendingPathComponent("Alloy")
+        #expect(!FileManager.default.fileExists(atPath: old.path))
+        #expect(FileManager.default.fileExists(atPath: new.appendingPathComponent("config.json").path))
+        let bottles = try String(contentsOf: new.appendingPathComponent("bottles.json"), encoding: .utf8)
+        #expect(bottles.contains(new.path + "/bottles/Steam/prefix") && !bottles.contains("D3D12Metal"))
+        // A second call, or an existing new folder, changes nothing.
+        try FileManager.default.createDirectory(at: old, withIntermediateDirectories: true)
+        Paths.migrateLegacyHome(in: support)
+        #expect(FileManager.default.fileExists(atPath: old.path))
+    }
+
+    @Test func serverDirectoryNameFollowsDeviceAndInode() throws {
+        let dir = try makeTempDir("prefix")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let name = try #require(ProcessScan.serverDirectoryName(prefix: dir))
+        let attrs = try FileManager.default.attributesOfItem(atPath: dir.path)
+        let ino = (attrs[.systemFileNumber] as? NSNumber)?.uint64Value ?? 0
+        #expect(name.hasPrefix("server-") && name.hasSuffix("-" + String(ino, radix: 16)))
+        #expect(ProcessScan.serverDirectoryName(prefix: dir.appendingPathComponent("missing")) == nil)
+    }
+
+    @Test func aProcessWithoutFilesInTheBottleIsNotInIt() throws {
+        let dir = try makeTempDir("prefix")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let bottle = Bottle(name: "t", prefixPath: dir.path, managed: false)
+        #expect(!ProcessScan.process(getpid(), belongsTo: bottle))
+        #expect(ProcessScan.filter([getpid()], in: bottle).isEmpty)
+        #expect(ProcessScan.filter([getpid()], in: nil) == [getpid()])
+    }
+
+    @Test func legacyConfMarkerCountsAsManaged() {
+        #expect(ConfBuilder.isManaged("# managed by alloy\nhud=1"))
+        #expect(ConfBuilder.isManaged("# managed by d3d12metal\nhud=1"))
+        #expect(!ConfBuilder.isManaged("hud=1"))
     }
 
     @Test func wineReleaseIsPinned() {

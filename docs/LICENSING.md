@@ -34,7 +34,7 @@ What we know:
 - Apple's Game Porting Toolkit, which also contains Apple libraries, restricts redistribution to its own terms.
 
 Decision: **treat it as not redistributable.** The layer links to it dynamically (rpath `/usr/local/lib`, where Apple's installer puts it) and the app has a setup step that detects it and, when missing, tells the user to download it from Apple
-(button opens the page; the user installs the `.pkg`). `d3d12metal doctor` checks for it. If Apple grants written permission to
+(button opens the page; the user installs the `.pkg`). `alloy doctor` checks for it. If Apple grants written permission to
 redistribute it, the only change needed is to copy the dylib into the app bundle and add its directory to the rpath of `d3d12metal.so`.
 
 Practical consequence: the x86-64 slice is needed (Wine runs under Rosetta). Apple's dylib is universal, so no
@@ -46,7 +46,7 @@ Wine is LGPL-2.1-or-later. Redistributing Wine builds is allowed if we ship the 
 Gcenx builds are already published that way (<https://github.com/Gcenx/macOS_Wine_builds>, sources at
 <https://gitlab.winehq.org/wine/wine>). We prefer **downloading the pinned release on first run** over bundling:
 the release then stays Gcenx's responsibility, the app stays small, and our binary needs no extra source offer. The
-download is verified against a SHA-256 pinned in the app (`Sources/Core/RuntimeManager.swift`). Our layer is a separate DLL pair plus a unix
+download is verified against a SHA-256 pinned in the app (`app/Sources/AlloyCore/Runtime.swift`). Our layer is a separate DLL pair plus a unix
 library loaded through Wine's documented PE/unix mechanism; we copy no Wine code.
 
 Gcenx builds also bundle components with their own licences (e.g. FreeType, MoltenVK, SDL); they live inside the downloaded app and
@@ -68,4 +68,5 @@ game's own platform must not be copied; the layer replaces it.
 - [x] THIRD_PARTY_NOTICES.md for everything compiled in
 - [x] No personal paths, ids or addresses in the repository (`tools/check.sh` greps for them)
 - [ ] Release archive includes `LICENSE`, `THIRD_PARTY_NOTICES.md`, `licenses/`
-- [ ] Decide on a name (the app name is the single constant `AppInfo.name`; check trademark issues with "Metal" and "D3D12")
+- [x] Product name: **Alloy** (the earlier working name used the trademarks "D3D12" and "Metal"; the single constant is `AppInfo.name`). The layer's internal names (`d3d12metal.so`, `d3d12metal.conf`, `D3D12METAL_*`) describe what it implements and stay.
+- Distribution is build-it-yourself: nothing is signed with a Developer ID or notarized, and no binaries are published, so there is no redistribution of Apple's or Valve's software to arrange

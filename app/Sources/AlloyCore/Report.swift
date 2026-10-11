@@ -32,8 +32,8 @@ public enum Report {
         let stamp: String = {
             let f = DateFormatter(); f.dateFormat = "yyyyMMdd-HHmmss"; return f.string(from: Date())
         }()
-        let name = "d3d12metal-report-\(stamp)"
-        let tmp = fm.temporaryDirectory.appendingPathComponent("d3d12metal-report-\(UUID().uuidString)")
+        let name = "alloy-report-\(stamp)"
+        let tmp = fm.temporaryDirectory.appendingPathComponent("alloy-report-\(UUID().uuidString)")
         let dir = tmp.appendingPathComponent(name)
         try fm.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: tmp) }

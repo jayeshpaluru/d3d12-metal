@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 import AppKit
-import Core
+import AlloyCore
 import SwiftUI
 
 /// What the library shows about one game.
@@ -48,12 +48,11 @@ final class AppModel: ObservableObject {
     init(ws: Workspace = Workspace()) {
         self.ws = ws
         showSetup = !ws.config.setupDone
-        // Start in a given place (screenshots, scripts): D3D12METAL_UI_SECTION=library|steam|bottles|health, D3D12METAL_UI_GAME=<game id>.
-        let env = ProcessInfo.processInfo.environment
-        section = SidebarItem(rawValue: (env["D3D12METAL_UI_SECTION"] ?? "").capitalized) ?? .library
-        if env["D3D12METAL_UI_SETUP"] == "0" { showSetup = false }
-        if env["D3D12METAL_UI_SETUP"] == "1" { showSetup = true }
-        initialGame = env["D3D12METAL_UI_GAME"]
+        // Start in a given place (screenshots, scripts): ALLOY_UI_SECTION=library|steam|bottles|health, ALLOY_UI_GAME=<game id>, ALLOY_UI_SETUP=0|1.
+                section = SidebarItem(rawValue: (AlloyEnv.get("UI_SECTION") ?? "").capitalized) ?? .library
+        if AlloyEnv.get("UI_SETUP") == "0" { showSetup = false }
+        if AlloyEnv.get("UI_SETUP") == "1" { showSetup = true }
+        initialGame = AlloyEnv.get("UI_GAME")
         refresh()
         timer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.pollRunning() }
@@ -74,7 +73,7 @@ final class AppModel: ObservableObject {
                 GameState(game: g, profile: ws.library.profile(for: g), layer: ws.layerStatus(for: g), running: ws.isRunning(g))
             }
             let bottles = ws.bottles.list()
-            let steam = SteamClient.isRunning
+            let steam = ws.steamRunning(bottleName: ws.config.defaultBottle)
             await MainActor.run {
                 self.games = list
                 self.bottles = bottles
@@ -93,7 +92,7 @@ final class AppModel: ObservableObject {
         let current = games
         Task.detached {
             let running = current.map { ws.isRunning($0.game) }
-            let steam = SteamClient.isRunning
+            let steam = ws.steamRunning(bottleName: ws.config.defaultBottle)
             await MainActor.run {
                 self.steamRunning = steam
                 for (i, r) in running.enumerated() where i < self.games.count && self.games[i].running != r { self.games[i].running = r }
@@ -243,8 +242,8 @@ final class AppModel: ObservableObject {
         perform("Restarting Steam") { _ in
             let steam = try ws.steam(bottleName: name)
             steam.stop()
-            for _ in 0..<20 where SteamClient.isRunning { try await Task.sleep(nanoseconds: 1_000_000_000) }
-            if SteamClient.isRunning { steam.forceStop() }
+            for _ in 0..<20 where steam.isRunning { try await Task.sleep(nanoseconds: 1_000_000_000) }
+            if steam.isRunning { steam.forceStop() }
             try steam.start(shim: ws.layerBuild?.webhelperShim, logFile: ws.paths.logsDir.appendingPathComponent("steam-\(Paths.safeName(name)).log"))
             return nil
         }

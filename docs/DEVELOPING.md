@@ -10,12 +10,16 @@ The user-facing documents are [README.md](../README.md) and [USER_GUIDE.md](USER
 |---|---|
 | `src/` | the layer: `d3d12/` and `dxgi/` front-end, `bridge/` (Metal backend and the Wine PE/unix transport), `common/`, `pe/` (the exports of the DLLs) |
 | `tests/` | native tests (arm64, headless Metal), portable tests that also build as Win32 programs, `tests/wine` Win32 samples, `tests/godot` |
-| `app/` | the Swift package: `Core` library, `d3d12metal` CLI, `D3D12MetalApp` (SwiftUI), tests |
+| `app/` | the Swift package: `AlloyCore` library, `alloy` CLI, `AlloyApp` (SwiftUI), tests |
 | `profiles/` | per-game profiles (JSON): launch options, conf keys, first-launch setup, notes |
 | `tools/` | build, test and dev scripts; `build-app.sh` makes the app bundle, `check.sh` runs everything |
 | `docs/` | documentation |
 
-## One command
+## One command from scratch
+
+`tools/bootstrap.sh` takes a fresh checkout to `build-app/Alloy.app` (brew packages, DXC, layer, app); see the README. The rest of this page is for working on the code.
+
+## One command to check
 
 ```sh
 tools/check.sh                 # personal-data grep, SPDX headers, profiles, native build + tests, swift build + swift test
@@ -128,13 +132,13 @@ tools/uninstall-game.sh          # restore backups, remove the overrides
 
 ## The Swift package (`app/`)
 
-`Core` (Foundation only, plus Metal for the GPU line of `doctor`) holds everything: Steam library parsing, the PE import scanner, the
+`AlloyCore` (Foundation only, plus Metal for the GPU line of `doctor`) holds everything: Steam library parsing, the PE import scanner, the
 profile database, bottles, the Wine runtime download, the layer installer, launching, diagnostics. The CLI and the app are thin shells over it.
 
 ```sh
 cd app && swift build            # debug build of everything
 swift test                       # Core tests (Swift Testing)
-.build/debug/d3d12metal --help
+.build/debug/alloy --help
 cd .. && tools/build-app.sh      # build-app/<name>.app, ad-hoc signed, with the CLI, layer, profiles and licences inside
 ```
 
@@ -145,24 +149,24 @@ Notes for a machine with only the Command Line Tools (no `xcodebuild`):
 - `swift test` needs the rpath to the Command Line Tools' `Testing.framework`, also set in `Package.swift`. The Swift Testing macro plug-in is
   occasionally "not found" on a busy machine; running the tests again works (`tools/check.sh` retries).
 
-Where things are found (first match): the layer build is `config.layerDir`, `D3D12METAL_LAYER_DIR`, the bundle's `Resources/layer`, the managed copy,
-then `build-wine/out` of a source checkout (found by walking up from the current directory or the executable; `D3D12METAL_REPO` forces it).
-Profiles: the bundle, `D3D12METAL_PROFILES`, the checkout's `profiles/`, then `~/Library/Application Support/D3D12Metal/profiles/` (which wins by id).
-All state lives in `D3D12METAL_HOME` (default `~/Library/Application Support/D3D12Metal`); use another one to test without touching your setup:
+Where things are found (first match): the layer build is `config.layerDir`, `ALLOY_LAYER_DIR`, the bundle's `Resources/layer`, the managed copy,
+then `build-wine/out` of a source checkout (found by walking up from the current directory or the executable; `ALLOY_REPO` forces it).
+Profiles: the bundle, `ALLOY_PROFILES`, the checkout's `profiles/`, then `~/Library/Application Support/Alloy/profiles/` (which wins by id).
+All state lives in `ALLOY_HOME` (default `~/Library/Application Support/Alloy`); use another one to test without touching your setup:
 
 ```sh
-export D3D12METAL_HOME=$PWD/build/test-home
-app/.build/debug/d3d12metal bottle create Test && app/.build/debug/d3d12metal game add --name Hello --folder <dir> --exe hello_triangle.exe --bottle Test
+export ALLOY_HOME=$PWD/build/test-home
+app/.build/debug/alloy bottle create Test && app/.build/debug/alloy game add --name Hello --folder <dir> --exe hello_triangle.exe --bottle Test
 ```
 
-App start-up hooks for screenshots and scripts: `D3D12METAL_UI_SECTION=library|steam|bottles|health`, `D3D12METAL_UI_GAME=<game id>`,
-`D3D12METAL_UI_SETUP=0|1`.
+App start-up hooks for screenshots and scripts: `ALLOY_UI_SECTION=library|steam|bottles|health`, `ALLOY_UI_GAME=<game id>`,
+`ALLOY_UI_SETUP=0|1`.
 
 ## Adding a game
 
-1. Install it in a bottle (Steam, or any folder) and run `d3d12metal library`; a Steam game appears when its `appmanifest` says it is installed and an exe in
-   its folder links `d3d12.dll` (by name or ordinal; or mentions `D3D12CreateDevice`). Others: `d3d12metal game add`.
-2. `d3d12metal install <game>`, `d3d12metal config <game> --log trace`, `d3d12metal launch <game>`, read `d3d12metal logs <game>`.
+1. Install it in a bottle (Steam, or any folder) and run `alloy library`; a Steam game appears when its `appmanifest` says it is installed and an exe in
+   its folder links `d3d12.dll` (by name or ordinal; or mentions `D3D12CreateDevice`). Others: `alloy game add`.
+2. `alloy install <game>`, `alloy config <game> --log trace`, `alloy launch <game>`, read `alloy logs <game>`.
 3. Write `profiles/<name>.json` once you know what the game needs (schema below) and add the row to [COMPATIBILITY.md](COMPATIBILITY.md).
    Anything game-specific belongs in a profile, never in `src/`.
 

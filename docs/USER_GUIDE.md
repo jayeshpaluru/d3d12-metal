@@ -2,7 +2,7 @@
 
 ## What this does
 
-Windows games talk to the graphics card through Direct3D 12. Macs have Metal instead. D3D12 Metal supplies the Direct3D 12 side as
+Windows games talk to the graphics card through Direct3D 12. Macs have Metal instead. Alloy supplies the Direct3D 12 side as
 replacement `d3d12.dll` and `dxgi.dll` files that turn the game's calls into Metal, and runs the game inside Wine (a Windows
 compatibility layer) with Rosetta 2. The app manages the pieces:
 
@@ -46,7 +46,7 @@ Press **Save**; the settings are written to the game's `d3d12metal.conf` and use
 
 ### Games that are not in Steam
 
-**File > Add Game** (or `d3d12metal game add`): pick the game's folder and its `.exe`. The game runs in the chosen bottle. The app shows which executables use Direct3D 12.
+**File > Add Game** (or `alloy game add`): pick the game's folder and its `.exe`. The game runs in the chosen bottle. The app shows which executables use Direct3D 12.
 Games without a profile get the generic one, which makes no game-specific changes.
 
 ## Steam, bottles, preferences
@@ -54,11 +54,11 @@ Games without a profile get the generic one, which makes no game-specific change
 - **Steam** page: start, stop, restart, force quit (stops every Windows process of the bottle).
 - **Bottles** page: create, add an existing Wine prefix (it is never deleted unless you ask), choose the default.
 - **Preferences** (Cmd-,): a custom Wine folder, the layer build, shader cache size and clearing, the data folder
-  (`~/Library/Application Support/D3D12Metal`).
+  (`~/Library/Application Support/Alloy`).
 
 ## Command line
 
-`d3d12metal --help` lists everything. `--json` makes every command print JSON (progress goes to stderr). `<game>` is a Steam app id, part of a name,
+`alloy --help` lists everything. `--json` makes every command print JSON (progress goes to stderr). `<game>` is a Steam app id, part of a name,
 or an id like `steam:1817070` or `custom:my-game`.
 
 | Command | |
@@ -70,7 +70,7 @@ or an id like `steam:1817070` or `custom:my-game`.
 
 ## When something goes wrong
 
-1. **Health** page / `d3d12metal doctor`: it names what is missing and the fix.
+1. **Health** page / `alloy doctor`: it names what is missing and the fix.
 2. **Open Logs**: `d3d12metal.log` is the layer's log (errors; more with a higher logging level), `wine.log` Wine's output for directly started games.
 3. **Report a Problem** collects `doctor` output, the game's settings and conf and its logs into a zip in Downloads. User name, home path, e-mail addresses and Steam ids are replaced;
    open the zip and check before you share it. Game files and shaders are not included.
@@ -81,5 +81,5 @@ a game that wants a GPU vendor (try the GPU identity setting).
 ## Removing things
 
 - A game's layer: **Layer > Uninstall layer** (restores the original files, removes the registry overrides).
-- Everything else: delete `~/Library/Application Support/D3D12Metal` (Wine, bottles and logs) and `~/Library/Caches/d3d12metal` (shader cache), then the app. Bottles you added
+- Everything else: delete `~/Library/Application Support/Alloy` (Wine, bottles and logs) and `~/Library/Caches/d3d12metal` (shader cache), then the app. Bottles you added
   from elsewhere are only forgotten, not deleted.

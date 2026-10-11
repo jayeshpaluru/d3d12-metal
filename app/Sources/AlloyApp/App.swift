@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
-import Core
+import AlloyCore
 import SwiftUI
 
 @main
-struct D3D12MetalApp: App {
+struct AlloyApp: App {
     @StateObject private var model = AppModel()
 
     init() {
