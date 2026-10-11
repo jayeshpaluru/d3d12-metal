@@ -452,7 +452,7 @@ func makeFixture(profile: String? = nil, exe: String = "fixture-game.exe", files
     let gameDir = root.appendingPathComponent("game")
     for d in [home, wine.appendingPathComponent("bin"), prefix, gameDir] { try FileManager.default.createDirectory(at: d, withIntermediateDirectories: true) }
     let log = root.appendingPathComponent("wine.log")
-    let script = "#!/bin/sh\necho \"$@\" >> '\(log.path)'\ncase \"$*\" in *fail*) exit 1;; esac\nexit 0\n"
+    let script = "#!/bin/sh\necho \"$@\" >> '\(log.path)'\ncase \"$1\" in wineboot) touch \"$WINEPREFIX/system.reg\";; esac\ncase \"$*\" in *fail*) exit 1;; esac\nexit 0\n"
     try script.write(to: wine.appendingPathComponent("bin/wine"), atomically: true, encoding: .utf8)
     try "#!/bin/sh\nexit 0\n".write(to: wine.appendingPathComponent("bin/wineserver"), atomically: true, encoding: .utf8)
     for n in ["wine", "wineserver"] { chmod(wine.appendingPathComponent("bin/" + n).path, 0o755) }
@@ -515,6 +515,48 @@ func requirementProfile(optional: Bool = false, run: String = "setup.bat", extra
         #expect(fx.ws.pendingRequirements(for: game).isEmpty)
         #expect(RegistryFile.keyExists("HKCU\\Software\\Vendor\\Game", prefix: fx.bottle.prefix))
         #expect(!RegistryFile.keyExists("HKCU\\Software\\Vendor\\Other", prefix: fx.bottle.prefix))
+    }
+}
+
+// MARK: - Bottles
+
+@Suite struct BottleTests {
+    @Test func namesThatShareAFolderAreRefused() throws {
+        let fx = try makeFixture()
+        let rt = try fx.ws.runtime()
+        let a = try fx.ws.bottles.create(name: "My Game", runtime: rt)
+        #expect(a.prefixPath.hasSuffix("/bottles/My-Game/prefix"))
+        #expect(throws: CoreError.self) { try fx.ws.bottles.create(name: "My-Game", runtime: rt) }     // same folder
+        #expect(throws: CoreError.self) { try fx.ws.bottles.create(name: "my game", runtime: rt) }     // same name
+        #expect(fx.ws.bottles.list().count == 2)                                                      // + the fixture's bottle
+        #expect(FileManager.default.fileExists(atPath: a.prefix.path))                                // the first one is intact
+    }
+
+    @Test func deletingRemovesOnlyTheBottlesOwnFolder() throws {
+        let fx = try makeFixture()
+        let rt = try fx.ws.runtime()
+        let a = try fx.ws.bottles.create(name: "Alpha", runtime: rt)
+        let b = try fx.ws.bottles.create(name: "Beta", runtime: rt)
+        try fx.ws.bottles.remove(name: "Alpha", deleteFiles: true)
+        #expect(!FileManager.default.fileExists(atPath: a.prefix.deletingLastPathComponent().path))
+        #expect(FileManager.default.fileExists(atPath: b.prefix.path))
+        // An existing prefix that was merely registered is never deleted.
+        #expect(throws: CoreError.self) { try fx.ws.bottles.remove(name: "Fx", deleteFiles: true) }
+        #expect(FileManager.default.fileExists(atPath: fx.bottle.prefix.path))
+        try fx.ws.bottles.remove(name: "Fx", deleteFiles: false)
+        #expect(FileManager.default.fileExists(atPath: fx.bottle.prefix.path))
+    }
+
+    @Test func aFolderSharedByTwoEntriesIsNotDeleted() throws {
+        let fx = try makeFixture()
+        let rt = try fx.ws.runtime()
+        let a = try fx.ws.bottles.create(name: "Alpha", runtime: rt)
+        // A hand-edited bottles.json with a second managed entry in the same folder.
+        var list = fx.ws.bottles.list()
+        list.append(Bottle(name: "Alpha Copy", prefixPath: a.prefixPath, managed: true))
+        try JSONEncoder().encode(list).write(to: fx.paths.bottlesFile)
+        #expect(throws: CoreError.self) { try fx.ws.bottles.remove(name: "Alpha", deleteFiles: true) }
+        #expect(FileManager.default.fileExists(atPath: a.prefix.path))
     }
 }
 

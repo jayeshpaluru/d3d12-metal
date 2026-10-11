@@ -48,6 +48,13 @@ public struct BottleStore: Sendable {
         return b
     }
 
+    /// The folder a managed bottle named `name` lives in (the prefix is its `prefix` subfolder).
+    func folder(forName name: String) -> URL { paths.bottlesDir.appendingPathComponent(Paths.safeName(name)) }
+
+    private func sameFolder(_ a: URL, _ b: URL) -> Bool {
+        a.standardizedFileURL.path.lowercased() == b.standardizedFileURL.path.lowercased()   // APFS ignores case by default
+    }
+
     /// Creates a new prefix with wineboot and registers it.
     @discardableResult
     public func create(name: String, runtime: WineRuntime) throws -> Bottle {
@@ -55,24 +62,39 @@ public struct BottleStore: Sendable {
         guard name.range(of: "^[A-Za-z0-9 _.-]+$", options: .regularExpression) != nil else {
             throw CoreError("Bottle names may contain letters, digits, spaces, dots, dashes and underscores")
         }
-        let prefix = paths.bottlesDir.appendingPathComponent(Paths.safeName(name)).appendingPathComponent("prefix")
+        // Different names can map to the same folder ("My Game" and "My-Game"): the folder must be free.
+        let dir = folder(forName: name)
+        if FileManager.default.fileExists(atPath: dir.path) || list().contains(where: { sameFolder($0.prefix.deletingLastPathComponent(), dir) }) {
+            throw CoreError("The folder for a bottle named \"\(name)\" is already used (\(dir.lastPathComponent))", hint: "Choose another name")
+        }
+        let prefix = dir.appendingPathComponent("prefix")
         try FileManager.default.createDirectory(at: prefix, withIntermediateDirectories: true)
         let b = Bottle(name: name, prefixPath: prefix.path, managed: true)
         let r = WineSession(runtime: runtime, bottle: b).run(["wineboot", "-u"], timeout: 300,
                                                             extraEnv: ["WINEDLLOVERRIDES": "mscoree,mshtml="])
         guard FileManager.default.fileExists(atPath: prefix.appendingPathComponent("system.reg").path) else {
+            try? FileManager.default.removeItem(at: dir)
             throw CoreError("Creating the prefix failed: \(r.stderr.suffix(400))")
         }
         try save(list() + [b])
         return b
     }
 
+    /// Forgets a bottle; with `deleteFiles` also deletes its folder, but only when that folder is the one Alloy made for exactly
+    /// this bottle (inside the bottles folder, named after it, shared with no other bottle).
     public func remove(name: String, deleteFiles: Bool) throws {
         guard let b = bottle(named: name) else { throw CoreError("No bottle named \"\(name)\"") }
-        try save(list().filter { $0.name != b.name })
-        if deleteFiles, b.managed {
-            try? FileManager.default.removeItem(at: b.prefix.deletingLastPathComponent())
+        let dir = b.prefix.deletingLastPathComponent()
+        if deleteFiles {
+            let owned = b.managed
+                && sameFolder(dir.deletingLastPathComponent(), paths.bottlesDir)
+                && sameFolder(dir, folder(forName: b.name))
+                && b.prefix.lastPathComponent == "prefix"
+                && !list().contains { $0.name != b.name && sameFolder($0.prefix.deletingLastPathComponent(), dir) }
+            guard owned else { throw CoreError("Refusing to delete \(dir.path): it is not a folder made for the bottle \"\(b.name)\" alone", hint: "Forget the bottle without deleting files") }
         }
+        try save(list().filter { $0.name != b.name })
+        if deleteFiles { try? FileManager.default.removeItem(at: dir) }
     }
 }
 
