@@ -11,6 +11,8 @@ public struct SteamClient: Sendable {
 
     public var steamDir: URL { SteamLibrary.steamDirectory(prefix: session.bottle.prefix) }
     public var steamExe: URL { steamDir.appendingPathComponent("steam.exe") }
+    /// The same file as Windows programs see it: Steam must be started by this path (it records its own location), not a Unix one.
+    var steamExeWindowsPath: String { SteamLibrary.windowsSteamDirectory + "\\steam.exe" }
     public var isInstalled: Bool { FileManager.default.fileExists(atPath: steamExe.path) }
     public var cefDir: URL { steamDir.appendingPathComponent("bin/cef/cef.win64") }
 
@@ -61,14 +63,14 @@ public struct SteamClient: Sendable {
         installWebhelperShim(shim: shim)
         var env = ["STEAMWEBHELPER_EXTRA": "--in-process-gpu"]
         for (k, v) in extraEnv { env[k] = v }
-        return try session.spawn(["C:\\Program Files (x86)\\Steam\\steam.exe", "-no-cef-sandbox", "-noverifyfiles", "-cef-disable-gpu"],
+        return try session.spawn([steamExeWindowsPath, "-no-cef-sandbox", "-noverifyfiles", "-cef-disable-gpu"],
                                  extraEnv: env, logFile: logFile)
     }
 
     /// Asks Steam to shut down cleanly.
     public func stop() {
         guard isInstalled else { return }
-        session.run(["C:\\Program Files (x86)\\Steam\\steam.exe", "-shutdown"], timeout: 60)
+        session.run([steamExeWindowsPath, "-shutdown"], timeout: 60)
     }
 
     /// Hard stop of every process of the bottle (wineserver -k for this prefix).
@@ -76,6 +78,6 @@ public struct SteamClient: Sendable {
 
     /// Asks the running Steam to launch an app.
     public func applaunch(appid: Int, args: [String]) throws -> Process {
-        try session.spawn(["C:\\Program Files (x86)\\Steam\\steam.exe", "-applaunch", String(appid)] + args)
+        try session.spawn([steamExeWindowsPath, "-applaunch", String(appid)] + args)
     }
 }

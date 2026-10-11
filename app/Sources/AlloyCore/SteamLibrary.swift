@@ -120,9 +120,12 @@ public enum SteamLibrary {
         return url
     }
 
+    /// Where Steam installs itself inside a prefix, as Windows programs see it (the one place this is spelled out).
+    public static let windowsSteamDirectory = "C:\\Program Files (x86)\\Steam"
+
     /// Where the Windows Steam client of a prefix lives.
     public static func steamDirectory(prefix: URL) -> URL {
-        prefix.appendingPathComponent("drive_c/Program Files (x86)/Steam")
+        hostPath(forWindowsPath: windowsSteamDirectory, prefix: prefix)
     }
 
     /// All installed apps of the Steam in `prefix`.
@@ -147,6 +150,32 @@ public enum SteamLibrary {
             }
         }
         return apps
+    }
+
+    /// Changes when an appmanifest or the library list changes (name, size and modification time of each): the cheap check that
+    /// tells a cached scan of the prefix is still good.
+    public static func signature(prefix: URL) -> String {
+        let steam = steamDirectory(prefix: prefix)
+        let fm = FileManager.default
+        func stamp(_ url: URL) -> String {
+            let a = try? fm.attributesOfItem(atPath: url.path)
+            return "\(url.lastPathComponent):\((a?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0):\((a?[.size] as? NSNumber) ?? 0)"
+        }
+        var folders = [steam.appendingPathComponent("steamapps")]
+        let vdf = steam.appendingPathComponent("steamapps/libraryfolders.vdf")
+        var parts = [stamp(vdf)]
+        if let text = try? String(contentsOf: vdf, encoding: .utf8) {
+            for p in parseLibraryFolders(text) {
+                let url = hostPath(forWindowsPath: p, prefix: prefix).appendingPathComponent("steamapps")
+                if !folders.contains(url) { folders.append(url) }
+            }
+        }
+        for f in folders {
+            for n in ((try? fm.contentsOfDirectory(atPath: f.path)) ?? []).sorted() where n.hasPrefix("appmanifest_") && n.hasSuffix(".acf") {
+                parts.append(f.path + "/" + stamp(f.appendingPathComponent(n)))
+            }
+        }
+        return parts.joined(separator: ";")
     }
 
     /// Steam's cached library art, if the client has downloaded it (portrait capsule first).
