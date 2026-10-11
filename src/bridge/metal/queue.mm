@@ -571,7 +571,10 @@ private:
     void attach_depth(MTLRenderPassDescriptor *pass, const Target &t, id<MTLTexture> view, const PendingClear *clear);
     mtlb_result open_render_pass();
     mtlb_result flush_clears(bool keep_bound);
-    mtlb_result clear_only_pass(const PendingClear &clear);
+    mtlb_result clear_only_pass(const PendingClear &clear) { return clear_pass(&clear, 1); }
+    // One render pass that clears `count` views: at most 8 colour views and one depth-stencil view, of one size and
+    // sample count, of different textures.
+    mtlb_result clear_pass(const PendingClear *clears, size_t count);
     mtlb_result begin_draw(bool *ready);
     mtlb_result apply_state();
     mtlb_result copy_texture(const mtlb_texture_copy_region &r, bool to_buffer);
@@ -1034,15 +1037,53 @@ mtlb_result Replay::add_clear(const PendingClear &clear)
 mtlb_result Replay::flush_clears(bool keep_bound)
 {
     end_render("flush_clears");
+    // Clears that can share a pass do (a render encoder each cost Spider-Man 2 about a hundred per frame): views of
+    // one size and sample count, up to the attachments a pass has, in the order they were recorded otherwise.
+    std::vector<PendingClear> run;
     for (auto it = clears_.begin(); it != clears_.end();) {
         if (keep_bound && is_bound(*it)) {
             ++it;
             continue;
         }
-        mtlb_result result = clear_only_pass(*it);
+        run.push_back(*it);
         it = clears_.erase(it);
+    }
+    auto shape = [](const PendingClear &c) {
+        id<MTLTexture> t = c.target.texture->texture;
+        return std::array<NSUInteger, 3>{mip_dimension(t.width, c.target.mip_level), mip_dimension(t.height, c.target.mip_level),
+                                         t.sampleCount};
+    };
+    // Bytes per pixel of a colour attachment: a pass keeps its colour attachments within what any Apple GPU's tile
+    // memory holds (64 bytes per sample).
+    auto colour_bytes = [](const PendingClear &c) {
+        mtlb_format_info info;
+        const uint32_t format = c.target.view_format ? c.target.view_format : c.target.texture->format;
+        return mtlb_format_get_info(static_cast<mtlb_format>(format), &info) == MTLB_OK ? info.bytes_per_block : 64u;
+    };
+    size_t first = 0;
+    while (first < run.size()) {
+        size_t end = first + 1, colours = run[first].depth_stencil ? 0 : 1;
+        uint32_t bytes = run[first].depth_stencil ? 0 : colour_bytes(run[first]);
+        bool depth = run[first].depth_stencil;
+        while (end < run.size() && shape(run[end]) == shape(run[first])) {
+            const PendingClear &c = run[end];
+            bool other_texture = true;
+            for (size_t k = first; k < end; ++k)
+                other_texture = other_texture && run[k].target.texture != c.target.texture;
+            if (!other_texture || (c.depth_stencil ? depth : colours == 8 || bytes + colour_bytes(c) > 64))
+                break;
+            if (c.depth_stencil) {
+                depth = true;
+            } else {
+                ++colours;
+                bytes += colour_bytes(c);
+            }
+            ++end;
+        }
+        mtlb_result result = clear_pass(run.data() + first, end - first);
         if (result != MTLB_OK)
             return result;
+        first = end;
     }
     return MTLB_OK;
 }
@@ -1072,44 +1113,48 @@ void Replay::attach_depth(MTLRenderPassDescriptor *pass, const Target &t, id<MTL
     }
 }
 
-mtlb_result Replay::clear_only_pass(const PendingClear &clear)
+mtlb_result Replay::clear_pass(const PendingClear *clears, size_t count)
 {
-    id<MTLTexture> view = attachment_texture(clear.target.texture, clear.target.view_format);
-    if (!view)
-        return fail(MTLB_ERROR_UNSUPPORTED, "unsupported attachment view format");
     MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
-    if (clear.depth_stencil) {
-        // Only the planes being cleared are attached; the other keeps its contents.
-        const bool has_stencil = view.pixelFormat == MTLPixelFormatDepth32Float_Stencil8;
-        if (clear.aspects & MTLB_CLEAR_DEPTH) {
-            MTLRenderPassDepthAttachmentDescriptor *da = pass.depthAttachment;
-            da.texture = view;
-            da.level = clear.target.mip_level;
-            da.slice = clear.target.array_slice;
-            da.loadAction = MTLLoadActionClear;
-            da.storeAction = MTLStoreActionStore;
-            da.clearDepth = clear.depth;
+    uint32_t colour = 0;
+    for (size_t i = 0; i < count; ++i) {
+        const PendingClear &clear = clears[i];
+        id<MTLTexture> view = attachment_texture(clear.target.texture, clear.target.view_format);
+        if (!view)
+            return fail(MTLB_ERROR_UNSUPPORTED, "unsupported attachment view format");
+        if (clear.depth_stencil) {
+            // Only the planes being cleared are attached; the other keeps its contents.
+            const bool has_stencil = view.pixelFormat == MTLPixelFormatDepth32Float_Stencil8;
+            if (clear.aspects & MTLB_CLEAR_DEPTH) {
+                MTLRenderPassDepthAttachmentDescriptor *da = pass.depthAttachment;
+                da.texture = view;
+                da.level = clear.target.mip_level;
+                da.slice = clear.target.array_slice;
+                da.loadAction = MTLLoadActionClear;
+                da.storeAction = MTLStoreActionStore;
+                da.clearDepth = clear.depth;
+            }
+            if (has_stencil && (clear.aspects & MTLB_CLEAR_STENCIL)) {
+                MTLRenderPassStencilAttachmentDescriptor *sa = pass.stencilAttachment;
+                sa.texture = view;
+                sa.level = clear.target.mip_level;
+                sa.slice = clear.target.array_slice;
+                sa.loadAction = MTLLoadActionClear;
+                sa.storeAction = MTLStoreActionStore;
+                sa.clearStencil = clear.stencil;
+            }
+        } else {
+            MTLRenderPassColorAttachmentDescriptor *ca = pass.colorAttachments[colour++];
+            ca.texture = view;
+            ca.level = clear.target.mip_level;
+            if (view.textureType == MTLTextureType3D)
+                ca.depthPlane = clear.target.array_slice;
+            else
+                ca.slice = clear.target.array_slice;
+            ca.loadAction = MTLLoadActionClear;
+            ca.storeAction = MTLStoreActionStore;
+            ca.clearColor = MTLClearColorMake(clear.color[0], clear.color[1], clear.color[2], clear.color[3]);
         }
-        if (has_stencil && (clear.aspects & MTLB_CLEAR_STENCIL)) {
-            MTLRenderPassStencilAttachmentDescriptor *sa = pass.stencilAttachment;
-            sa.texture = view;
-            sa.level = clear.target.mip_level;
-            sa.slice = clear.target.array_slice;
-            sa.loadAction = MTLLoadActionClear;
-            sa.storeAction = MTLStoreActionStore;
-            sa.clearStencil = clear.stencil;
-        }
-    } else {
-        MTLRenderPassColorAttachmentDescriptor *ca = pass.colorAttachments[0];
-        ca.texture = view;
-        ca.level = clear.target.mip_level;
-        if (view.textureType == MTLTextureType3D)
-            ca.depthPlane = clear.target.array_slice;
-        else
-            ca.slice = clear.target.array_slice;
-        ca.loadAction = MTLLoadActionClear;
-        ca.storeAction = MTLStoreActionStore;
-        ca.clearColor = MTLClearColorMake(clear.color[0], clear.color[1], clear.color[2], clear.color[3]);
     }
     render_ = new_render_encoder(pass);
     end_render("clear_only_pass");
@@ -1472,6 +1517,8 @@ mtlb_result Replay::copy_texture(const mtlb_texture_copy_region &r, bool to_buff
     id<MTLBlitCommandEncoder> enc = blit();
     if (!texture || !buffer || !enc)
         return fail(MTLB_ERROR_INVALID_ARGUMENT, "invalid texture copy");
+    if (to_buffer && buffer->shadowed)
+        queue_->device->shadows_dirty = true;
     uint64_t bytes = 0;
     uint32_t width = r.width, height = r.height, depth = r.depth;
     if (!subresource_exists(texture->texture, r.mip_level, r.array_slice)
@@ -2312,14 +2359,19 @@ mtlb_result Replay::clear_buffer(const mtlb_cmd_clear_buffer &cmd)
 }
 
 // Refills the shadows of the R32G32B32 SRVs (ShadowView) from their sources, in one compute encoder ahead of the
-// submit's own work: its first encoder waits on the fence this one updates. A write to a source made later in the
-// same submit is not seen until the next submit (acceptable for vertex data uploaded beforehand). Every view is
-// expanded on every submit: the copies, shader writes and CPU writes that can change a source are too many to track.
+// submit's own work: its first encoder waits on the fence this one updates. Done in the first submit after each
+// present, and in any submit after a copy into a source (or a new view): a copy is seen by the next submit, a shader
+// or CPU write to a source by the next frame at the latest (vertex data the game uploads beforehand in practice).
+// Refilling them in every submit cost about 2 ms of GPU time per frame in Spider-Man 2.
 void Replay::expand_shadow_views()
 {
     Device *device = queue_->device;
     if (!device->shadow_count)
         return;
+    const uint64_t presents = device->presents.load();
+    if (!device->shadows_dirty.exchange(false) && device->shadows_refilled_at.exchange(presents) == presents)
+        return;
+    device->shadows_refilled_at = presents;
     id<MTLComputePipelineState> kernel = internal_kernel(device, @"expand_rgb32");
     if (!kernel)
         return note_error(MTLB_ERROR_COMPILE_FAILED);
@@ -2482,6 +2534,8 @@ mtlb_result Replay::copy_buffer(const mtlb_cmd_copy_buffer &cmd)
         return fail(MTLB_ERROR_INVALID_ARGUMENT, "buffer copy within one buffer overlaps");
     if (!cmd.size)
         return MTLB_OK;
+    if (dst->shadowed)
+        queue_->device->shadows_dirty = true;
     [blit() copyFromBuffer:src->buffer sourceOffset:cmd.src_offset toBuffer:dst->buffer
          destinationOffset:cmd.dst_offset size:cmd.size];
     return MTLB_OK;
@@ -2691,6 +2745,7 @@ mtlb_result mtlb_queue_present(mtlb_queue handle, mtlb_swapchain swapchain_handl
     std::lock_guard<std::mutex> lock(queue->mutex);
     if (drawable.drawable)
         encode_present(queue, open_command_buffer(queue), swapchain, texture, drawable);
+    queue->device->presents++;
     commit_open(queue);
     return MTLB_OK;
 }

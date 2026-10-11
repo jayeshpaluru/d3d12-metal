@@ -69,8 +69,9 @@ using ShaderKey = std::tuple<uint64_t, uint64_t, uint64_t, uint32_t, std::string
 using DepthStencilKey = std::array<uint32_t, 13>;
 
 // A typed SRV of an R32G32B32 format. Metal has no 3-channel 32-bit texture formats, so the view is an RGBA32 texture
-// buffer over a private shadow of the source's elements widened to 16 bytes, refilled at the start of every submit
-// (Replay::expand_shadow_views). `alpha` is the bit pattern of the fourth component: 1.0f or 1.
+// buffer over a private shadow of the source's elements widened to 16 bytes, refilled at the start of a submit
+// (Replay::expand_shadow_views): the first after each present, and any after a copy into a source. `alpha` is the bit
+// pattern of the fourth component: 1.0f or 1.
 struct ShadowView {
     uint64_t source_offset;  // bytes
     uint64_t elements;
@@ -107,6 +108,9 @@ struct Device {
     std::mutex shadow_mutex;
     std::map<ShadowKey, ShadowView> shadow_views;
     std::atomic<size_t> shadow_count{0};  // shadow_views.size(), for the submit path to skip the lock
+    std::atomic<uint64_t> presents{0};    // presents on any queue (a new frame's first submit refills the shadows)
+    std::atomic<uint64_t> shadows_refilled_at{UINT64_MAX};  // `presents` when the shadows were last refilled
+    std::atomic<bool> shadows_dirty{false};  // a source was written by a copy since (or a view was added)
 
     // Samplers shared by equal descriptions.
     std::mutex sampler_mutex;
@@ -184,6 +188,7 @@ struct Buffer {
     bool placed = false;  // lives in a heap, which owns its residency
     bool whole_heap = false;  // stands for a whole heap in the address table (never overlaps)
     bool registered = false;  // in the device's address table (see find_buffer)
+    std::atomic<bool> shadowed{false};  // the source of an R32G32B32 SRV (ShadowView): copies into it mark the shadows dirty
 
     // Texture buffer views (typed views and UAV counters), created on first use and kept for the
     // buffer's life: (byte offset, pixel format, texel count, writable).

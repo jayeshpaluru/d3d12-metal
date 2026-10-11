@@ -264,6 +264,8 @@ static id<MTLTexture> shadow_view(Buffer *buffer, uint64_t offset, uint64_t elem
     device->add_resident(shadow);
     device->shadow_views[key] = {offset, elements, alpha, shadow, texture};
     device->shadow_count = device->shadow_views.size();
+    buffer->shadowed = true;
+    device->shadows_dirty = true;
     return texture;
 }
 

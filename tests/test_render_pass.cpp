@@ -160,6 +160,57 @@ int main()
     }
 
     {
+        // Clears that meet no draw share passes: four views of one size are one pass, a view of another size another.
+        Scene scene;
+        const CD3DX12_HEAP_PROPERTIES heap(D3D12_HEAP_TYPE_DEFAULT);
+        D3D12_DESCRIPTOR_HEAP_DESC heap_desc = {};
+        heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+        heap_desc.NumDescriptors = 4;
+        ComPtr<ID3D12DescriptorHeap> rtv_heap;
+        CHECK_HR(scene.ctx.device->CreateDescriptorHeap(&heap_desc, IID_PPV_ARGS(rtv_heap.ReleaseAndGetAddressOf())));
+        const UINT increment = scene.ctx.device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+        ComPtr<ID3D12Resource> textures[4];
+        D3D12_CPU_DESCRIPTOR_HANDLE rtvs[4];
+        for (UINT i = 0; i < 4; ++i) {
+            const UINT size = i == 3 ? kTargetSize / 2 : kTargetSize;
+            const CD3DX12_RESOURCE_DESC desc = CD3DX12_RESOURCE_DESC::Tex2D(
+                DXGI_FORMAT_R8G8B8A8_UNORM, size, size, 1, 1, 1, 0, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
+            CHECK_HR(scene.ctx.device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc,
+                                                               D3D12_RESOURCE_STATE_RENDER_TARGET, nullptr,
+                                                               IID_PPV_ARGS(textures[i].ReleaseAndGetAddressOf())));
+            rtvs[i] = rtv_heap->GetCPUDescriptorHandleForHeapStart();
+            rtvs[i].ptr += size_t(i) * increment;
+            scene.ctx.device->CreateRenderTargetView(textures[i].Get(), nullptr, rtvs[i]);
+        }
+        const float colours[4][4] = {{1, 0, 0, 1}, {0, 1, 0, 1}, {0, 0, 1, 1}, {1, 1, 0, 1}};
+        scene.list->ClearRenderTargetView(scene.ctx.rtv(), black, 0, nullptr);
+        for (UINT i = 0; i < 4; ++i)
+            scene.list->ClearRenderTargetView(rtvs[i], colours[i], 0, nullptr);
+        // Read the three full-size textures back too (copies after the clears).
+        ComPtr<ID3D12Resource> readbacks[3];
+        UINT pitches[3] = {};
+        for (UINT i = 0; i < 3; ++i) {
+            D3D12_RESOURCE_DESC desc = textures[i]->GetDesc();
+            D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint = {};
+            UINT64 total = 0;
+            scene.ctx.device->GetCopyableFootprints(&desc, 0, 1, 0, &footprint, nullptr, nullptr, &total);
+            pitches[i] = footprint.Footprint.RowPitch;
+            readbacks[i] = scene.ctx.create_buffer(D3D12_HEAP_TYPE_READBACK, total);
+            const CD3DX12_TEXTURE_COPY_LOCATION dst(readbacks[i].Get(), footprint);
+            const CD3DX12_TEXTURE_COPY_LOCATION src(textures[i].Get(), 0);
+            scene.list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+        }
+
+        ComPtr<ID3D12Resource> readback;
+        UINT row_pitch = 0;
+        CHECK(scene.run(&readback, &row_pitch) == 2);
+        check_pixel("batched clear: render target", read_pixel(readback.Get(), row_pitch, 5, 5), {0, 0, 0, 255});
+        check_pixel("batched clear: texture 0", read_pixel(readbacks[0].Get(), pitches[0], 40, 7), {255, 0, 0, 255});
+        check_pixel("batched clear: texture 1", read_pixel(readbacks[1].Get(), pitches[1], 63, 63), {0, 255, 0, 255});
+        check_pixel("batched clear: texture 2", read_pixel(readbacks[2].Get(), pitches[2], 0, 30), {0, 0, 255, 255});
+    }
+
+    {
         // A view with DXGI_FORMAT_UNKNOWN still selects its mip: clear mip 1.
         RenderContext ctx;
         const CD3DX12_HEAP_PROPERTIES heap(D3D12_HEAP_TYPE_DEFAULT);
